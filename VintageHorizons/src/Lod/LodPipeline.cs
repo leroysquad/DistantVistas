@@ -403,8 +403,18 @@ public class LodPipeline
             // EnsureResident starts the background reload and says "not yet". The result
             // waits a tick or two, which is invisible, instead of the whole world waiting
             // on a decompress.
-            if (!World.EnsureResident(result.SectionKey) && deferredCaptures.Count < MaxDeferredCaptures)
+            if (!World.EnsureResident(result.SectionKey))
             {
+                // Room is made by forcing the OLDEST result through, blocking load and
+                // all, never by letting this one past. A newer result that overtook an
+                // older one for the same section would leave the older one landing last,
+                // writing columns that have already been superseded. The list is a queue
+                // for that reason, and the bound is enforced from its head.
+                if (deferredCaptures.Count >= MaxDeferredCaptures)
+                {
+                    ApplyOneCaptureResult(deferredCaptures[0]);
+                    deferredCaptures.RemoveAt(0);
+                }
                 deferredCaptures.Add(result);
                 continue;
             }
