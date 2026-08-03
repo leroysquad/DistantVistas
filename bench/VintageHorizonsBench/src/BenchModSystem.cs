@@ -22,8 +22,26 @@ namespace VintageHorizonsBench;
 ///   VHBENCH_ROUTE   path to a route file (see routes/*.txt)
 ///   VHBENCH_LABEL   name of the configuration under test, used in output filenames
 ///   VHBENCH_OUT     output directory (default: &lt;dataPath&gt;/bench)
-///   VHBENCH_SETTLE  seconds to wait at each waypoint before measuring (default 20)
+///   VHBENCH_SETTLE  MINIMUM seconds to wait at each waypoint before measuring (default 20)
+///   VHBENCH_SETTLE_MAX  give up waiting for stability after this many seconds (default 90)
 ///   VHBENCH_MEASURE seconds to measure at each waypoint (default 10)
+///   VHBENCH_LAPS    times to walk the whole route, aggregated per waypoint (default 1)
+///
+/// On settling, and why it is not a fixed sleep. A teleport starts a burst of streaming,
+/// capture, meshing and upload, and how long that burst lasts depends on the mod, the
+/// waypoint and what is already cached. A fixed timer either cuts into the burst or
+/// wastes time after it, and the first of those is worse: it measures loading, not
+/// drawing, and it does so by an amount that varies run to run.
+///
+/// So settling watches the frame times themselves and waits for them to stop moving.
+/// That criterion needs to know nothing about the mod under test, which matters because
+/// this harness also runs against Farseer and against no LOD mod at all.
+///
+/// On laps. One visit to a waypoint is one sample, and a 1% low drawn from ~1500 frames
+/// is the mean of the worst 15, which moves a lot. Walking the route several times and
+/// taking the median across laps costs wall clock and buys the ability to tell a real
+/// change from noise. The spread across laps is written into the CSV as well, so the
+/// noise floor is visible in every result rather than needing a separate experiment.
 /// </summary>
 public class BenchModSystem : ModSystem, IRenderer
 {
@@ -35,17 +53,42 @@ public class BenchModSystem : ModSystem, IRenderer
     string label = "unlabelled";
     string outDir = "";
     double settleSec = 20;
+    double settleMaxSec = 90;
     double measureSec = 10;
+    int laps = 1;
 
     enum Phase { WaitingForJoin, Settling, Measuring, Done }
 
     Phase phase = Phase.WaitingForJoin;
     int waypointIndex = -1;
+    int lap;
     double phaseStartedAt;
     double nowSec;
 
     readonly List<double> frameMs = new(4096);
     readonly List<string> csvRows = new();
+
+    /// <summary>One visit to one waypoint.</summary>
+    readonly record struct Sample(int Frames, double Mean, double Median, double WorstMean,
+        long ManagedMb, long RssMb, double SettledAfter, bool Stabilised);
+
+    /// <summary>Samples per waypoint, one per lap.</summary>
+    List<Sample>[] samples = Array.Empty<List<Sample>>();
+
+    // Stability detection during settling.
+    readonly List<double> settleWindow = new(1024);
+    double windowStartedAt;
+    double lastWindowMedian;
+    int stableWindows;
+
+    /// <summary>
+    /// How long one stability window is, and how many consecutive quiet ones end the
+    /// settle. Two windows rather than one because a burst can pause: meshing finishes a
+    /// batch, the frame time drops for a moment, and the next batch starts.
+    /// </summary>
+    const double StabilityWindowSec = 3.0;
+    const int StableWindowsNeeded = 2;
+    const double StabilityTolerance = 0.05; // 5% change in the window median
 
     public override bool ShouldLoad(EnumAppSide forSide) => forSide == EnumAppSide.Client;
 
@@ -63,7 +106,9 @@ public class BenchModSystem : ModSystem, IRenderer
         label = Environment.GetEnvironmentVariable("VHBENCH_LABEL") ?? "unlabelled";
         outDir = Environment.GetEnvironmentVariable("VHBENCH_OUT") ?? Path.Combine(GamePaths.DataPath, "bench");
         settleSec = ReadDouble("VHBENCH_SETTLE", 20);
+        settleMaxSec = Math.Max(settleSec, ReadDouble("VHBENCH_SETTLE_MAX", 90));
         measureSec = ReadDouble("VHBENCH_MEASURE", 10);
+        laps = Math.Max(1, (int)ReadDouble("VHBENCH_LAPS", 1));
 
         try
         {
@@ -75,9 +120,13 @@ public class BenchModSystem : ModSystem, IRenderer
             return;
         }
 
+        samples = new List<Sample>[route.Waypoints.Count];
+        for (int i = 0; i < samples.Length; i++) samples[i] = new List<Sample>();
+
         Directory.CreateDirectory(outDir);
-        Mod.Logger.Notification("Bench armed: label '{0}', {1} waypoints, settle {2}s, measure {3}s, out {4}",
-            label, route.Waypoints.Count, settleSec, measureSec, outDir);
+        Mod.Logger.Notification(
+            "Bench armed: label '{0}', {1} waypoints x {2} laps, settle {3}-{4}s, measure {5}s, out {6}",
+            label, route.Waypoints.Count, laps, settleSec, settleMaxSec, measureSec, outDir);
 
         capi.Event.LevelFinalize += OnLevelFinalize;
         capi.Event.RegisterRenderer(this, EnumRenderStage.Done, "vintagehorizonsbench");
@@ -106,8 +155,13 @@ public class BenchModSystem : ModSystem, IRenderer
         waypointIndex++;
         if (waypointIndex >= route.Waypoints.Count)
         {
-            Finish();
-            return;
+            if (++lap >= laps)
+            {
+                Finish();
+                return;
+            }
+            waypointIndex = 0;
+            Mod.Logger.Notification("Bench lap {0}/{1}", lap + 1, laps);
         }
 
         BenchWaypoint wp = route.Waypoints[waypointIndex];
@@ -117,8 +171,52 @@ public class BenchModSystem : ModSystem, IRenderer
 
         phase = Phase.Settling;
         phaseStartedAt = nowSec;
-        Mod.Logger.Notification("Bench waypoint {0}/{1} '{2}': settling {3}s",
-            waypointIndex + 1, route.Waypoints.Count, wp.Name, settleSec);
+        settleWindow.Clear();
+        windowStartedAt = nowSec;
+        lastWindowMedian = 0;
+        stableWindows = 0;
+
+        Mod.Logger.Notification("Bench lap {0}/{1} waypoint {2}/{3} '{4}': settling, {5}-{6}s",
+            lap + 1, laps, waypointIndex + 1, route.Waypoints.Count, wp.Name, settleSec, settleMaxSec);
+    }
+
+    /// <summary>
+    /// True once the frame times have stopped moving, or once patience runs out.
+    /// Reports which of those it was, because a waypoint that never stabilised is a
+    /// result about the harness and must not pass silently as one about the mod.
+    /// </summary>
+    bool Settled(double elapsed, double deltaMs, out bool stabilised)
+    {
+        stabilised = false;
+        settleWindow.Add(deltaMs);
+
+        if (nowSec - windowStartedAt >= StabilityWindowSec && settleWindow.Count > 8)
+        {
+            settleWindow.Sort();
+            double median = settleWindow[settleWindow.Count / 2];
+
+            if (lastWindowMedian > 0
+                && Math.Abs(median - lastWindowMedian) / lastWindowMedian < StabilityTolerance)
+            {
+                stableWindows++;
+            }
+            else
+            {
+                stableWindows = 0;
+            }
+
+            lastWindowMedian = median;
+            settleWindow.Clear();
+            windowStartedAt = nowSec;
+
+            if (elapsed >= settleSec && stableWindows >= StableWindowsNeeded)
+            {
+                stabilised = true;
+                return true;
+            }
+        }
+
+        return elapsed >= settleMaxSec;
     }
 
     /// <summary>
@@ -165,10 +263,20 @@ public class BenchModSystem : ModSystem, IRenderer
 
         if (phase == Phase.Settling)
         {
-            // Give the mod under test time to stream, build and upload its terrain, so
-            // the measurement reflects steady state rather than the load burst.
-            if (elapsed >= settleSec)
+            // Wait for the mod under test to finish streaming, building and uploading its
+            // terrain, judged by the frame times going quiet rather than by a clock.
+            if (Settled(elapsed, deltaTime * 1000.0, out bool stabilised))
             {
+                settledAfter = elapsed;
+                settledCleanly = stabilised;
+                if (!stabilised)
+                {
+                    Mod.Logger.Warning(
+                        "Bench '{0}' at '{1}': frame times never went quiet within {2}s; "
+                        + "this sample includes load, treat it with suspicion.",
+                        label, wp.Name, settleMaxSec);
+                }
+
                 frameMs.Clear();
                 phase = Phase.Measuring;
                 phaseStartedAt = nowSec;
@@ -181,10 +289,15 @@ public class BenchModSystem : ModSystem, IRenderer
         if (elapsed >= measureSec)
         {
             RecordWaypoint(wp);
-            CaptureScreenshot(wp);
+            // One screenshot per waypoint, from the first lap. Later laps would overwrite
+            // it with a picture of the same place.
+            if (lap == 0) CaptureScreenshot(wp);
             AdvanceToNextWaypoint();
         }
     }
+
+    double settledAfter;
+    bool settledCleanly;
 
     void RecordWaypoint(BenchWaypoint wp)
     {
@@ -208,28 +321,43 @@ public class BenchModSystem : ModSystem, IRenderer
         long managedMb = GC.GetTotalMemory(false) / (1024 * 1024);
         long rssMb = Environment.WorkingSet / (1024 * 1024);
 
-        csvRows.Add(string.Join(",", new[]
-        {
-            Csv(label), Csv(wp.Name),
-            wp.X.ToString("0.##", CultureInfo.InvariantCulture),
-            wp.Y.ToString("0.##", CultureInfo.InvariantCulture),
-            wp.Z.ToString("0.##", CultureInfo.InvariantCulture),
-            frameMs.Count.ToString(CultureInfo.InvariantCulture),
-            (1000.0 / mean).ToString("0.0", CultureInfo.InvariantCulture),
-            (1000.0 / median).ToString("0.0", CultureInfo.InvariantCulture),
-            (1000.0 / worstMean).ToString("0.0", CultureInfo.InvariantCulture),
-            mean.ToString("0.00", CultureInfo.InvariantCulture),
-            worstMean.ToString("0.00", CultureInfo.InvariantCulture),
-            managedMb.ToString(CultureInfo.InvariantCulture),
-            rssMb.ToString(CultureInfo.InvariantCulture),
-        }));
+        samples[waypointIndex].Add(new Sample(frameMs.Count, mean, median, worstMean,
+            managedMb, rssMb, settledAfter, settledCleanly));
 
         Mod.Logger.Notification(
-            "Bench '{0}' at '{1}': {2:0.0} fps avg, {3:0.0} fps 1% low, {4} frames, {5} MB RSS",
-            label, wp.Name, 1000.0 / mean, 1000.0 / worstMean, frameMs.Count, rssMb);
+            "Bench '{0}' lap {1} at '{2}': {3:0.0} fps avg, {4:0.0} fps 1% low, {5} frames, "
+            + "settled after {6:0.0}s{7}",
+            label, lap + 1, wp.Name, 1000.0 / mean, 1000.0 / worstMean, frameMs.Count,
+            settledAfter, settledCleanly ? "" : " (TIMED OUT)");
     }
 
     static string Csv(string s) => s.Contains(',') ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
+
+    static double Median(List<double> values)
+    {
+        var sorted = new List<double>(values);
+        sorted.Sort();
+        return sorted[sorted.Count / 2];
+    }
+
+    /// <summary>
+    /// How far apart the laps landed, as a percentage of the median. This is the number
+    /// that says whether any difference between two runs means anything, so it belongs
+    /// in the results rather than in a separate experiment somebody has to remember to do.
+    /// </summary>
+    static double SpreadPct(List<double> values)
+    {
+        if (values.Count < 2) return 0;
+        double med = Median(values);
+        if (med <= 0) return 0;
+        double min = values[0], max = values[0];
+        foreach (double v in values)
+        {
+            if (v < min) min = v;
+            if (v > max) max = v;
+        }
+        return (max - min) / med * 100.0;
+    }
 
     void CaptureScreenshot(BenchWaypoint wp)
     {
@@ -258,9 +386,51 @@ public class BenchModSystem : ModSystem, IRenderer
     {
         phase = Phase.Done;
 
+        if (route != null)
+        {
+            for (int i = 0; i < samples.Length; i++)
+            {
+                List<Sample> laps = samples[i];
+                if (laps.Count == 0) continue;
+
+                BenchWaypoint wp = route.Waypoints[i];
+                var means = laps.ConvertAll(s => s.Mean);
+                var worsts = laps.ConvertAll(s => s.WorstMean);
+                var medians = laps.ConvertAll(s => s.Median);
+
+                double mean = Median(means);
+                double worstMean = Median(worsts);
+                double median = Median(medians);
+                int timedOut = laps.FindAll(s => !s.Stabilised).Count;
+
+                csvRows.Add(string.Join(",", new[]
+                {
+                    Csv(label), Csv(wp.Name),
+                    wp.X.ToString("0.##", CultureInfo.InvariantCulture),
+                    wp.Y.ToString("0.##", CultureInfo.InvariantCulture),
+                    wp.Z.ToString("0.##", CultureInfo.InvariantCulture),
+                    laps.Count.ToString(CultureInfo.InvariantCulture),
+                    laps[^1].Frames.ToString(CultureInfo.InvariantCulture),
+                    (1000.0 / mean).ToString("0.0", CultureInfo.InvariantCulture),
+                    (1000.0 / median).ToString("0.0", CultureInfo.InvariantCulture),
+                    (1000.0 / worstMean).ToString("0.0", CultureInfo.InvariantCulture),
+                    mean.ToString("0.00", CultureInfo.InvariantCulture),
+                    worstMean.ToString("0.00", CultureInfo.InvariantCulture),
+                    SpreadPct(means).ToString("0.0", CultureInfo.InvariantCulture),
+                    SpreadPct(worsts).ToString("0.0", CultureInfo.InvariantCulture),
+                    Median(laps.ConvertAll(s => (double)s.ManagedMb)).ToString("0", CultureInfo.InvariantCulture),
+                    Median(laps.ConvertAll(s => (double)s.RssMb)).ToString("0", CultureInfo.InvariantCulture),
+                    Median(laps.ConvertAll(s => s.SettledAfter)).ToString("0.0", CultureInfo.InvariantCulture),
+                    timedOut.ToString(CultureInfo.InvariantCulture),
+                }));
+            }
+        }
+
         string csvPath = Path.Combine(outDir, $"{Sanitize(label)}.csv");
         var sb = new StringBuilder();
-        sb.AppendLine("label,waypoint,x,y,z,frames,fps_avg,fps_median,fps_1pct_low,frame_ms_avg,frame_ms_1pct_low,managed_mb,rss_mb");
+        sb.AppendLine("label,waypoint,x,y,z,laps,frames,fps_avg,fps_median,fps_1pct_low,"
+            + "frame_ms_avg,frame_ms_1pct_low,spread_pct,spread_1pct_pct,managed_mb,rss_mb,"
+            + "settled_after_s,settle_timeouts");
         foreach (string row in csvRows) sb.AppendLine(row);
         File.WriteAllText(csvPath, sb.ToString());
 

@@ -4,7 +4,8 @@ set -euo pipefail
 # Run one benchmark configuration end to end, in the sandbox, and collect its results.
 #
 #   scripts/bench.sh <label> [--mods <dir-or-zip>[,<dir-or-zip>...]] [--server-mods <...>]
-#                            [--route <file>] [--settle <sec>] [--measure <sec>]
+#                            [--route <file>] [--settle <sec>] [--settle-max <sec>]
+#                            [--measure <sec>] [--laps <n>]
 #                            [--detail <blocks>]
 #
 # Examples:
@@ -30,7 +31,7 @@ source "$ROOT/scripts/test-lib.sh"
 
 label="${1:-}"
 if [[ -z "$label" || "$label" == -* ]]; then
-    echo "usage: bench.sh <label> [--mods <list>] [--server-mods <list>] [--route <file>] [--settle <s>] [--measure <s>] [--detail <blocks>]" >&2
+    echo "usage: bench.sh <label> [--mods <list>] [--server-mods <list>] [--route <file>] [--settle <s>] [--settle-max <s>] [--measure <s>] [--laps <n>] [--detail <blocks>]" >&2
     exit 2
 fi
 shift
@@ -39,7 +40,9 @@ client_mods=""
 server_mods=""
 route="$ROOT/bench/routes/vhsurvival.txt"
 settle=20
+settle_max=90
 measure=10
+laps=1
 detail=""
 watch=0
 
@@ -49,7 +52,9 @@ while [[ $# -gt 0 ]]; do
         --server-mods) server_mods="$2"; shift 2 ;;
         --route) route="$2"; shift 2 ;;
         --settle) settle="$2"; shift 2 ;;
+        --settle-max) settle_max="$2"; shift 2 ;;
         --measure) measure="$2"; shift 2 ;;
+        --laps) laps="$2"; shift 2 ;;
         --detail) detail="$2"; shift 2 ;;
         --watch) watch=1; shift ;;
         *) echo "bench.sh: unknown option '$1'" >&2; exit 2 ;;
@@ -133,14 +138,19 @@ export VHBENCH_ROUTE="$route"
 export VHBENCH_LABEL="$label"
 export VHBENCH_OUT="$BENCH_OUT"
 export VHBENCH_SETTLE="$settle"
+export VHBENCH_SETTLE_MAX="$settle_max"
 export VHBENCH_MEASURE="$measure"
+export VHBENCH_LAPS="$laps"
 export VINTAGEHORIZONS_AUTOUNPAUSE=1   # the window is unfocused during unattended runs
 
 "$ROOT/scripts/test-client.sh" -c "localhost:${VH_TEST_PORT:-42425}"
 
 waypoints="$(grep -cvE '^\s*(#|$)' "$route")"
 # Generous: every waypoint costs settle + measure, plus world load and teleport waits.
-budget=$(( waypoints * (settle + measure + 15) + 180 ))
+# Against the settle CEILING, not the floor: settling now ends when frame times go
+# quiet, and a waypoint that never does waits the full settle_max. Budgeting for the
+# floor would kill a slow run partway through the route and lose the whole result.
+budget=$(( waypoints * laps * (settle_max + measure + 15) + 180 ))
 echo "Bench '$label': $waypoints waypoints, allowing up to ${budget}s"
 
 if vh_wait_for "$BENCH_OUT/$label.done" "" "$budget" "$VH_SANDBOX/test-instance.pid"; then
