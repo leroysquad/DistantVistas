@@ -369,45 +369,86 @@ public class LodPipeline
 
     // ---- Applying capture results: block ids → section palette ids ----
 
+    /// <summary>
+    /// Capture results whose section was evicted and is being reloaded. Bounded, and the
+    /// bound is not decoration: past it the tick takes the blocking load rather than let
+    /// this grow without limit, because throwing a result away loses captured terrain.
+    /// </summary>
+    readonly List<CaptureResult> deferredCaptures = new();
+
+    const int MaxDeferredCaptures = 64;
+
     void ApplyCaptureResults()
     {
-        for (int n = 0; n < CaptureAppliesPerTick && Worker.CaptureResults.TryDequeue(out CaptureResult? result); n++)
+        int budget = CaptureAppliesPerTick;
+
+        // Results waiting on a reload get first refusal, so a section that has come back
+        // is merged before anything newer touches it.
+        for (int i = 0; i < deferredCaptures.Count && budget > 0;)
         {
-            LodSection section = World.GetOrCreateSection(result.SectionKey);
+            if (!World.EnsureResident(deferredCaptures[i].SectionKey)) { i++; continue; }
+            ApplyOneCaptureResult(deferredCaptures[i]);
+            deferredCaptures.RemoveAt(i);
+            budget--;
+        }
 
-            var pidByBlockId = new Dictionary<int, int>();
-            ulong[]?[] batch = result.RunsByColumn;
-
-            for (int col = 0; col < batch.Length; col++)
+        while (budget-- > 0 && Worker.CaptureResults.TryDequeue(out CaptureResult? result))
+        {
+            // An evicted section has to come back from disk before capture may merge into
+            // it, or the merge writes into an empty section that then overwrites the
+            // stored row. That was solved for mip propagation and not here, so this path
+            // still paid a synchronous SQLite read and a Deflate on the game tick:
+            // measured at 10.60ms average and 112.98ms worst, in a 50ms tick.
+            //
+            // EnsureResident starts the background reload and says "not yet". The result
+            // waits a tick or two, which is invisible, instead of the whole world waiting
+            // on a decompress.
+            if (!World.EnsureResident(result.SectionKey) && deferredCaptures.Count < MaxDeferredCaptures)
             {
-                ulong[]? runs = batch[col];
-                if (runs == null) continue;
+                deferredCaptures.Add(result);
+                continue;
+            }
 
-                int kept = 0;
-                for (int i = 0; i < runs.Length; i++)
+            ApplyOneCaptureResult(result);
+        }
+    }
+
+    void ApplyOneCaptureResult(CaptureResult result)
+    {
+        LodSection section = World.GetOrCreateSection(result.SectionKey);
+
+        var pidByBlockId = new Dictionary<int, int>();
+        ulong[]?[] batch = result.RunsByColumn;
+
+        for (int col = 0; col < batch.Length; col++)
+        {
+            ulong[]? runs = batch[col];
+            if (runs == null) continue;
+
+            int kept = 0;
+            for (int i = 0; i < runs.Length; i++)
+            {
+                int blockId = LodSection.RunPaletteId(runs[i]); // raw block id from capture
+                if (!pidByBlockId.TryGetValue(blockId, out int pid))
                 {
-                    int blockId = LodSection.RunPaletteId(runs[i]); // raw block id from capture
-                    if (!pidByBlockId.TryGetValue(blockId, out int pid))
-                    {
-                        pid = RegisterPaletteEntry(section, result, blockId, LodSection.RunYTop(runs[i]));
-                        pidByBlockId[blockId] = pid;
-                    }
-
-                    // Decorative ground cover never becomes terrain: a flower would
-                    // otherwise be a solid, pale-grey 1-block cube.
-                    if ((section.Palette[pid].Flags & LodPaletteEntry.FlagSkip) != 0) continue;
-
-                    runs[kept++] = LodSection.PackRun(pid, LodSection.RunYTop(runs[i]), LodSection.RunYBottom(runs[i]));
+                    pid = RegisterPaletteEntry(section, result, blockId, LodSection.RunYTop(runs[i]));
+                    pidByBlockId[blockId] = pid;
                 }
 
-                if (kept != runs.Length) batch[col] = runs[..kept];
+                // Decorative ground cover never becomes terrain: a flower would
+                // otherwise be a solid, pale-grey 1-block cube.
+                if ((section.Palette[pid].Flags & LodPaletteEntry.FlagSkip) != 0) continue;
+
+                runs[kept++] = LodSection.PackRun(pid, LodSection.RunYTop(runs[i]), LodSection.RunYBottom(runs[i]));
             }
 
-            ColumnsCaptured++;
-            if (section.ReplaceColumns(batch))
-            {
-                World.MarkChanged(result.SectionKey);
-            }
+            if (kept != runs.Length) batch[col] = runs[..kept];
+        }
+
+        ColumnsCaptured++;
+        if (section.ReplaceColumns(batch))
+        {
+            World.MarkChanged(result.SectionKey);
         }
     }
 
@@ -480,7 +521,9 @@ public class LodPipeline
         pendingColumns.Clear();
         Remote.Clear();
         // Results for the world we are leaving must not be applied to the next one.
+        // Both queues, or a result held back for a reload would cross worlds.
         while (Worker.CaptureResults.TryDequeue(out _)) { }
+        deferredCaptures.Clear();
         World.Clear();
         CachedSectionsLoaded = 0;
         ColumnsCaptured = 0;

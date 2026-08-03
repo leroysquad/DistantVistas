@@ -17,6 +17,7 @@ public static class Program
         ("pure", "section runs", SectionChecks.Run),
         ("pure", "section properties", SectionPropertyChecks.Run),
         ("pure", "mip downsample", MipChecks.Run),
+        ("pure", "residency", ResidencyChecks.Run),
         ("pure", "mesher", MesherChecks.Run),
         ("pure", "server config", ConfigChecks.Run),
         ("fixture", "blob format", StoreChecks.Run),
