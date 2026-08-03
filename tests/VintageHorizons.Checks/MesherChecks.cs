@@ -100,6 +100,24 @@ public static class MesherChecks
         // are real geometry that has nothing to do with the claim being made here.
         c.Eq(1, QuadsOnPlane(mesh.Xyz, axis: 1, value: 10f),
             "one flat surface over a stepped base merges into a single rectangle");
+
+        // The general form, over bases with no pattern to them at all. One step could be
+        // merged by a rule that happens to sort the two depths into two contiguous
+        // groups; nothing merges 40 scattered depths into one rectangle except not
+        // keying the surface on depth in the first place.
+        foreach (int seed in new[] { 1, 2, 3 })
+        {
+            var rnd = new Random(seed);
+            var noisy = new LodSection();
+            noisy.FindOrAddPaletteEntry(blockId: 1, color: 0x00607080, flags: 0);
+            for (int col = 0; col < Fixtures.Total; col++)
+            {
+                noisy.SetColumn(col, new[] { LodSection.PackRun(0, 10, rnd.Next(1, 9)) });
+            }
+
+            c.Eq(1, QuadsOnPlane(LodMesher.BuildMesh(Fixtures.Job(noisy)).Xyz, axis: 1, value: 10f),
+                $"a flat surface merges whatever the depths beneath it do (seed {seed})");
+        }
     }
 
     /// <summary>
