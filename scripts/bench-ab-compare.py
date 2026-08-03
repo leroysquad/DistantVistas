@@ -40,9 +40,13 @@ missing = sorted(set(before) ^ set(after))
 if missing:
     print(f"  NOTE: waypoints in only one run, skipped: {', '.join(missing)}\n")
 
+# managed_mb has no spread column on purpose. It is one reading of the GC heap at one
+# instant, so it moves with when a collection last happened rather than with how much
+# the code allocates. Printed because a large move is worth a look, never used as a
+# verdict. Allocation is measured properly in the headless mesher benchmark.
 COLUMNS = [("frame_ms_avg", "frame ms", "spread_pct"),
            ("frame_ms_1pct_low", "1% low ms", "spread_1pct_pct"),
-           ("managed_mb", "managed MB", None)]
+           ("managed_mb", "managed MB (indicative only)", None)]
 
 
 def noise_floor(wp, spread_key):
@@ -71,7 +75,7 @@ for key, title, spread_key in COLUMNS:
         shown = f"{floor:>8.1f}%" if floor is not None else "       ?"
 
         if floor is None:
-            verdict = "no lap data"
+            verdict = "not a verdict"
         elif abs(pct) <= floor:
             verdict = "inside noise"
             noisy += 1
