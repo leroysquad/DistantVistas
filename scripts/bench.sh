@@ -31,7 +31,7 @@ source "$ROOT/scripts/test-lib.sh"
 
 label="${1:-}"
 if [[ -z "$label" || "$label" == -* ]]; then
-    echo "usage: bench.sh <label> [--mods <list>] [--server-mods <list>] [--route <file>] [--settle <s>] [--settle-max <s>] [--measure <s>] [--laps <n>] [--detail <blocks>]" >&2
+    echo "usage: bench.sh <label> [--mods <list>] [--server-mods <list>] [--route <file>] [--settle <s>] [--settle-max <s>] [--measure <s>] [--laps <n>] [--warmup-laps <n>] [--detail <blocks>]" >&2
     exit 2
 fi
 shift
@@ -43,6 +43,7 @@ settle=20
 settle_max=90
 measure=10
 laps=1
+warmup_laps=1
 detail=""
 watch=0
 
@@ -55,6 +56,7 @@ while [[ $# -gt 0 ]]; do
         --settle-max) settle_max="$2"; shift 2 ;;
         --measure) measure="$2"; shift 2 ;;
         --laps) laps="$2"; shift 2 ;;
+        --warmup-laps) warmup_laps="$2"; shift 2 ;;
         --detail) detail="$2"; shift 2 ;;
         --watch) watch=1; shift ;;
         *) echo "bench.sh: unknown option '$1'" >&2; exit 2 ;;
@@ -141,6 +143,13 @@ export VHBENCH_SETTLE="$settle"
 export VHBENCH_SETTLE_MAX="$settle_max"
 export VHBENCH_MEASURE="$measure"
 export VHBENCH_LAPS="$laps"
+export VHBENCH_WARMUP_LAPS="$warmup_laps"
+
+# The mod's own telemetry, on. Its 15s stats line carries the render-thread phase
+# timings and the pipeline counters, and those are the only record of what was
+# happening when a waypoint refuses to settle. A benchmark that records frame times
+# and nothing else can say a run was slow but never why.
+export VINTAGEHORIZONS_STATS=1
 export VINTAGEHORIZONS_AUTOUNPAUSE=1   # the window is unfocused during unattended runs
 
 "$ROOT/scripts/test-client.sh" -c "localhost:${VH_TEST_PORT:-42425}"
@@ -150,7 +159,7 @@ waypoints="$(grep -cvE '^\s*(#|$)' "$route")"
 # Against the settle CEILING, not the floor: settling now ends when frame times go
 # quiet, and a waypoint that never does waits the full settle_max. Budgeting for the
 # floor would kill a slow run partway through the route and lose the whole result.
-budget=$(( waypoints * laps * (settle_max + measure + 15) + 180 ))
+budget=$(( waypoints * (laps + warmup_laps) * (settle_max + measure + 15) + 180 ))
 echo "Bench '$label': $waypoints waypoints, allowing up to ${budget}s"
 
 if vh_wait_for "$BENCH_OUT/$label.done" "" "$budget" "$VH_SANDBOX/test-instance.pid"; then

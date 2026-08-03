@@ -75,7 +75,20 @@ do_restore() {
         mkdir -p "$VH_SANDBOX/$(dirname "$rel")"
         cp -a "$PRISTINE/$rel" "$VH_SANDBOX/$rel"
     done
-    echo "  world restored from pristine"
+
+    # Read the restored world back, so every run starts with it in the page cache.
+    #
+    # Measured: the first run of a gate read a 171 MB world off cold disk and its first
+    # lap ran at 82 fps; the second run found the same files already in RAM and managed
+    # 369 fps at the same waypoint. Same build, same world, four and a half times apart,
+    # entirely because one went second.
+    #
+    # Warming rather than dropping. Dropping the cache is undone by anything else that
+    # touches the files, while warming only has to succeed once.
+    for rel in "${STATE_DIRS[@]}"; do
+        find "$VH_SANDBOX/$rel" -type f -exec cat {} + > /dev/null 2>&1 || true
+    done
+    echo "  world restored from pristine, page cache primed"
 }
 
 do_run() {
