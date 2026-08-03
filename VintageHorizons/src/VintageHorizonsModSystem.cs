@@ -196,6 +196,7 @@ public class VintageHorizonsModSystem : ModSystem
     LodLocalOfferSource? localOffers;
     bool loggedLocalOffers;
     int localOfferProbeTicks;
+    int localOfferScanTicks;
 
     /// <summary>
     /// About 5s at the 50ms tick. The retry usually answers with one failed File.Exists,
@@ -203,6 +204,17 @@ public class VintageHorizonsModSystem : ModSystem
     /// minutes once it appears.
     /// </summary>
     const int LocalOfferProbeIntervalTicks = 100;
+
+    /// <summary>
+    /// About 1s at the 50ms tick, for re-reading the offered key list.
+    ///
+    /// Unlike the probe above, this one is NOT cheap: it is a full scan of the server
+    /// side's Section table, and it ran on every tick for the whole session. A swept
+    /// world holds thousands of sections, so that was tens of thousands of row decodes
+    /// and a fresh key array every 50ms, on the main thread, to learn about the handful
+    /// of rows a sweep writes per second.
+    /// </summary>
+    const int LocalOfferScanIntervalTicks = 20;
 
     /// <summary>
     /// Adopt sections the server side swept out of the savegame.
@@ -232,8 +244,27 @@ public class VintageHorizonsModSystem : ModSystem
         // The sweep writes continuously, so re-reading the key list picks up whatever has
         // landed since. AddRemoteKeys ignores anything already known, and anything local
         // disk already holds.
-        long[] offered = localOffers.Keys();
-        if (offered.Length > 0) pipeline.AddRemoteKeys(offered);
+        //
+        // A sweep writes a few sections a second, so a second of latency here costs
+        // nothing. The install budget below still runs every tick: what is throttled is
+        // asking the database what exists, not acting on the answer.
+        if (++localOfferScanTicks >= LocalOfferScanIntervalTicks)
+        {
+            localOfferScanTicks = 0;
+            long[] offered = localOffers.Keys();
+            if (offered.Length > 0)
+            {
+                pipeline.AddRemoteKeys(offered);
+                if (!loggedLocalOffers)
+                {
+                    loggedLocalOffers = true;
+                    // Sweeps and /vhgen both fill the sibling cache; this line covers either.
+                    Mod.Logger.Notification(
+                        "Server-side cache offers {0} sections locally; adopting them as the "
+                        + "view needs them.", offered.Length);
+                }
+            }
+        }
 
         long[] wanted = pipeline.RemoteWanted();
         if (wanted.Length == 0) return;
@@ -265,15 +296,6 @@ public class VintageHorizonsModSystem : ModSystem
             }
         }
         pipeline.MarkRemoteRequested(taken);
-
-        if (!loggedLocalOffers && offered.Length > 0)
-        {
-            loggedLocalOffers = true;
-            // Sweeps and /vhgen both fill the sibling cache; this line covers either.
-            Mod.Logger.Notification(
-                "Server-side cache offers {0} sections locally; adopting them as the view "
-                + "needs them.", offered.Length);
-        }
     }
 
     /// <summary>
