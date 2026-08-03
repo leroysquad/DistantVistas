@@ -1,5 +1,88 @@
 # M4/M5 status notes
 
+## Optimisation pass (2026-08-03)
+
+A second performance pass, after 0.2.0. The rule was the same as last time and it
+earned its keep twice: nothing is claimed without a before and an after.
+
+### The benchmark could not have answered the question
+
+Two runs of the SAME build, same world, same route disagreed by up to 29.7%. Every
+renderer and shader item worth chasing is smaller than that. The harness would have
+answered anyway, with numbers that looked like findings, so it was fixed first.
+
+Three separate causes, each found by measuring rather than by reading the code:
+
+- **`bench.sh` never reset anything.** The savegame and the LOD cache both persist and
+  grow while the route is walked, so each run started warmer than the last. Now
+  `scripts/bench-ab.sh` snapshots and restores both before every measured run.
+- **Settling was a fixed sleep.** Waypoints actually need 12s to over 75s depending on
+  what is cached, so a 20s timer was measuring load bursts at three of five waypoints.
+  Settling now waits for the frame times to stop moving. The first version of that
+  check compared each window with the one before it, which accepts a steady climb
+  forever; it compares across the whole span now.
+- **The page cache favoured whichever run went second.** Run A read a 171 MB world off
+  cold disk and managed 82 fps on its first lap; run B found the same restored files in
+  RAM and managed 369 fps at the same waypoint. The restore now reads the files back so
+  every run starts equally warm.
+
+Laps are also not independent samples. At every waypoint the world kept getting faster
+through lap 3. Lap 1 pays for the chunk streaming and capture that later laps find
+already done. Early laps are therefore walked and discarded.
+
+The spread across laps now goes into the CSV, beside the numbers it qualifies.
+`scripts/bench-ab-compare.py` reads it, and refuses to call any difference smaller than
+that spread a result.
+
+### Measured wins
+
+- **The greedy merge was keyed on a field the merged plane never reads.** A horizontal
+  face carried the bottom of the run beneath it, and the plane group tested it, so a
+  flat surface broke apart along the contour of whatever was underneath. Ocean is the
+  exact case the mesher exists to collapse. Vertices per section, same fixtures: ocean
+  over a sloping seabed 8848 -> 6580, over a stepped seabed 1132 -> 112, a plateau on
+  uneven bedrock 66048 -> 49668. Water quads alone 602 -> 35 and 266 -> 11.
+- **The join-time key scan had no index.** It selects four small columns and no blob,
+  but the table's leaf pages are spread through a file that is mostly section blobs.
+  On ext4 with the page cache dropped: 5581 sections 173.4ms -> 4.6ms, 15000 sections
+  931.1ms -> 12.6ms. The index costs 0.03% of the cache. The same test on tmpfs reports
+  2.1x and makes it look not worth doing, which is why it had to be measured on a disk.
+- **The sibling cache was scanned once per tick.** A full table scan of the server
+  side's sections, 20 times a second, for the whole session: 12ms/s at 2158 sections,
+  105ms/s at 20000. Now once a second.
+- **Mesher output buffers were allocated per job.** 240 KB for any section at all,
+  including one that emits five quads. Per build: flat plain 241.0KB -> 0.6KB, ocean
+  over a stepped seabed 243.0KB -> 2.6KB, plateau 4395.9KB -> 1067.2KB. Their lists also
+  crossed the 85 KB large-object threshold and back on every dense job.
+- **Mip downsampling copied every child column** to satisfy a signature: four
+  allocations per parent column, 1024 per call, three calls per tick, on the game
+  thread. 232.1KB -> 72.1KB per call.
+
+### Fixed, with the measurement that found them
+
+- **Capture stalled the tick on an evicted section.** `ApplyCaptureResults` called
+  `GetOrCreateSection` with no residency check: measured at 10.60ms average and
+  112.98ms worst, in a 50ms tick. `EnsureResident` already existed for mip propagation
+  and states the hazard exactly; capture was simply never routed through it. The
+  residency rule now has a test suite, which it did not before despite three callers
+  depending on it.
+- **A client could not tell "not written yet" from "never".** Both arrive as the same
+  empty blob, and the client treated both as never, so a player joining a sweeping
+  server lost those sections for the session. `AssistSection.Retryable` separates them.
+
+### Known and not fixed
+
+- **`ridge-east` never reaches steady state.** It is the only waypoint that times out
+  at 75s, and it has the worst frame times and the widest spread. Mesh eviction is ruled
+  out: the evict sweeps report nothing evicted at all.
+- **Mesh eviction is counted in frames, not time.** `EvictAfterFrames = 3600` is two
+  minutes at 30 fps and eight seconds at the 450 fps some waypoints reach, so how long
+  the mod keeps a mesh swings by 15x with frame rate.
+- **`LodSection.Captured` is `bool[4096]`,** 4 KB per section whatever it holds, cloned
+  five times per mesh job. A `ulong[64]` bitset is eight times smaller and would take
+  about 11 MB off a 3000-section world. The store already packs it to bits on the way to
+  disk, so only the in-memory type would change.
+
 ## Performance pass (2026-07-24)
 
 Three changes, each measured rather than assumed:
