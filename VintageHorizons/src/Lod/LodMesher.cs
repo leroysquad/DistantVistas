@@ -103,7 +103,12 @@ public static class LodMesher
                         && LodSection.RunYBottom(runs[r - 1]) == yTop
                         && !IsThinRun(self, runs[r - 1])
                         && IsTranslucentRun(self, runs[r - 1]) == isTranslucent;
-                    if (!topCovered) hf.Add(new HFace((short)cx, (short)cz, (short)yTop, (short)pid, false, isTranslucent, false, (short)yBottom));
+                    // YBottom is carried for thin cover only, which is the one face that
+                    // reads it (it sits a quarter block above its own base). A surface
+                    // face is drawn at its own y whatever depth the run beneath it
+                    // reaches, so recording that depth here only splits the plane: a flat
+                    // sea would break up along the contour of the seabed under it.
+                    if (!topCovered) hf.Add(new HFace((short)cx, (short)cz, (short)yTop, (short)pid, false, isTranslucent, false, 0));
 
                     bool bottomCovered = r < runs.Length - 1
                         && LodSection.RunYTop(runs[r + 1]) == yBottom
@@ -111,7 +116,8 @@ public static class LodMesher
                         && IsTranslucentRun(self, runs[r + 1]) == isTranslucent;
                     if (!bottomCovered && yBottom > 1 && !isTranslucent)
                     {
-                        hf.Add(new HFace((short)cx, (short)cz, (short)yBottom, (short)pid, true, false, false, (short)yBottom));
+                        // A floor's own plane IS the run's bottom, so Y already carries it.
+                        hf.Add(new HFace((short)cx, (short)cz, (short)yBottom, (short)pid, true, false, false, 0));
                     }
 
                     bool solidCoverOnly = !isTranslucent;
@@ -154,8 +160,18 @@ public static class LodMesher
         if (faces.Count == 0) return;
         int gs = LodSection.GridSize;
 
-        // Group faces into planes by (y, pid, side, phase); grid cells hold a stamp so
-        // we never clear the array between planes.
+        // Group faces into planes by (y, pid, side, thin, run bottom); grid cells hold a
+        // stamp so we never clear the array between planes.
+        //
+        // Every field the group scan below tests must appear here, ahead of Cz/Cx. The
+        // scan walks a contiguous span of this order, so a field it tests but the sort
+        // ignores ends the plane at the first cell that differs, wherever that lands.
+        // Thin and YBottom were both missing, and a flat surface over an uneven base
+        // split into one strip per row as a result.
+        //
+        // Sorting on them is only half of it. The other half is not recording a value a
+        // face never reads: see the top and floor faces above, which now carry YBottom 0.
+        // Otherwise the plane still breaks once per distinct depth underneath it.
         faces.Sort((a, b) =>
         {
             int c = a.Y.CompareTo(b.Y);
@@ -163,6 +179,10 @@ public static class LodMesher
             c = a.Pid.CompareTo(b.Pid);
             if (c != 0) return c;
             c = a.Bottom.CompareTo(b.Bottom);
+            if (c != 0) return c;
+            c = a.Thin.CompareTo(b.Thin);
+            if (c != 0) return c;
+            c = a.YBottom.CompareTo(b.YBottom);
             if (c != 0) return c;
             c = a.Cz.CompareTo(b.Cz);
             return c != 0 ? c : a.Cx.CompareTo(b.Cx);

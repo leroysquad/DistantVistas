@@ -37,6 +37,14 @@ public static class Program
         // worst possible failure mode for a check runner.
         string? only = args.FirstOrDefault(a => !a.StartsWith('-'));
 
+        // Not a suite: it reports numbers and asserts nothing, so it must not be reachable
+        // by the suite filter, where a name that matches no suite is deliberately an error.
+        if (string.Equals(only, "bench", StringComparison.OrdinalIgnoreCase))
+        {
+            MesherBench.Run();
+            return 0;
+        }
+
         Console.WriteLine();
         Console.WriteLine("  VintageHorizons fast checks");
         Console.WriteLine("  game: " + GameAssemblies.GamePath);

@@ -14,6 +14,7 @@ public static class MesherChecks
     {
         Empty(c);
         GreedyMerge(c);
+        UnevenBase(c);
         LevelScaling(c);
         AlphaBands(c);
         WaterIsASeparatePass(c);
@@ -65,6 +66,40 @@ public static class MesherChecks
         stepped.SetColumn(LodSection.ColumnIndex(32, 32), new[] { LodSection.PackRun(0, 11, 0) });
         MeshResult steppedMesh = LodMesher.BuildMesh(Fixtures.Job(stepped));
         c.True(Quads(steppedMesh.VertexCount) > 5, "a column at a different height breaks the plane");
+    }
+
+    /// <summary>
+    /// A surface merges by its own plane, not by whatever sits underneath it. Every top
+    /// face here shares a y and a palette entry, and only the depth of the run beneath
+    /// them differs, stepping once halfway across the section. The surface is one
+    /// rectangle, because a surface quad is drawn at its own y and never reads the depth
+    /// below it.
+    ///
+    /// This is the ocean case, and it is why GreedyMerge above cannot see it: that plain
+    /// gives every column the same yBottom. A water run reaches the seabed, so its bottom
+    /// tracks the floor contour and changes every few columns while the surface stays
+    /// flat. A merge that keys on the run's bottom therefore falls apart on exactly the
+    /// terrain the mesher exists to collapse.
+    /// </summary>
+    static void UnevenBase(Check c)
+    {
+        var s = new LodSection();
+        s.FindOrAddPaletteEntry(blockId: 1, color: 0x00607080, flags: 0);
+        for (int cz = 0; cz < Gs; cz++)
+        {
+            for (int cx = 0; cx < Gs; cx++)
+            {
+                s.SetColumn(LodSection.ColumnIndex(cx, cz),
+                    new[] { LodSection.PackRun(0, 10, cx < Gs / 2 ? 0 : 5) });
+            }
+        }
+
+        MeshResult mesh = LodMesher.BuildMesh(Fixtures.Job(s));
+
+        // Counted on the surface plane alone: the walls and the floor under the deep half
+        // are real geometry that has nothing to do with the claim being made here.
+        c.Eq(1, QuadsOnPlane(mesh.Xyz, axis: 1, value: 10f),
+            "one flat surface over a stepped base merges into a single rectangle");
     }
 
     /// <summary>
@@ -230,11 +265,15 @@ public static class MesherChecks
         bool subjectIsTranslucent =
             (subjectFlags & (LodPaletteEntry.FlagWater | LodPaletteEntry.FlagThin)) != 0;
 
-        return QuadsOnEastEdgeOf(subjectIsTranslucent ? mesh.WaterXyz : mesh.Xyz, 11f);
+        return QuadsOnPlane(subjectIsTranslucent ? mesh.WaterXyz : mesh.Xyz, axis: 0, value: 11f);
     }
 
-    /// <summary>Quads whose four vertices all sit on the given x plane, i.e. an east/west wall.</summary>
-    static int QuadsOnEastEdgeOf(float[]? xyz, float x)
+    /// <summary>
+    /// Quads whose four vertices all share one coordinate: axis 0 for an east/west wall,
+    /// axis 1 for a horizontal surface. Counting on a plane keeps a claim about one face
+    /// from being answered by the quad count of the whole section.
+    /// </summary>
+    static int QuadsOnPlane(float[]? xyz, int axis, float value)
     {
         if (xyz == null) return 0;
         int count = 0;
@@ -243,7 +282,7 @@ public static class MesherChecks
             bool onPlane = true;
             for (int k = 0; k < 4; k++)
             {
-                if (Math.Abs(xyz[v + k * 3] - x) > 0.0001f) { onPlane = false; break; }
+                if (Math.Abs(xyz[v + k * 3 + axis] - value) > 0.0001f) { onPlane = false; break; }
             }
             if (onPlane) count++;
         }
