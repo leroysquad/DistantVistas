@@ -38,6 +38,22 @@ public class LodTerrainRenderer : IRenderer
     readonly ICoreClientAPI capi;
     readonly LodWorld world;
     readonly LodWorker worker;
+    /// <summary>
+    /// What the renderer's own frame costs, by phase, since the last stats report. Each
+    /// of these is tens of microseconds against a ten-millisecond frame, which is well
+    /// under what any frame-rate comparison can resolve, so they are timed rather than
+    /// inferred. Reported by .vhinfo and by the periodic stats line.
+    /// </summary>
+    public LodPhaseCost ScheduleCost, FarDistanceCost, WalkCost, DrawCost;
+
+    public void ResetPhaseCosts()
+    {
+        ScheduleCost.Reset();
+        FarDistanceCost.Reset();
+        WalkCost.Reset();
+        DrawCost.Reset();
+    }
+
     readonly Dictionary<long, MeshRef> sectionMeshes = new();
     readonly Dictionary<long, MeshRef> waterMeshes = new();
     readonly HashSet<long> meshJobInFlight = new();
@@ -548,8 +564,11 @@ public class LodTerrainRenderer : IRenderer
         camPos = capi.World.Player.Entity.CameraPos;
         frameCounter++;
 
+        long phaseStart = LodPhaseCost.Start();
         PruneRenderDirty();
         ScheduleMeshJobs();
+        ScheduleCost.Add(phaseStart);
+
         UploadFinishedMeshes();
         EvictStaleMeshes();
         RefreshSeasonalState();
@@ -562,11 +581,15 @@ public class LodTerrainRenderer : IRenderer
             viewDistance = Math.Min(viewDistance, playerData.LastApprovedViewDistance);
         }
 
+        phaseStart = LodPhaseCost.Start();
         UpdateEffectiveFarDistance(viewDistance);
+        FarDistanceCost.Add(phaseStart);
         ApplyZFar();
 
+        phaseStart = LodPhaseCost.Start();
         drawList.Clear();
         foreach (long top in world.TopLevelKeys) CollectDrawNodes(top);
+        WalkCost.Add(phaseStart);
         LastDrawCount = drawList.Count;
         if (drawList.Count == 0) return;
 
@@ -612,6 +635,8 @@ public class LodTerrainRenderer : IRenderer
             cullDistSq = cull * cull;
         }
 
+        phaseStart = LodPhaseCost.Start();
+
         // Pass 1: opaque terrain.
         foreach (long key in drawList)
         {
@@ -631,6 +656,11 @@ public class LodTerrainRenderer : IRenderer
             capi.Render.RenderMesh(mesh);
         }
         rapi.GlToggleBlend(false);
+
+        // Submission only. RenderMesh queues work for the GPU and returns, so this
+        // measures the CPU cost of the draw loop -- the uniform uploads, the culling and
+        // the dictionary probes -- and not what the GPU then does with it.
+        DrawCost.Add(phaseStart);
 
         rapi.GlEnableCullFace();
         prog.Stop();

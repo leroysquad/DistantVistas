@@ -606,12 +606,29 @@ public class VintageHorizonsModSystem : ModSystem
                 assist.InFlight, assist.SectionsRefused);
         }
 
+        if (renderer != null && renderer.WalkCost.Calls > 0)
+        {
+            // Microseconds, because that is the scale these are at, and because rounding
+            // them to milliseconds would print four zeroes and teach nobody anything.
+            // A frame-rate comparison cannot see any of these: the benchmark's own
+            // run-to-run spread is wider than all four added together.
+            Mod.Logger.Notification(
+                "  render thread per frame over {0} frames: schedule {1:0.0}us avg / {2:0.0}us max | " +
+                "far distance {3:0.0}/{4:0.0} | quadtree walk {5:0.0}/{6:0.0} | draw submit {7:0.0}/{8:0.0}",
+                renderer.WalkCost.Calls,
+                renderer.ScheduleCost.AvgUs, renderer.ScheduleCost.MaxUs,
+                renderer.FarDistanceCost.AvgUs, renderer.FarDistanceCost.MaxUs,
+                renderer.WalkCost.AvgUs, renderer.WalkCost.MaxUs,
+                renderer.DrawCost.AvgUs, renderer.DrawCost.MaxUs);
+        }
+
         if (storageThread?.FirstSaveError != null && !loggedFirstSaveError)
         {
             loggedFirstSaveError = true;
             Mod.Logger.Warning("First storage-write error was: {0}", storageThread.FirstSaveError);
         }
         pipeline.ResetStorageStats();
+        renderer?.ResetPhaseCosts();
     }
 
     void OnLeaveWorld()

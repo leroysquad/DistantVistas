@@ -69,7 +69,9 @@ void main()
     // Flat-shaded facet normal from position derivatives - no normals in the mesh.
     vec3 normal = normalize(cross(dFdx(worldPos.xyz), dFdy(worldPos.xyz)));
 
-    float sunAngle = max(0.0, dot(normal, normalize(sunPosition)));
+    // sunPosition arrives as Calendar.SunPositionNormalized, so it is already a unit
+    // vector. The call below passes it to getSkyColorAt unnormalized for the same reason.
+    float sunAngle = max(0.0, dot(normal, sunPosition));
     float shade = 0.55 + 0.45 * sunAngle;
 
     // Decode the tint slot, then snow line on up-facing terrain.
@@ -99,20 +101,35 @@ void main()
     terraColor = applyFog(terraColor, fogAmount);
     terraColor = applySpheresFog(terraColor, fogAmount, worldPos.xyz);
 
-    // Approximate the real sky color so the far edge dissolves into the horizon.
-    vec4 skyColor = vec4(1.0);
-    vec4 skyGlow = vec4(1.0);
-    vec3 worldPosInSky = normalize(worldPos.xyz) * 250.0;
-    getSkyColorAt(worldPosInSky, sunPosition, 0.25, clamp(dayLight, 0.0, 1.0), horizonFog, skyColor, skyGlow);
-    float murkiness = max(0.0, getSkyMurkiness() - 14.0 * fogDensityIn);
-    skyColor.rgb = applyUnderwaterEffects(skyColor.rgb, murkiness);
-    skyGlow.y *= clamp((dayLight - 0.05) * 2.0 - 50.0 * murkiness, 0.0, 1.0);
-
     // Dissolve both the far edge of the cache and the edges of the explored area
     // into the sky, so neither ends in a visible wall.
     float fade = max(smoothstep(0.75, 1.0, dist), edgeFade);
-    outColor = mix(terraColor, skyColor, fade);
-    outGlow = mix(vec4(0.0), skyGlow, fade);
+
+    // Only work out the sky where it is actually mixed in. mix(x, y, 0.0) is x, so
+    // skipping this where fade is zero cannot change a pixel, and fade is zero across
+    // the inner part of the band, which is most of the terrain on screen.
+    //
+    // It is worth skipping. getSkyColorAt costs several texture fetches, three
+    // normalize calls, a pow, and a noise chain of eight sin calls, per fragment,
+    // and all of it was being multiplied by zero.
+    //
+    // The branch is coherent: fade is a function of distance, so the fragments that
+    // take it are a ring near the horizon rather than a speckle across the screen.
+    if (fade > 0.0) {
+        vec4 skyColor = vec4(1.0);
+        vec4 skyGlow = vec4(1.0);
+        vec3 worldPosInSky = normalize(worldPos.xyz) * 250.0;
+        getSkyColorAt(worldPosInSky, sunPosition, 0.25, clamp(dayLight, 0.0, 1.0), horizonFog, skyColor, skyGlow);
+        float murkiness = max(0.0, getSkyMurkiness() - 14.0 * fogDensityIn);
+        skyColor.rgb = applyUnderwaterEffects(skyColor.rgb, murkiness);
+        skyGlow.y *= clamp((dayLight - 0.05) * 2.0 - 50.0 * murkiness, 0.0, 1.0);
+
+        outColor = mix(terraColor, skyColor, fade);
+        outGlow = mix(vec4(0.0), skyGlow, fade);
+    } else {
+        outColor = terraColor;
+        outGlow = vec4(0.0);
+    }
 
 #if SSAOLEVEL > 0
     outGPosition = vec4(0.0);
