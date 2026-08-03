@@ -50,6 +50,7 @@ public class LodStore : SQLiteDBConnection
                     ModifiedMs INTEGER NOT NULL,
                     PRIMARY KEY (Detail, SX, SZ)
                 );
+                CREATE INDEX IF NOT EXISTS SectionKeys ON Section (Detail, SX, SZ, ApplyToParent);
                 DROP TABLE IF EXISTS Region;
                 DROP TABLE IF EXISTS Region2;";
             cmd.ExecuteNonQuery();
@@ -277,6 +278,21 @@ public class LodStore : SQLiteDBConnection
     /// Enumerate stored section KEYS only - no blob parsing. Join-time cost stays
     /// proportional to explored area count, not data size; section data itself is
     /// demand-loaded when the renderer or pipeline first needs it.
+    ///
+    /// The SectionKeys index is what makes that true in practice. Without it this is a
+    /// table scan, and the table's leaf pages are spread through a file that is hundreds
+    /// of megabytes of section blobs, so the reads are scattered over the whole cache
+    /// even though not one blob is wanted. The index holds the four columns alone, a few
+    /// hundred KB read in order.
+    ///
+    /// Measured on ext4 with the page cache dropped between runs, which is the state at
+    /// world join:
+    ///
+    ///    5581 sections (257 MB)   173.4 ms -> 4.6 ms
+    ///   15000 sections (691 MB)   931.1 ms -> 12.6 ms
+    ///
+    /// The same test against tmpfs shows only 2.1x, so a measurement taken in RAM will
+    /// say this does not matter. It does; the cache lives on a disk.
     /// </summary>
     public int LoadAllKeys(Action<int, int, int, bool> onKey)
     {
