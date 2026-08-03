@@ -25,8 +25,8 @@ public static class MesherBench
         Console.WriteLine();
         Console.WriteLine("  mesher benchmark");
         Console.WriteLine();
-        Console.WriteLine("  case                          opaque    water    verts     ms");
-        Console.WriteLine("  " + new string('-', 62));
+        Console.WriteLine("  case                          opaque    water    verts     ms    alloc KB");
+        Console.WriteLine("  " + new string('-', 74));
 
         Report("flat plain", FlatPlain());
         Report("ocean over sloping seabed", OceanOverSlope());
@@ -35,6 +35,35 @@ public static class MesherBench
         Report("rolling hills (control)", RollingHills());
 
         Console.WriteLine();
+        Console.WriteLine("  mip downsample (main thread, 3 per tick)");
+        Console.WriteLine();
+        Console.WriteLine("  case                                                  ms    alloc KB");
+        Console.WriteLine("  " + new string('-', 74));
+
+        ReportMip("ocean over sloping seabed", OceanOverSlope());
+        ReportMip("rolling hills", RollingHills());
+
+        Console.WriteLine();
+    }
+
+    /// <summary>
+    /// One child quadrant merged into a parent. The parent is reused across iterations,
+    /// so ReplaceColumns short-circuits after the first: that understates the cost and is
+    /// applied identically to whatever it is compared against.
+    /// </summary>
+    static void ReportMip(string name, LodSection child)
+    {
+        var parent = new LodSection();
+        LodMip.DownsampleIntoParent(child, parent, 0, 0);
+
+        long before = GC.GetAllocatedBytesForCurrentThread();
+        var watch = Stopwatch.StartNew();
+        for (int i = 0; i < Iterations; i++) LodMip.DownsampleIntoParent(child, parent, 0, 0);
+        watch.Stop();
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
+
+        Console.WriteLine($"  {name,-46}{watch.Elapsed.TotalMilliseconds / Iterations,8:0.00}"
+            + $"{allocated / 1024.0 / Iterations,12:0.0}");
     }
 
     static void Report(string name, LodSection section)
@@ -45,13 +74,18 @@ public static class MesherBench
         // thread-static list growth, which is not what any of these rows is about.
         MeshResult warm = LodMesher.BuildMesh(job);
 
+        // Allocation per build, on this thread only, so the pooled buffers show up as the
+        // absence of a cost rather than as a number nobody can check.
+        long before = GC.GetAllocatedBytesForCurrentThread();
         var watch = Stopwatch.StartNew();
         for (int i = 0; i < Iterations; i++) LodMesher.BuildMesh(job);
         watch.Stop();
+        long allocated = GC.GetAllocatedBytesForCurrentThread() - before;
 
         double ms = watch.Elapsed.TotalMilliseconds / Iterations;
         Console.WriteLine($"  {name,-28}{warm.VertexCount / 4,7}{warm.WaterVertexCount / 4,9}"
-            + $"{warm.VertexCount + warm.WaterVertexCount,9}{ms,7:0.00}");
+            + $"{warm.VertexCount + warm.WaterVertexCount,9}{ms,7:0.00}"
+            + $"{allocated / 1024.0 / Iterations,12:0.0}");
     }
 
     // ---- terrain shapes ----

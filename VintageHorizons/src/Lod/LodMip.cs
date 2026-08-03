@@ -22,7 +22,14 @@ public static class LodMip
         for (int i = 0; i < paletteMap.Length; i++) paletteMap[i] = -1;
 
         var batch = new ulong[]?[gs * gs];
-        var mergedCols = new ulong[4][];
+
+        // The four child columns are described by where they sit in the child's own run
+        // array, rather than copied out of it. Copying cost four allocations per parent
+        // column and there are 1024 of those per call, three calls per tick, on the game
+        // thread. Hoisted out of the loops: a stackalloc inside one grows the frame every
+        // iteration.
+        Span<int> colStart = stackalloc int[4];
+        Span<int> colEnd = stackalloc int[4];
 
         for (int pz = 0; pz < half; pz++)
         {
@@ -35,12 +42,14 @@ public static class LodMip
                     {
                         int ci = LodSection.ColumnIndex(px * 2 + dx, pz * 2 + dz);
                         if (!child.Captured[ci]) continue;
-                        mergedCols[captured++] = child.ColumnRuns(ci).ToArray();
+                        colStart[captured] = child.ColumnStart[ci];
+                        colEnd[captured] = child.ColumnStart[ci + 1];
+                        captured++;
                     }
                 }
                 if (captured == 0) continue;
 
-                ulong[] merged = MergeColumns(mergedCols, captured);
+                ulong[] merged = MergeColumns(child.Runs, colStart, colEnd, captured);
 
                 // Remap child palette ids to the parent palette.
                 for (int i = 0; i < merged.Length; i++)
@@ -63,15 +72,24 @@ public static class LodMip
         return parent.ReplaceColumns(batch);
     }
 
-    /// <summary>Merge up to four columns' runs into one, majority-occupancy per slice.</summary>
-    static ulong[] MergeColumns(ulong[][] cols, int count)
+    /// <summary>
+    /// Merge up to four columns' runs into one, majority-occupancy per slice.
+    ///
+    /// The columns are given as ranges into the child section's own run array. That array
+    /// is immutable once created (writes swap the whole array), which is the same property
+    /// the worker snapshots rely on, so reading through it here needs no copy.
+    /// </summary>
+    static ulong[] MergeColumns(ulong[] runs, ReadOnlySpan<int> colStart, ReadOnlySpan<int> colEnd, int count)
     {
         var bounds = boundaries ??= new List<int>(64);
         bounds.Clear();
 
+        // Sliced once per column and walked with foreach, not indexed with a running
+        // offset: the JIT drops the bounds check on a foreach over a span, and cannot on
+        // an index it is unable to prove in range.
         for (int c = 0; c < count; c++)
         {
-            foreach (ulong run in cols[c])
+            foreach (ulong run in runs.AsSpan(colStart[c], colEnd[c] - colStart[c]))
             {
                 bounds.Add(LodSection.RunYTop(run));
                 bounds.Add(LodSection.RunYBottom(run));
@@ -104,7 +122,7 @@ public static class LodMip
             int bestPidCount = 0;
             for (int c = 0; c < count; c++)
             {
-                foreach (ulong run in cols[c])
+                foreach (ulong run in runs.AsSpan(colStart[c], colEnd[c] - colStart[c]))
                 {
                     if (LodSection.RunYBottom(run) <= mid && mid < LodSection.RunYTop(run))
                     {

@@ -42,6 +42,13 @@ public static class LodMesher
         public readonly List<float> Xyz = new(16384);
         public readonly List<byte> Rgba = new(8192);
         public readonly List<int> Indices = new(12288);
+
+        public void Clear()
+        {
+            Xyz.Clear();
+            Rgba.Clear();
+            Indices.Clear();
+        }
     }
 
     /// <summary>One exposed horizontal face: column cell + plane y + palette.</summary>
@@ -53,6 +60,13 @@ public static class LodMesher
     [ThreadStatic] static List<HFace>? hFaces;
     [ThreadStatic] static List<VFace>? vFaces;
 
+    // Pooled per thread for the same reason the face lists are, and missed when they were
+    // done: a fresh pair cost 240 KB per mesh job even for a section that emits five
+    // quads, and their lists grew past the 85 KB large-object threshold and back on every
+    // job for a dense one. Reused, they grow once per thread and stay grown.
+    [ThreadStatic] static Buffers? opaqueBuffers;
+    [ThreadStatic] static Buffers? waterBuffers;
+
     public static MeshResult BuildMesh(MeshJob job)
     {
         int level = LodWorld.KeyLevel(job.Key);
@@ -60,10 +74,12 @@ public static class LodMesher
         int gs = LodSection.GridSize;
         SectionSnapshot self = job.Self;
 
-        var opaque = new Buffers();
-        var water = new Buffers();
+        var opaque = opaqueBuffers ??= new Buffers();
+        var water = waterBuffers ??= new Buffers();
         var hf = hFaces ??= new List<HFace>(8192);
         var vf = vFaces ??= new List<VFace>(8192);
+        opaque.Clear();
+        water.Clear();
         hf.Clear();
         vf.Clear();
 
