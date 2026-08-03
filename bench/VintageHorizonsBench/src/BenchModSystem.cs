@@ -25,7 +25,8 @@ namespace VintageHorizonsBench;
 ///   VHBENCH_SETTLE  MINIMUM seconds to wait at each waypoint before measuring (default 20)
 ///   VHBENCH_SETTLE_MAX  give up waiting for stability after this many seconds (default 90)
 ///   VHBENCH_MEASURE seconds to measure at each waypoint (default 10)
-///   VHBENCH_LAPS    times to walk the whole route, aggregated per waypoint (default 1)
+///   VHBENCH_LAPS    MEASURED laps of the route, aggregated per waypoint (default 1)
+///   VHBENCH_WARMUP_LAPS  laps walked first and thrown away (default 1)
 ///
 /// On settling, and why it is not a fixed sleep. A teleport starts a burst of streaming,
 /// capture, meshing and upload, and how long that burst lasts depends on the mod, the
@@ -42,6 +43,13 @@ namespace VintageHorizonsBench;
 /// taking the median across laps costs wall clock and buys the ability to tell a real
 /// change from noise. The spread across laps is written into the CSV as well, so the
 /// noise floor is visible in every result rather than needing a separate experiment.
+///
+/// On the warm-up lap, and why laps are not simply averaged. The first lap loads the
+/// world: it captures, meshes and uploads terrain that every later lap then finds
+/// already there. Measured, the first lap ran several times slower than the second at
+/// every waypoint, so averaging across laps blends two different regimes and the spread
+/// that comes out measures the warm-up rather than the noise. The first lap or two are
+/// therefore walked and discarded, and only the steady-state laps are aggregated.
 /// </summary>
 public class BenchModSystem : ModSystem, IRenderer
 {
@@ -56,6 +64,9 @@ public class BenchModSystem : ModSystem, IRenderer
     double settleMaxSec = 90;
     double measureSec = 10;
     int laps = 1;
+    int warmupLaps = 1;
+    int TotalLaps => warmupLaps + laps;
+    bool Measuring => lap >= warmupLaps;
 
     enum Phase { WaitingForJoin, Settling, Measuring, Done }
 
@@ -77,18 +88,44 @@ public class BenchModSystem : ModSystem, IRenderer
 
     // Stability detection during settling.
     readonly List<double> settleWindow = new(1024);
+    readonly List<double> windowMedians = new(8);
     double windowStartedAt;
-    double lastWindowMedian;
-    int stableWindows;
 
     /// <summary>
-    /// How long one stability window is, and how many consecutive quiet ones end the
-    /// settle. Two windows rather than one because a burst can pause: meshing finishes a
-    /// batch, the frame time drops for a moment, and the next batch starts.
+    /// How long one stability window is, and how many must agree before settling ends.
+    ///
+    /// Judged across the whole span rather than pair by pair, and that distinction is not
+    /// academic: comparing each window only with the one before it accepts a steady climb
+    /// forever, because every single step is inside the tolerance. Measured, that is the
+    /// shape this actually has. A waypoint reported settled and then ran several times
+    /// faster on a later lap, which is a slow drift that pairwise comparison cannot see.
     /// </summary>
     const double StabilityWindowSec = 3.0;
-    const int StableWindowsNeeded = 2;
-    const double StabilityTolerance = 0.05; // 5% change in the window median
+
+    /// <summary>
+    /// Settling ends when the recent half of these windows agrees with the older half,
+    /// to within the tolerance, in EITHER direction.
+    ///
+    /// Not "are the frame times quiet". A waypoint with genuine stutter can never be
+    /// quiet: ridge-east runs at 13-19ms with 75ms worst frames and timed out at every
+    /// attempt while its neighbours settled in 12s. Comparing halves is noise-tolerant
+    /// because each half is a median of three windows, and the thing being detected is a
+    /// TREND, which noise is not.
+    ///
+    /// Two-sided, not "has it stopped getting faster". A one-sided test fires while the
+    /// frame time is climbing, which is exactly what happens as terrain loads in.
+    ///
+    /// The baseline has to be long. Two adjacent windows differ by very little during a
+    /// slow drift, so a short comparison accepts one indefinitely; six windows is 18s,
+    /// over which a real warm-up moves far more than the tolerance.
+    ///
+    /// Checked against traces with known answers rather than guessed. It settles a flat
+    /// trace and a noisy flat one at 18s, waits out a 5x warm-up until 54s and a 2x one
+    /// until 42s, waits past the peak of a load-in hump, and refuses to settle at all on
+    /// a sustained 2%/s drift.
+    /// </summary>
+    const int StabilityWindows = 6;
+    const double StabilityTolerance = 0.05;
 
     public override bool ShouldLoad(EnumAppSide forSide) => forSide == EnumAppSide.Client;
 
@@ -109,6 +146,7 @@ public class BenchModSystem : ModSystem, IRenderer
         settleMaxSec = Math.Max(settleSec, ReadDouble("VHBENCH_SETTLE_MAX", 90));
         measureSec = ReadDouble("VHBENCH_MEASURE", 10);
         laps = Math.Max(1, (int)ReadDouble("VHBENCH_LAPS", 1));
+        warmupLaps = Math.Max(0, (int)ReadDouble("VHBENCH_WARMUP_LAPS", 1));
 
         try
         {
@@ -125,8 +163,10 @@ public class BenchModSystem : ModSystem, IRenderer
 
         Directory.CreateDirectory(outDir);
         Mod.Logger.Notification(
-            "Bench armed: label '{0}', {1} waypoints x {2} laps, settle {3}-{4}s, measure {5}s, out {6}",
-            label, route.Waypoints.Count, laps, settleSec, settleMaxSec, measureSec, outDir);
+            "Bench armed: label '{0}', {1} waypoints x ({2} warm-up + {3} measured) laps, "
+            + "settle {4}-{5}s, measure {6}s, out {7}",
+            label, route.Waypoints.Count, warmupLaps, laps, settleSec, settleMaxSec,
+            measureSec, outDir);
 
         capi.Event.LevelFinalize += OnLevelFinalize;
         capi.Event.RegisterRenderer(this, EnumRenderStage.Done, "vintagehorizonsbench");
@@ -155,13 +195,14 @@ public class BenchModSystem : ModSystem, IRenderer
         waypointIndex++;
         if (waypointIndex >= route.Waypoints.Count)
         {
-            if (++lap >= laps)
+            if (++lap >= TotalLaps)
             {
                 Finish();
                 return;
             }
             waypointIndex = 0;
-            Mod.Logger.Notification("Bench lap {0}/{1}", lap + 1, laps);
+            Mod.Logger.Notification("Bench lap {0}/{1}{2}", lap + 1, TotalLaps,
+                Measuring ? "" : " (warm-up, discarded)");
         }
 
         BenchWaypoint wp = route.Waypoints[waypointIndex];
@@ -172,12 +213,11 @@ public class BenchModSystem : ModSystem, IRenderer
         phase = Phase.Settling;
         phaseStartedAt = nowSec;
         settleWindow.Clear();
+        windowMedians.Clear();
         windowStartedAt = nowSec;
-        lastWindowMedian = 0;
-        stableWindows = 0;
 
         Mod.Logger.Notification("Bench lap {0}/{1} waypoint {2}/{3} '{4}': settling, {5}-{6}s",
-            lap + 1, laps, waypointIndex + 1, route.Waypoints.Count, wp.Name, settleSec, settleMaxSec);
+            lap + 1, TotalLaps, waypointIndex + 1, route.Waypoints.Count, wp.Name, settleSec, settleMaxSec);
     }
 
     /// <summary>
@@ -193,23 +233,13 @@ public class BenchModSystem : ModSystem, IRenderer
         if (nowSec - windowStartedAt >= StabilityWindowSec && settleWindow.Count > 8)
         {
             settleWindow.Sort();
-            double median = settleWindow[settleWindow.Count / 2];
+            windowMedians.Add(settleWindow[settleWindow.Count / 2]);
+            if (windowMedians.Count > StabilityWindows) windowMedians.RemoveAt(0);
 
-            if (lastWindowMedian > 0
-                && Math.Abs(median - lastWindowMedian) / lastWindowMedian < StabilityTolerance)
-            {
-                stableWindows++;
-            }
-            else
-            {
-                stableWindows = 0;
-            }
-
-            lastWindowMedian = median;
             settleWindow.Clear();
             windowStartedAt = nowSec;
 
-            if (elapsed >= settleSec && stableWindows >= StableWindowsNeeded)
+            if (elapsed >= settleSec && HalvesAgree())
             {
                 stabilised = true;
                 return true;
@@ -217,6 +247,28 @@ public class BenchModSystem : ModSystem, IRenderer
         }
 
         return elapsed >= settleMaxSec;
+    }
+
+    /// <summary>
+    /// The recent half of the settle window looks like the older half. Medians of halves
+    /// rather than individual windows, so one stuttery window cannot decide it either way.
+    /// </summary>
+    bool HalvesAgree()
+    {
+        if (windowMedians.Count < StabilityWindows) return false;
+
+        int half = StabilityWindows / 2;
+        double older = MedianOf(windowMedians, 0, half);
+        double recent = MedianOf(windowMedians, half, StabilityWindows);
+
+        return older > 0 && Math.Abs(older - recent) / older < StabilityTolerance;
+    }
+
+    static double MedianOf(List<double> values, int from, int to)
+    {
+        var slice = values.GetRange(from, to - from);
+        slice.Sort();
+        return slice[slice.Count / 2];
     }
 
     /// <summary>
@@ -289,9 +341,10 @@ public class BenchModSystem : ModSystem, IRenderer
         if (elapsed >= measureSec)
         {
             RecordWaypoint(wp);
-            // One screenshot per waypoint, from the first lap. Later laps would overwrite
-            // it with a picture of the same place.
-            if (lap == 0) CaptureScreenshot(wp);
+            // One screenshot per waypoint, from the first MEASURED lap: a warm-up lap can
+            // still be filling terrain in, and a half-loaded picture is misleading in
+            // exactly the way a screenshot comparison is meant to catch.
+            if (lap == warmupLaps) CaptureScreenshot(wp);
             AdvanceToNextWaypoint();
         }
     }
@@ -321,14 +374,20 @@ public class BenchModSystem : ModSystem, IRenderer
         long managedMb = GC.GetTotalMemory(false) / (1024 * 1024);
         long rssMb = Environment.WorkingSet / (1024 * 1024);
 
-        samples[waypointIndex].Add(new Sample(frameMs.Count, mean, median, worstMean,
-            managedMb, rssMb, settledAfter, settledCleanly));
+        // Warm-up laps are walked for their side effects on the world, not for their
+        // numbers: the first visit pays for capture, meshing and upload that every later
+        // one finds already done, and mixing the two makes the spread meaningless.
+        if (Measuring)
+        {
+            samples[waypointIndex].Add(new Sample(frameMs.Count, mean, median, worstMean,
+                managedMb, rssMb, settledAfter, settledCleanly));
+        }
 
         Mod.Logger.Notification(
-            "Bench '{0}' lap {1} at '{2}': {3:0.0} fps avg, {4:0.0} fps 1% low, {5} frames, "
-            + "settled after {6:0.0}s{7}",
-            label, lap + 1, wp.Name, 1000.0 / mean, 1000.0 / worstMean, frameMs.Count,
-            settledAfter, settledCleanly ? "" : " (TIMED OUT)");
+            "Bench '{0}' lap {1}{2} at '{3}': {4:0.0} fps avg, {5:0.0} fps 1% low, {6} frames, "
+            + "settled after {7:0.0}s{8}",
+            label, lap + 1, Measuring ? "" : " (warm-up)", wp.Name, 1000.0 / mean,
+            1000.0 / worstMean, frameMs.Count, settledAfter, settledCleanly ? "" : " (TIMED OUT)");
     }
 
     static string Csv(string s) => s.Contains(',') ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
