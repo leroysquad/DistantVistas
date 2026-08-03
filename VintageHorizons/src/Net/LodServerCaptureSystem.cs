@@ -74,6 +74,19 @@ public class LodServerCaptureSystem : ModSystem
     /// </summary>
     public byte[]? LoadBlob(long key) => pipeline?.LoadBlob(key);
 
+    /// <summary>
+    /// True when a key we advertised has no stored row YET, as opposed to having none at
+    /// all. SnapshotKeys reports the whole section tree, and RegisterInTree puts every mip
+    /// ancestor of a captured section in there the moment the child appears, well before
+    /// propagation and the next save have written the parent. A sweep or a /vhgen run is
+    /// in this state continuously.
+    ///
+    /// Answering "not yet" instead of a bare refusal is what stops a client giving that
+    /// section up for the rest of the session.
+    /// </summary>
+    public bool ExpectsToHave(long key) =>
+        pipeline != null && pipeline.World.HasDataSet.Contains(key);
+
     /// <summary>Admin settings, loaded once; both server systems read this copy.</summary>
     public LodServerConfig Config { get; private set; } = new();
 

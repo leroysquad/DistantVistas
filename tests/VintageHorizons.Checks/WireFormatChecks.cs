@@ -55,7 +55,10 @@ public static class WireFormatChecks
         c.SeqEq(new[] { "1:Keys:Int64[]" },
             Layout(typeof(AssistSectionRequest)), "AssistSectionRequest field numbers");
 
-        c.SeqEq(new[] { "1:Key:Int64", "2:Blob:Byte[]" },
+        // Retryable was ADDED at 3, not slotted into an existing number. That is the one
+        // shape of change this contract allows without a protocol bump: an older peer
+        // ignores a field it does not know, and 1 and 2 still mean what they meant.
+        c.SeqEq(new[] { "1:Key:Int64", "2:Blob:Byte[]", "3:Retryable:Boolean" },
             Layout(typeof(AssistSection)), "AssistSection field numbers");
 
         // The negotiated protocol number itself. A client takes Math.Min of its own and

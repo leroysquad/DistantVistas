@@ -230,7 +230,17 @@ public class LodAssistServerSystem : ModSystem
 
                 // Empty blob rather than silence for a miss: the client needs to know to
                 // stop asking, and cannot tell "declined" from "lost" otherwise.
-                channel.SendPacket(new AssistSection { Key = key, Blob = blob }, player);
+                //
+                // Flagged retryable when the miss is only "not written yet", which on a
+                // sweeping or generating server is most of them: the manifest carries mip
+                // parents that exist in memory before their row does. A flat refusal there
+                // costs the player the section permanently.
+                channel.SendPacket(new AssistSection
+                {
+                    Key = key,
+                    Blob = blob,
+                    Retryable = blob.Length == 0 && capture.ExpectsToHave(key),
+                }, player);
                 sectionsServed++;
                 bytesServed += blob.Length;
                 globalBudget--;

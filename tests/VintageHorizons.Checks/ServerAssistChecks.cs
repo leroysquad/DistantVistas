@@ -16,6 +16,8 @@ public static class ServerAssistChecks
         ProtocolNegotiation(c);
         ManifestAndArrivals(c);
         InFlightCapReleasesOnAnyReply(c);
+        NotYetIsNotNever(c);
+        NotYetGivesUpEventually(c);
     }
 
     /// <summary>
@@ -292,5 +294,68 @@ public static class ServerAssistChecks
         client.Pump((_, _) => true);
         c.Eq(0, client.InFlight, "a delivered section frees its slot too");
         c.Eq(cap, client.SectionsReceived, "each delivery is counted");
+    }
+
+    /// <summary>
+    /// "Not written yet" and "never" arrive as the same empty packet, and the client used
+    /// to read both as never. On a server that is sweeping or running /vhgen that is the
+    /// common case, because the manifest carries mip parents that exist in memory before
+    /// their row does, so a player lost those sections for the whole session.
+    ///
+    /// The retry is bounded on purpose. A server stuck saying not-yet must not turn into
+    /// a client asking forever, since every ask holds a slot the rest of the view wants.
+    /// </summary>
+    static void NotYetIsNotNever(Check c)
+    {
+        var client = new LodAssistClient(null!, new CaptureLogger(), "0.2.0");
+        client.OnWelcome(new AssistWelcome { Protocol = LodAssist.Protocol, Enabled = true });
+
+        long key = LodWorld.SectionKey(0, 11, 12);
+        var offered = new[] { key };
+        client.OnKeyManifest(new AssistKeyManifest { Keys = offered, Last = true });
+        client.Pump((_, _) => true);
+
+        c.SeqEq(offered, client.SelectRequestBatch(offered), "the offered key is requested");
+
+        // A retryable refusal frees the slot but keeps the key askable.
+        client.OnSection(new AssistSection { Key = key, Retryable = true });
+        client.Pump((_, _) => false);
+        c.Eq(0, client.InFlight, "a not-yet refusal still frees its slot");
+        c.Eq(0, client.SectionsRefused, "and is not counted as a refusal");
+        c.Eq(1, client.SectionsPendingOnServer, "it is counted as waiting on the server");
+        c.SeqEq(offered, client.SelectRequestBatch(offered), "so the key is asked for again");
+
+        // It arrives on the next attempt: the waiting state clears and nothing is refused.
+        client.OnSection(new AssistSection { Key = key, Blob = new byte[] { 1 } });
+        client.Pump((_, _) => true);
+        c.Eq(1, client.SectionsReceived, "the section that was not ready yet does arrive");
+        c.Eq(0, client.SectionsPendingOnServer, "and stops being tracked as waiting");
+        c.Eq(0, client.SectionsRefused, "having never been refused");
+    }
+
+    /// <summary>A server that only ever says not-yet must not be asked forever.</summary>
+    static void NotYetGivesUpEventually(Check c)
+    {
+        var client = new LodAssistClient(null!, new CaptureLogger(), "0.2.0");
+        client.OnWelcome(new AssistWelcome { Protocol = LodAssist.Protocol, Enabled = true });
+
+        long key = LodWorld.SectionKey(0, 13, 14);
+        var offered = new[] { key };
+        client.OnKeyManifest(new AssistKeyManifest { Keys = offered, Last = true });
+        client.Pump((_, _) => true);
+
+        int asks = 0;
+        for (int i = 0; i < 50; i++)
+        {
+            if (client.SelectRequestBatch(offered).Length == 0) break;
+            asks++;
+            client.OnSection(new AssistSection { Key = key, Retryable = true });
+            client.Pump((_, _) => false);
+        }
+
+        c.True(asks is > 1 and < 50, "the key is retried, but a bounded number of times");
+        c.Eq(1, client.SectionsRefused, "and ends as an ordinary refusal");
+        c.Eq(0, client.SectionsPendingOnServer, "with nothing left tracked as waiting");
+        c.Eq(0, client.SelectRequestBatch(offered).Length, "after which it is never asked again");
     }
 }

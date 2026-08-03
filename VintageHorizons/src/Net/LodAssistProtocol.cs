@@ -146,4 +146,22 @@ public class AssistSection
 {
     [ProtoMember(1)] public long Key;
     [ProtoMember(2)] public byte[] Blob = Array.Empty<byte>();
+
+    /// <summary>
+    /// Set on an empty blob when the server expects to have this section later, rather
+    /// than not at all. The manifest is built from the section tree, which includes mip
+    /// parents the pipeline has created in memory but not yet written, so "no row yet" is
+    /// an ordinary state on a server that is still sweeping or generating.
+    ///
+    /// Without this a client cannot tell "not yet" from "never", and treats both as
+    /// never: the key is refused permanently and the player loses that section for the
+    /// whole session, even though the server writes it seconds later. The local sibling
+    /// cache path already distinguishes the two and treats a miss as "not yet"; this is
+    /// the same rule reaching the network path.
+    ///
+    /// A new field rather than a protocol bump, per the note on Protocol above: an older
+    /// client never reads it and keeps its existing behaviour, which is the old bug and
+    /// not a new one.
+    /// </summary>
+    [ProtoMember(3)] public bool Retryable;
 }

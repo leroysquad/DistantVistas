@@ -149,17 +149,38 @@ public sealed class LodAssistClient
 
     // ---- Section transfer ----
 
-    /// <summary>Arrivals awaiting the tick. Empty blob = the server declined the key.</summary>
-    readonly ConcurrentQueue<(long Key, byte[] Blob)> Arrived = new();
+    /// <summary>
+    /// Arrivals awaiting the tick. An empty blob is a refusal; Retryable separates
+    /// "not written yet" from "never", which are the same packet otherwise.
+    /// </summary>
+    readonly ConcurrentQueue<(long Key, byte[] Blob, bool Retryable)> Arrived = new();
 
     readonly HashSet<long> inFlight = new();
 
     /// <summary>Keys the server declined or no longer has; never asked for again.</summary>
     readonly HashSet<long> refused = new();
 
+    /// <summary>
+    /// How many times each key has come back as "not yet". Bounded, because a server that
+    /// keeps saying not-yet forever would otherwise have this client asking forever, and
+    /// each ask costs a request slot the rest of the view is waiting for.
+    /// </summary>
+    readonly Dictionary<long, int> retriesByKey = new();
+
+    /// <summary>
+    /// Roughly a minute of asking at the rate the request loop runs, which comfortably
+    /// outlasts the gap between a section being registered and its row being written.
+    /// Past this the key is treated as a flat refusal, so the failure mode is the old
+    /// behaviour rather than an unbounded one.
+    /// </summary>
+    const int MaxRetriesPerKey = 8;
+
     public int InFlight => inFlight.Count;
     public int SectionsReceived { get; private set; }
     public int SectionsRefused => refused.Count;
+
+    /// <summary>Keys currently being retried because the server has not written them yet.</summary>
+    public int SectionsPendingOnServer => retriesByKey.Count;
 
     /// <summary>
     /// Ask for sections the server has and we do not, up to the in-flight cap. Called from
@@ -211,7 +232,7 @@ public sealed class LodAssistClient
     public int SectionsRequested { get; private set; }
 
     internal void OnSection(AssistSection msg) =>
-        Arrived.Enqueue((msg.Key, msg.Blob ?? Array.Empty<byte>()));
+        Arrived.Enqueue((msg.Key, msg.Blob ?? Array.Empty<byte>(), msg.Retryable));
 
     /// <summary>
     /// Apply everything the handlers have queued, on the game tick. <paramref name="install"/>
@@ -240,7 +261,7 @@ public sealed class LodAssistClient
                     ? $" (server announced {ManifestExpected})" : "");
         }
 
-        while (Arrived.TryDequeue(out (long Key, byte[] Blob) got))
+        while (Arrived.TryDequeue(out (long Key, byte[] Blob, bool Retryable) got))
         {
             inFlight.Remove(got.Key);
 
@@ -251,11 +272,30 @@ public sealed class LodAssistClient
             if (install(got.Key, got.Blob))
             {
                 SectionsReceived++;
+                retriesByKey.Remove(got.Key);
                 continue;
+            }
+
+            // "Not written yet" is not "never". The server says so explicitly, because
+            // the two are the same empty packet otherwise, and treating not-yet as never
+            // cost the player that section for the rest of the session even though the
+            // row appeared seconds later. Left in RemoteKeys so the request loop picks it
+            // up again; install has already released the render path's wait on it.
+            if (got.Retryable)
+            {
+                int tries = retriesByKey.TryGetValue(got.Key, out int n) ? n + 1 : 1;
+                if (tries < MaxRetriesPerKey)
+                {
+                    retriesByKey[got.Key] = tries;
+                    continue;
+                }
+                // Out of patience: fall through and refuse it, which is where a client
+                // that never understood Retryable would have been on the first reply.
             }
 
             // Declined, gone, or already held locally. Remembering that is what stops us
             // asking every tick forever for something that will never arrive.
+            retriesByKey.Remove(got.Key);
             refused.Add(got.Key);
             RemoteKeys.Remove(got.Key);
         }
@@ -271,6 +311,7 @@ public sealed class LodAssistClient
         ManifestExpected = 0;
         inFlight.Clear();
         refused.Clear();
+        retriesByKey.Clear();
         SectionsReceived = 0;
         SectionsRequested = 0;
         while (Arrived.TryDequeue(out _)) { }
