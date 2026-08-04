@@ -613,13 +613,15 @@ public class VintageHorizonsModSystem : ModSystem
             // A frame-rate comparison cannot see any of these: the benchmark's own
             // run-to-run spread is wider than all four added together.
             Mod.Logger.Notification(
-                "  render thread per frame over {0} frames: schedule {1:0.0}us avg / {2:0.0}us max | " +
+                "  render thread per frame over {0} frames: prune {9:0.0}us avg / {10:0.0}us max | " +
+                "schedule {1:0.0}/{2:0.0} | " +
                 "far distance {3:0.0}/{4:0.0} | quadtree walk {5:0.0}/{6:0.0} | draw submit {7:0.0}/{8:0.0}",
                 renderer.WalkCost.Calls,
                 renderer.ScheduleCost.AvgUs, renderer.ScheduleCost.MaxUs,
                 renderer.FarDistanceCost.AvgUs, renderer.FarDistanceCost.MaxUs,
                 renderer.WalkCost.AvgUs, renderer.WalkCost.MaxUs,
-                renderer.DrawCost.AvgUs, renderer.DrawCost.MaxUs);
+                renderer.DrawCost.AvgUs, renderer.DrawCost.MaxUs,
+                renderer.PruneCost.AvgUs, renderer.PruneCost.MaxUs);
         }
 
         if (storageThread?.FirstSaveError != null && !loggedFirstSaveError)

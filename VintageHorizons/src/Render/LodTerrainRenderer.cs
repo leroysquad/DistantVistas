@@ -44,10 +44,11 @@ public class LodTerrainRenderer : IRenderer
     /// under what any frame-rate comparison can resolve, so they are timed rather than
     /// inferred. Reported by .vhinfo and by the periodic stats line.
     /// </summary>
-    public LodPhaseCost ScheduleCost, FarDistanceCost, WalkCost, DrawCost;
+    public LodPhaseCost PruneCost, ScheduleCost, FarDistanceCost, WalkCost, DrawCost;
 
     public void ResetPhaseCosts()
     {
+        PruneCost.Reset();
         ScheduleCost.Reset();
         FarDistanceCost.Reset();
         WalkCost.Reset();
@@ -604,8 +605,15 @@ public class LodTerrainRenderer : IRenderer
         camPos = capi.World.Player.Entity.CameraPos;
         frameCounter++;
 
+        // Timed apart, not together. Lumped into one counter they cannot be told apart,
+        // and they are different shapes: pruning walks the whole dirty set once a frame,
+        // while scheduling picks a bounded number of jobs out of it. A spike in the pair
+        // was being read as a spike in scheduling.
         long phaseStart = LodPhaseCost.Start();
         PruneRenderDirty();
+        PruneCost.Add(phaseStart);
+
+        phaseStart = LodPhaseCost.Start();
         ScheduleMeshJobs();
         ScheduleCost.Add(phaseStart);
 
