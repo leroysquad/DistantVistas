@@ -38,6 +38,24 @@ The spread across laps now goes into the CSV, beside the numbers it qualifies.
 `scripts/bench-ab-compare.py` reads it, and refuses to call any difference smaller than
 that spread a result.
 
+### And after all three fixes it still cannot do an A/B, which is the useful part
+
+A third gate, with every fix above in place, ran the same build twice and still produced
+three false verdicts out of ten. Frame times moved by 5.6%, 12.9% and 64.3% between two
+runs of identical code.
+
+Seven of the ten were correctly rejected as noise, which is the improvement: the harness
+now knows when it cannot tell and says so. But two measured laps give a spread that is a
+single difference, and that underestimates the noise, so the other three slipped through.
+
+The honest conclusion is that this route needs about five measured laps to estimate its
+own noise floor, which is roughly seventy minutes per gate. That is affordable for a
+question worth seventy minutes and is not the way to check whether a change saved fifty
+microseconds.
+
+Use the phase timings for that. They give microsecond resolution from a single run.
+Frame-rate benchmarking here is for large, visible changes only.
+
 ### Measured wins
 
 - **The greedy merge was keyed on a field the merged plane never reads.** A horizontal

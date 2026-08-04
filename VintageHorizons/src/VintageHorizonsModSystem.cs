@@ -559,6 +559,7 @@ public class VintageHorizonsModSystem : ModSystem
     }
 
     bool loggedFirstCaptureError, loggedFirstMeshError, loggedFirstSaveError;
+    int gen0AtLastReport, gen1AtLastReport, gen2AtLastReport;
 
     void LogStats(string prefix)
     {
@@ -622,6 +623,24 @@ public class VintageHorizonsModSystem : ModSystem
                 renderer.WalkCost.AvgUs, renderer.WalkCost.MaxUs,
                 renderer.DrawCost.AvgUs, renderer.DrawCost.MaxUs,
                 renderer.PruneCost.AvgUs, renderer.PruneCost.MaxUs);
+
+            // Collections since the last report, beside the phase maxima, because the
+            // two are related and the relationship is easy to get backwards. A phase
+            // maximum is not a measurement of that phase: the far-distance scan averages
+            // 2us over a few hundred meshes and has reported a 1624us maximum, which
+            // nothing inside a loop that multiplies and compares can account for. What a
+            // maximum records is whatever interrupted the frame, charged to whichever
+            // phase was running. These counters say how much of that was collection.
+            Mod.Logger.Notification(
+                "  gc since last report: {0} gen0, {1} gen1, {2} gen2, {3} MB managed",
+                GC.CollectionCount(0) - gen0AtLastReport,
+                GC.CollectionCount(1) - gen1AtLastReport,
+                GC.CollectionCount(2) - gen2AtLastReport,
+                GC.GetTotalMemory(false) / (1024 * 1024));
+
+            gen0AtLastReport = GC.CollectionCount(0);
+            gen1AtLastReport = GC.CollectionCount(1);
+            gen2AtLastReport = GC.CollectionCount(2);
         }
 
         if (storageThread?.FirstSaveError != null && !loggedFirstSaveError)
