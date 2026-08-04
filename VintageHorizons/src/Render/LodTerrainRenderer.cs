@@ -235,6 +235,12 @@ public class LodTerrainRenderer : IRenderer
 
     static int WantedLevel(double distance) => LodWorld.WantedLevelFor(distance);
 
+    /// <summary>
+    /// Squared distance to the section's nearest edge. The hot paths compare and pick a
+    /// level, and both work on the square, so neither needs the root.
+    /// </summary>
+    double NearestDistanceSqTo(long key) => LodWorld.NearestDistanceSqTo(key, camPos.X, camPos.Z);
+
     bool HasAnyMesh(long key) => sectionMeshes.ContainsKey(key) || waterMeshes.ContainsKey(key);
 
     bool AllChildrenCovered(long key)
@@ -280,7 +286,7 @@ public class LodTerrainRenderer : IRenderer
     {
         bool hasMesh = HasAnyMesh(key);
         int level = LodWorld.KeyLevel(key);
-        int wanted = WantedLevel(NearestDistanceTo(key));
+        int wanted = LodWorld.WantedLevelForSq(NearestDistanceSqTo(key));
 
         // Demand-driven meshing: request ONLY at the level the walk actually wants
         // here. Descending through meshless parents must not request every leaf the
@@ -424,12 +430,52 @@ public class LodTerrainRenderer : IRenderer
         dirtyPrune.Clear();
         foreach (long key in world.RenderDirty)
         {
-            if (!HasAnyMesh(key) && LodWorld.KeyLevel(key) < WantedLevel(NearestDistanceTo(key)))
+            if (!HasAnyMesh(key) && LodWorld.KeyLevel(key) < LodWorld.WantedLevelForSq(NearestDistanceSqTo(key)))
             {
                 dirtyPrune.Add(key);
             }
         }
         foreach (long key in dirtyPrune) world.RenderDirty.Remove(key);
+    }
+
+    readonly long[] scheduleCandidates = new long[MeshSchedulesPerFrame + MeshLoadRequestsPerFrame];
+    readonly double[] scheduleCandidateDistSq = new double[MeshSchedulesPerFrame + MeshLoadRequestsPerFrame];
+
+    /// <summary>
+    /// The nearest dirty keys that can start work now, nearest first, at most as many as
+    /// one frame could possibly use. Returns how many were found.
+    ///
+    /// A fixed insertion buffer rather than a sort: the buffer holds 36 and the dirty set
+    /// can hold thousands, so sorting the set to take its head would be the same mistake
+    /// in a different shape. Squared distances, because the order is all that is wanted
+    /// from them and the square root does not change it.
+    /// </summary>
+    int SelectNearestDirty()
+    {
+        int count = 0;
+        int capacity = scheduleCandidates.Length;
+
+        foreach (long key in world.RenderDirty)
+        {
+            // Skip anything already being meshed or reloaded, so the per-frame budget
+            // goes to sections that can actually start work now.
+            if (meshJobInFlight.Contains(key) || world.LoadsInFlight.Contains(key)) continue;
+
+            double distSq = NearestDistanceSqTo(key);
+            if (count == capacity && distSq >= scheduleCandidateDistSq[count - 1]) continue;
+
+            int at = count < capacity ? count++ : capacity - 1;
+            while (at > 0 && scheduleCandidateDistSq[at - 1] > distSq)
+            {
+                scheduleCandidateDistSq[at] = scheduleCandidateDistSq[at - 1];
+                scheduleCandidates[at] = scheduleCandidates[at - 1];
+                at--;
+            }
+            scheduleCandidateDistSq[at] = distSq;
+            scheduleCandidates[at] = key;
+        }
+
+        return count;
     }
 
     void ScheduleMeshJobs()
@@ -443,32 +489,26 @@ public class LodTerrainRenderer : IRenderer
         int meshBudget = MeshSchedulesPerFrame;
         int loadBudget = MeshLoadRequestsPerFrame;
 
-        // Hard cap on iterations, not just on the two budgets: the paths that drop a key
-        // without starting work (a section with no data, or one whose reload already came
-        // back empty) charge neither budget, so without this the loop runs until
-        // RenderDirty drains -- and each iteration rescans the whole set for the nearest
-        // key. A few hundred such keys turned one frame into a six-figure scan.
-        int steps = MeshSchedulesPerFrame + MeshLoadRequestsPerFrame;
+        // ONE pass over the dirty set, keeping the nearest few, rather than a fresh scan
+        // of the whole set for every key scheduled.
+        //
+        // The iteration cap below has been here a while, and the reason it was added is
+        // still true: the paths that drop a key without starting work charge neither
+        // budget, so without a cap the loop runs until RenderDirty drains. But capping
+        // the number of iterations left each iteration scanning everything, so the work
+        // stayed proportional to cap times dirty, with a square root per element.
+        // Measured at 2.6ms inside a single frame during fill-in, which is a visible
+        // stutter exactly when the player is exploring.
+        int candidates = SelectNearestDirty();
 
-        while (steps-- > 0 && meshBudget > 0 && loadBudget > 0 && world.RenderDirty.Count > 0)
+        for (int i = 0; i < candidates && meshBudget > 0 && loadBudget > 0; i++)
         {
-            long best = 0;
-            double bestDist = double.MaxValue;
-            foreach (long key in world.RenderDirty)
-            {
-                // Skip anything already being meshed or reloaded, so the per-frame
-                // budget goes to sections that can actually start work now.
-                if (meshJobInFlight.Contains(key) || world.LoadsInFlight.Contains(key)) continue;
-                double d = NearestDistanceTo(key);
-                if (d < bestDist)
-                {
-                    bestDist = d;
-                    best = key;
-                }
-            }
-            if (bestDist == double.MaxValue) return; // everything dirty is in flight
+            long best = scheduleCandidates[i];
 
-            world.RenderDirty.Remove(best);
+            // It was dirty and not in flight a moment ago, and nothing below touches any
+            // key but the one it is working on. Remove says so anyway for the price of
+            // the probe the old code was making regardless.
+            if (!world.RenderDirty.Remove(best)) continue;
 
             // Non-blocking: an evicted section starts a background reload and is
             // re-requested by the selection walk once it lands, rather than stalling

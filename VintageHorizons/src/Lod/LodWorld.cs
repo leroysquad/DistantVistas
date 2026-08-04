@@ -226,6 +226,45 @@ public class LodWorld
     public static int WantedLevelFor(double distance) =>
         (int)Math.Clamp(Math.Log2(Math.Max(1.0, distance / DetailDistance)), 0, MaxLevel);
 
+    /// <summary>
+    /// The same answer as <see cref="WantedLevelFor"/>, from the SQUARED distance.
+    ///
+    /// The quadtree walk asks this once per visited node, and every caller had to take a
+    /// square root to ask, after which this took a logarithm to answer. Both are
+    /// avoidable: level L is wanted from DetailDistance * 2^L outward, so the question is
+    /// a comparison against a fixed radius per level, and comparisons survive squaring.
+    ///
+    /// Measured at 951 resident sections, the walk cost 387us a frame and the prune pass
+    /// runs the same test over the whole dirty set on top of that.
+    ///
+    /// The table is rebuilt when DetailDistance changes, which .vhdetail can do live.
+    /// Callers are the render frame and the eviction sweep, both on the main thread, so
+    /// no lock is needed; a worker must not call this.
+    /// </summary>
+    public static int WantedLevelForSq(double distanceSq)
+    {
+        if (wantedTableFor != DetailDistance) RebuildWantedTable();
+
+        for (int level = MaxLevel; level > 0; level--)
+        {
+            if (distanceSq >= wantedThresholdSq[level]) return level;
+        }
+        return 0;
+    }
+
+    static double wantedTableFor = double.NaN;
+    static readonly double[] wantedThresholdSq = new double[MaxLevel + 1];
+
+    static void RebuildWantedTable()
+    {
+        for (int level = 0; level <= MaxLevel; level++)
+        {
+            double radius = DetailDistance * (1 << level);
+            wantedThresholdSq[level] = radius * radius;
+        }
+        wantedTableFor = DetailDistance;
+    }
+
     void RegisterInTree(long key)
     {
         while (true)

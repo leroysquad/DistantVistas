@@ -13,6 +13,77 @@ public static class KeyMathChecks
         Family(c);
         Footprint(c);
         Distance(c);
+        WantedLevelFromSquaredDistance(c);
+    }
+
+    /// <summary>
+    /// WantedLevelForSq must be the same function as WantedLevelFor, which it replaces on
+    /// the two hot paths: the quadtree walk asks it once per visited node, and the prune
+    /// pass once per dirty key per frame. The old form cost the caller a square root and
+    /// then took a logarithm; the new one compares squared distances against a table.
+    ///
+    /// Squaring changes rounding, so if the two ever disagree it is at a boundary. This
+    /// lands exactly on every boundary and sweeps finely either side, at several
+    /// DetailDistance settings, because .vhdetail can change that live and the table has
+    /// to be rebuilt when it does.
+    ///
+    /// A wrong answer here is not a slow frame, it is terrain drawn at the wrong detail
+    /// level, so the bar is exact agreement rather than close agreement.
+    /// </summary>
+    static void WantedLevelFromSquaredDistance(Check c)
+    {
+        double original = LodWorld.DetailDistance;
+        int mismatches = 0, compared = 0;
+
+        try
+        {
+            foreach (double detail in new[] { 256.0, 512.0, 1024.0, 4096.0, 333.7 })
+            {
+                LodWorld.DetailDistance = detail;
+
+                var probes = new List<double>();
+                for (int level = 0; level <= LodWorld.MaxLevel + 1; level++)
+                {
+                    double boundary = detail * (1 << level);
+                    foreach (double nudge in new[] { -1.0, -1e-3, -1e-9, 0.0, 1e-9, 1e-3, 1.0 })
+                    {
+                        probes.Add(Math.Max(0.0, boundary + nudge));
+                    }
+                }
+                for (int i = -50; i < 400; i++) probes.Add(detail * Math.Pow(2, i / 41.0));
+                probes.Add(0);
+                probes.Add(1e9);
+
+                foreach (double distance in probes)
+                {
+                    compared++;
+                    if (LodWorld.WantedLevelFor(distance)
+                        != LodWorld.WantedLevelForSq(distance * distance))
+                    {
+                        mismatches++;
+                    }
+                }
+            }
+        }
+        finally
+        {
+            LodWorld.DetailDistance = original;
+        }
+
+        c.True(compared > 2000, "the sweep actually covered a wide range of distances");
+        c.Eq(0, mismatches, "the squared form agrees with the logarithm at every distance");
+
+        // And that the table follows DetailDistance rather than caching the first one it
+        // saw. Without a rebuild this is the failure that would not show up above,
+        // because every probe there is taken after the setting changes.
+        LodWorld.DetailDistance = 512;
+        int atFiveTwelve = LodWorld.WantedLevelForSq(2000.0 * 2000.0);
+        LodWorld.DetailDistance = 2048;
+        int atTwoThousand = LodWorld.WantedLevelForSq(2000.0 * 2000.0);
+        LodWorld.DetailDistance = original;
+
+        c.True(atFiveTwelve != atTwoThousand,
+            "changing the detail distance changes the answer, so the table is rebuilt");
     }
 
     static void Packing(Check c)
