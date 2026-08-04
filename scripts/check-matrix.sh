@@ -825,7 +825,10 @@ JSON
     # frames only alongside them, and never conclude anything from the pair alone.
     if [[ "$SKIP_VISUAL" == "0" ]]; then
         if [[ -d "$BENCH_BUILT" ]]; then
-            echo "      capturing the visual pair (informational: not asserted on)"
+            # The PICTURES are for a human; that both were produced is asserted. The line
+            # here used to say the whole thing was informational, which the failure count
+            # below has never agreed with.
+            echo "      capturing the visual pair (the pair must exist; judging it is yours)"
             cp -r "$BENCH_BUILT" "$VH_SANDBOX/Mods/"
             mkdir -p "$VH_SANDBOX/bench"
 
@@ -849,7 +852,12 @@ JSON
                 # An empty client cache each time, or the second run simply reads back
                 # what the first one fetched and both pictures look the same.
                 wipe_client_cache
-                rm -f "$VH_SANDBOX/bench/$label.done" "$VH_SANDBOX/bench/$label.csv"
+                # The screenshots too, not just the markers. They are the artifact this
+                # scenario exists to produce, and leaving the previous run's behind meant
+                # the count below found two of them after a run that captured neither.
+                # A capture that timed out then read as a success.
+                rm -f "$VH_SANDBOX/bench/$label.done" "$VH_SANDBOX/bench/$label.csv" \
+                      "$VH_SANDBOX/bench/$label"--*.png
 
                 # A long settle, and not arbitrarily: at 75s a capped run was screenshotted
                 # with 348 sections resident but only 20 meshed and 4 selected, so the

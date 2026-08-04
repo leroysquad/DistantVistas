@@ -139,6 +139,17 @@ rm -f "$BENCH_OUT/$label.done" "$BENCH_OUT/$label.csv"
 export VHBENCH_ROUTE="$route"
 export VHBENCH_LABEL="$label"
 export VHBENCH_OUT="$BENCH_OUT"
+# A ceiling below the floor is not a ceiling. Raising --settle past the default
+# settle_max would otherwise leave the timeout budget below computed from the smaller
+# value while the client waits for the larger one, and the run gets killed partway.
+#
+# Compared with awk, not with [[ -lt ]], because these are seconds and a caller may
+# reasonably pass a fraction. An if rather than a && list, because a false && list
+# returns non-zero and this script runs under set -e.
+if awk -v ceiling="$settle_max" -v floor="$settle" 'BEGIN { exit !(ceiling < floor) }'; then
+    settle_max="$settle"
+fi
+
 export VHBENCH_SETTLE="$settle"
 export VHBENCH_SETTLE_MAX="$settle_max"
 export VHBENCH_MEASURE="$measure"

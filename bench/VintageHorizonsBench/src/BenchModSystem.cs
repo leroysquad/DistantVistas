@@ -143,10 +143,18 @@ public class BenchModSystem : ModSystem, IRenderer
         label = Environment.GetEnvironmentVariable("VHBENCH_LABEL") ?? "unlabelled";
         outDir = Environment.GetEnvironmentVariable("VHBENCH_OUT") ?? Path.Combine(GamePaths.DataPath, "bench");
         settleSec = ReadDouble("VHBENCH_SETTLE", 20);
-        settleMaxSec = Math.Max(settleSec, ReadDouble("VHBENCH_SETTLE_MAX", 90));
         measureSec = ReadDouble("VHBENCH_MEASURE", 10);
         laps = Math.Max(1, (int)ReadDouble("VHBENCH_LAPS", 1));
-        warmupLaps = Math.Max(0, (int)ReadDouble("VHBENCH_WARMUP_LAPS", 1));
+
+        // Both of these default to the OLD behaviour, and that is deliberate. A caller
+        // that does not ask for adaptive settling gets a fixed settle of exactly
+        // VHBENCH_SETTLE, and a caller that does not ask for warm-up laps walks the route
+        // once. check-matrix.sh drives this harness through the environment directly, and
+        // when these defaulted to the new behaviour it silently started walking two laps
+        // and reporting every waypoint as timed out, because a settle whose floor equals
+        // its ceiling can never end early.
+        settleMaxSec = Math.Max(settleSec, ReadDouble("VHBENCH_SETTLE_MAX", settleSec));
+        warmupLaps = Math.Max(0, (int)ReadDouble("VHBENCH_WARMUP_LAPS", 0));
 
         try
         {
@@ -320,11 +328,17 @@ public class BenchModSystem : ModSystem, IRenderer
             if (Settled(elapsed, deltaTime * 1000.0, out bool stabilised))
             {
                 settledAfter = elapsed;
-                settledCleanly = stabilised;
-                if (!stabilised)
+
+                // A fixed settle is not a failed adaptive one. When the floor and the
+                // ceiling are the same the caller asked for a plain wait, so reaching the
+                // ceiling is the expected outcome and warning about it is noise.
+                bool adaptive = settleMaxSec > settleSec;
+                settledCleanly = stabilised || !adaptive;
+
+                if (adaptive && !stabilised)
                 {
                     Mod.Logger.Warning(
-                        "Bench '{0}' at '{1}': frame times never went quiet within {2}s; "
+                        "Bench '{0}' at '{1}': frame times still had a trend after {2}s; "
                         + "this sample includes load, treat it with suspicion.",
                         label, wp.Name, settleMaxSec);
                 }
