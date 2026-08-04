@@ -5,6 +5,29 @@ Written when a version is released, not when a commit lands - see
 
 ## [Unreleased]
 
+**Fixed: another LOD mod that is switched off no longer switches this one off too.**
+0.2.0 went idle whenever Farseer, ChunkLOD, Vistas Beyond or TopoHorizon was loaded. On a
+server that runs one of those, every client is made to load it and the game downloads it
+for you, so "loaded" never meant "drawing". A player who had switched Farseer off in its
+own dialog and used this mod instead was left with no distant terrain from either mod.
+
+This mod now reads Farseer's own switch, in `farseer-client.json`, and draws when Farseer
+is switched off. Nothing to configure: the setting is already on disk. The mods whose
+switch cannot be read still get deference, and `IgnoreOtherLodMods` in
+`vintagehorizons.json` is the escape hatch for those, with `.vhdefer on|off` to set it
+from chat. It applies on the next start, never mid-session.
+
+`.vhinfo` and the log line no longer say to remove the other mod, which is advice a
+player on that server cannot follow.
+
+**Fixed: an idle client made the game log a channel warning.** Deferring returned before
+registering the network channel, so the game reported "Server sends me channel name
+vintagehorizons, but no client side mod registered it" at every join.
+
+**Fixed: a crashing client stopped flushing its LOD cache.** When the game went down its
+own shutdown crash path, our teardown ran off the main thread, the engine refused the
+call, and the exception skipped the storage writer's shutdown.
+
 ## [0.2.0] - 2026-08-03
 
 **Chunk generation on request**, with `/vhgen start [radius] [x z]`. It builds the LOD

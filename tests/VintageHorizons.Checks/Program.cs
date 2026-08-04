@@ -20,6 +20,7 @@ public static class Program
         ("pure", "residency", ResidencyChecks.Run),
         ("pure", "mesher", MesherChecks.Run),
         ("pure", "server config", ConfigChecks.Run),
+        ("pure", "lod mod deferral", DeferralChecks.Run),
         ("fixture", "blob format", StoreChecks.Run),
         ("fixture", "frustum", FrustumChecks.Run),
         ("fixture", "block policy", PolicyChecks.Run),

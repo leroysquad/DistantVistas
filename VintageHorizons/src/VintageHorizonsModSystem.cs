@@ -13,6 +13,14 @@ public class VintageHorizonsConfig
 
     /// <summary>Distance at which detail starts halving; see LodWorld.DetailDistance.</summary>
     public int DetailDistance = 512;
+
+    /// <summary>
+    /// Draw even when another LOD mod is installed and switched on. The escape hatch for
+    /// the mods whose own switch we cannot read; see <see cref="OtherLodMods"/>. Read at
+    /// startup only, because turning the mod on mid-session is not something the startup
+    /// path supports.
+    /// </summary>
+    public bool IgnoreOtherLodMods = false;
 }
 
 /// <summary>
@@ -46,14 +54,10 @@ public class VintageHorizonsModSystem : ModSystem
 
     public override bool ShouldLoad(EnumAppSide forSide) => forSide == EnumAppSide.Client;
 
-    /// <summary>
-    /// Other LOD mods, by mod id. Farseer, ChunkLOD and TopoHorizon are all Universal
-    /// with requiredOnClient, so a server running one forces every client to load it
-    /// too -- the player cannot opt out of theirs, only out of ours.
-    /// </summary>
-    static readonly string[] CompetingLodMods = { "farseer", "chunklod", "vistasbeyond", "topohorizon" };
+    /// <summary>Everything the config file holds, so a partial save cannot drop a setting.</summary>
+    VintageHorizonsConfig config = new();
 
-    /// <summary>Set when another LOD mod is present; we then stay out of its way.</summary>
+    /// <summary>Set when another LOD mod is drawing; we then stay out of its way.</summary>
     string? deferringTo;
 
     /// <summary>Optional server assist (DESIGN.md §10); null while deferring.</summary>
@@ -63,24 +67,6 @@ public class VintageHorizonsModSystem : ModSystem
     {
         capi = api;
 
-        foreach (string modid in CompetingLodMods)
-        {
-            if (!capi.ModLoader.IsModEnabled(modid)) continue;
-
-            // Two LOD mods both extend the camera's far plane and both draw terrain out
-            // there: they would reset the projection matrix against each other every
-            // frame and z-fight over the same ground. Defer rather than fight, because
-            // a server-side mod is mandatory for anyone on that server while we are not.
-            deferringTo = modid;
-            Mod.Logger.Notification(
-                "'{0}' is loaded, so VintageHorizons is staying idle to avoid drawing over it "
-                + "and fighting it for the camera far plane. Remove '{0}' to use VintageHorizons instead.",
-                modid);
-            RegisterCommands();
-            return;
-        }
-
-        VintageHorizonsConfig config;
         try
         {
             config = capi.LoadModConfig<VintageHorizonsConfig>("vintagehorizons.json") ?? new VintageHorizonsConfig();
@@ -88,6 +74,31 @@ public class VintageHorizonsModSystem : ModSystem
         catch
         {
             config = new VintageHorizonsConfig();
+        }
+
+        // Before anything that can return early, and before the connection handshake:
+        // the server learns we speak this channel at handshake time and never again. A
+        // client that skips the registration makes the game log "Server sends me channel
+        // name vintagehorizons, but no client side mod registered it" on every join,
+        // which reads like a broken install. The channel stays inert until Greet(), and
+        // only the active path reaches that.
+        assist = new LodAssistClient(capi, Mod.Logger, Mod.Info.Version);
+        assist.Register();
+
+        // Two LOD mods both extend the camera's far plane and both draw terrain out
+        // there, so they z-fight over the same ground. Defer rather than fight. What we
+        // must not do is defer to a mod that is installed but switched off, which leaves
+        // the player with nothing at all.
+        deferringTo = ChooseDeferralTarget();
+        if (deferringTo != null)
+        {
+            Mod.Logger.Notification(
+                "'{0}' is installed and switched on, so VintageHorizons is staying idle to avoid "
+                + "drawing over it and fighting it for the camera far plane. Switch '{0}' off in its "
+                + "own settings to use VintageHorizons instead.",
+                deferringTo);
+            RegisterCommands();
+            return;
         }
 
         LodWorld.DetailDistance = GameMath.Clamp(config.DetailDistance,
@@ -100,12 +111,6 @@ public class VintageHorizonsModSystem : ModSystem
             FarViewDistanceCap = config.FarViewDistanceCap,
         };
 
-        // Registered here rather than on world join: channel registration has to be in
-        // place before the connection handshake runs, or the server never learns we
-        // speak it. Against a vanilla server this stays an unused registration.
-        assist = new LodAssistClient(capi, Mod.Logger, Mod.Info.Version);
-        assist.Register();
-
         capi.Event.ChunkDirty += OnChunkDirty;
         capi.Event.LevelFinalize += OnLevelFinalize;
         capi.Event.LeaveWorld += OnLeaveWorld;
@@ -115,6 +120,52 @@ public class VintageHorizonsModSystem : ModSystem
         RegisterCommands();
 
         Mod.Logger.Notification("VintageHorizons {0} loaded (client-only)", Mod.Info.Version);
+    }
+
+    /// <summary>
+    /// The mod to stay idle for, or null to draw. Reports what it found either way: a
+    /// player who sees no distant terrain needs the log to say which mod stopped us, and
+    /// a player whose other mod is switched off needs to know we noticed.
+    /// </summary>
+    string? ChooseDeferralTarget()
+    {
+        (string? drawing, string[] switchedOff) =
+            OtherLodMods.Inspect(capi.ModLoader.IsModEnabled, ReadOtherModSwitch);
+
+        if (switchedOff.Length > 0)
+        {
+            Mod.Logger.Notification(
+                "Installed but switched off in its own settings, so VintageHorizons is not "
+                + "staying idle for it: {0}", string.Join(", ", switchedOff));
+        }
+
+        if (drawing != null && config.IgnoreOtherLodMods)
+        {
+            Mod.Logger.Warning(
+                "'{0}' is switched on, and IgnoreOtherLodMods is set, so VintageHorizons is drawing "
+                + "anyway. Switch '{0}' off in its own settings, or the two draw over the same ground.",
+                drawing);
+            return null;
+        }
+
+        return drawing;
+    }
+
+    /// <summary>Reads another mod's own switch. Null means "could not tell", which counts as on.</summary>
+    bool? ReadOtherModSwitch(string file)
+    {
+        try
+        {
+            return capi.LoadModConfig<OtherLodModSwitch>(file)?.Enabled;
+        }
+        catch (Exception e)
+        {
+            // Another mod's config file is not ours to repair, and guessing "off" would
+            // put us on the same ground as a mod that is still drawing.
+            Mod.Logger.Warning("Could not read '{0}' to tell whether that mod is switched on: {1}",
+                file, e.Message);
+            return null;
+        }
     }
 
     void OnChunkDirty(Vec3i chunkCoord, IWorldChunk chunk, EnumChunkDirtyReason reason)
@@ -672,8 +723,9 @@ public class VintageHorizonsModSystem : ModSystem
             .WithDescription("VintageHorizons status")
             .HandleWith(_ => deferringTo != null
                 ? TextCommandResult.Success(
-                    $"[VintageHorizons] idle: '{deferringTo}' is also installed and is drawing the "
-                    + "distant terrain. Remove it to use VintageHorizons instead.")
+                    $"[VintageHorizons] idle: '{deferringTo}' is installed and switched on, so it is "
+                    + "drawing the distant terrain. Switch it off in its own settings to use "
+                    + "VintageHorizons instead, or run '.vhdefer off' to draw beside it.")
                 : TextCommandResult.Success(
                 $"[VintageHorizons] sections: {pipeline.World.Sections.Count} [{pipeline.World.DescribeLevels()}] " +
                 $"({pipeline.CachedSectionsLoaded} from cache), meshes: {renderer.MeshCount}, " +
@@ -691,6 +743,34 @@ public class VintageHorizonsModSystem : ModSystem
                       $"{assist.InFlight} in flight, {assist.SectionsRefused} declined)" +
                       (assist.ManifestComplete ? "" : " (manifest still arriving)")
                     : "")));
+
+        // Registered in both states on purpose: the player who most needs this one is the
+        // player we are currently idle for.
+        capi.ChatCommands.Create("vhdefer")
+            .WithDescription("Stay idle when another LOD mod is drawing (default on; off draws anyway)")
+            .WithArgs(capi.ChatCommands.Parsers.OptionalBool("on"))
+            .HandleWith(args =>
+            {
+                if (args.Parsers[0].IsMissing)
+                {
+                    return TextCommandResult.Success(
+                        $"[VintageHorizons] defer to other LOD mods: {(config.IgnoreOtherLodMods ? "off" : "on")}"
+                        + (deferringTo != null ? $" - idle now, because '{deferringTo}' is drawing" : ""));
+                }
+
+                config.IgnoreOtherLodMods = !(bool)args[0];
+                SaveConfig();
+
+                // Saved, not applied. Starting the mod mid-session would have to register a
+                // network channel after the handshake, run a LevelFinalize that has already
+                // fired, and capture chunks whose ChunkDirty events are long past.
+                return TextCommandResult.Success(config.IgnoreOtherLodMods
+                    ? "[VintageHorizons] will draw even when another LOD mod is switched on (saved). "
+                      + "Restart the game to apply. Switch the other mod off as well, or the two "
+                      + "draw over the same ground."
+                    : "[VintageHorizons] will stay idle when another LOD mod is drawing (saved). "
+                      + "Restart the game to apply.");
+            });
 
         // The remaining commands drive the renderer, which does not exist when we are
         // deferring to another LOD mod.
@@ -743,21 +823,44 @@ public class VintageHorizonsModSystem : ModSystem
     /// <summary>Writes every setting: a partial write would silently reset the others.</summary>
     void SaveConfig()
     {
-        capi.StoreModConfig(new VintageHorizonsConfig
+        // The renderer and the LodWorld statics do not exist while we defer, and what was
+        // loaded from the file is still the right thing to write back.
+        if (deferringTo == null)
         {
-            FarViewDistanceCap = renderer.FarViewDistanceCap,
-            DetailDistance = (int)LodWorld.DetailDistance,
-        }, "vintagehorizons.json");
+            config.FarViewDistanceCap = renderer.FarViewDistanceCap;
+            config.DetailDistance = (int)LodWorld.DetailDistance;
+        }
+
+        capi.StoreModConfig(config, "vintagehorizons.json");
     }
 
     public override void Dispose()
     {
-        if (capi != null)
+        if (capi == null) return;
+
+        // The engine runs this on whichever thread is tearing the game down. On the
+        // vanilla shutdown crash path ("Can't use a disposed shader" out of the render
+        // stage) that is not the main thread, and UnregisterGameTickListener refuses to
+        // run off it. It threw there, and the throw took the two disposals below with
+        // it, so the one shutdown that most needs the storage writer stopped cleanly was
+        // the one where we skipped stopping it. Engine teardown is now allowed to fail;
+        // ours is not.
+        try
         {
             capi.Event.ChunkDirty -= OnChunkDirty;
             capi.Event.LevelFinalize -= OnLevelFinalize;
             capi.Event.LeaveWorld -= OnLeaveWorld;
-            capi.Event.UnregisterGameTickListener(tickListenerId);
+
+            // Nothing to unregister while deferring: that path registers no listener.
+            if (deferringTo == null) capi.Event.UnregisterGameTickListener(tickListenerId);
+        }
+        catch (Exception e)
+        {
+            Mod.Logger.Debug("Event teardown refused at shutdown, which changes nothing by now: {0}",
+                e.Message);
+        }
+        finally
+        {
             // Stops the storage writer before the connection it writes through.
             pipeline?.Dispose();
             renderer?.Dispose();

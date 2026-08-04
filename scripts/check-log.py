@@ -67,6 +67,15 @@ FATAL_LINES = [
     ("is not ours", "the cache format version was rejected and the cache was discarded"),
     ("Storage drain timed out", "sections were still unwritten at shutdown"),
     ("Could not open LOD cache", "the cache database could not be opened"),
+    # The game's own verdict on our mod. These were missing, and the cost was concrete:
+    # the deferring path threw on every shutdown and the deferral scenario passed anyway,
+    # because nothing here looked at what the game itself said about us.
+    # Scoped to our own mod id and namespace on purpose: two scenarios deliberately
+    # install Farseer, and this file reads every line in the log, so an unscoped needle
+    # would turn another mod's bug into our test failure.
+    ("[vintagehorizons] An exception was thrown when trying to start the mod",
+     "the game could not start the mod"),
+    ("for mod VintageHorizons.", "a mod lifecycle phase threw"),
 ]
 
 

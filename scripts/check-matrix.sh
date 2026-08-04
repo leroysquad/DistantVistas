@@ -11,7 +11,7 @@ set -euo pipefail
 #
 # Scenarios: client-only both no-client-mod serving-off capture-off pregen sweep
 #            nondestructive peekdiff generate generate-sp generate-survival radius
-#            deferral
+#            deferral farseer-off
 
 source "$(dirname "${BASH_SOURCE[0]}")/test-lib.sh"
 
@@ -907,6 +907,10 @@ if wants deferral; then
         # the real-world shape - a server running one of these forces it on every client.
         cp -r "$VH_ROOT/bench/mods/farseer" "$VH_SANDBOX/Mods/"
         cp -r "$VH_ROOT/bench/mods/farseer" "$VH_SANDBOX/server/Mods/"
+        # This scenario needs Farseer switched ON, which is its default when it has no
+        # config file. A file left behind by the farseer-off scenario would switch it off
+        # and turn this into a test of the opposite behaviour, silently.
+        rm -f "$VH_SANDBOX/ModConfig/farseer-client.json"
         start_server
         # Deferring returns from StartClientSide before a world exists, so "Level
         # finalized" is never logged. The idle notice is the only marker there is.
@@ -915,6 +919,64 @@ if wants deferral; then
         else
             fail "deferral"
         fi
+        rm -rf "${VH_SANDBOX:?}/Mods/farseer" "${VH_SANDBOX:?}/server/Mods/farseer"
+    else
+        echo "      - skipping: no competing LOD mod at bench/mods/farseer"
+    fi
+fi
+
+# --- Scenario 9: the other LOD mod is installed but switched off. -----------------
+# Reported against 0.2.0. A server running Farseer makes every client load it, so being
+# loaded never proved it was drawing. This player had switched Farseer off in its own
+# dialog and used us instead; 0.2.0 saw the assembly, went idle, and left them with no
+# distant terrain from either mod. Scenario 8 above proves we still yield to a mod that
+# is drawing, and this one proves we no longer yield to one that is not.
+
+if wants farseer-off; then
+    echo "  [farseer-off] a competing mod that is switched off does not stop us"
+    if [[ -d "$VH_ROOT/bench/mods/farseer" ]]; then
+        client_mod; server_mod
+        cp -r "$VH_ROOT/bench/mods/farseer" "$VH_SANDBOX/Mods/"
+        cp -r "$VH_ROOT/bench/mods/farseer" "$VH_SANDBOX/server/Mods/"
+
+        # Exactly what Farseer's own dialog leaves behind. Written as a single field on
+        # purpose: Farseer rewrites the file from its own defaults on load, so if this
+        # ever stops coming back as false, the field name has moved and our reader is
+        # reading a value that is no longer the switch.
+        mkdir -p "$VH_SANDBOX/ModConfig"
+        printf '{ "Enabled": false }\n' > "$VH_SANDBOX/ModConfig/farseer-client.json"
+
+        start_server
+        if run_client; then
+            assert_log --label "farseer-off" --expect-capture || fail "farseer-off"
+
+            if grep -q "is staying idle" "$CLIENT_LOG"; then
+                echo "      x went idle for a mod that is switched off"
+                fail "farseer-off"
+            else
+                echo "      - drew alongside a switched-off Farseer"
+            fi
+
+            # The game's own complaint when a server offers a channel no client mod
+            # registered. Deferring used to skip the registration and produce it.
+            if grep -q "but no client side mod registered it" "$CLIENT_LOG"; then
+                echo "      x the game reports our channel as unregistered"
+                fail "farseer-off"
+            fi
+
+            # Proves we read the file rather than guessed: Farseer rewrites it on load,
+            # and a reader pointed at the wrong field would not have seen the false.
+            if python3 -c "import json,sys; sys.exit(0 if json.load(open('$VH_SANDBOX/ModConfig/farseer-client.json'))['Enabled'] is False else 1)" 2>/dev/null; then
+                echo "      - Farseer kept Enabled=false through its own rewrite"
+            else
+                echo "      x Farseer did not keep Enabled=false; the switch has moved"
+                fail "farseer-off"
+            fi
+        else
+            fail "farseer-off"
+        fi
+
+        rm -f "$VH_SANDBOX/ModConfig/farseer-client.json"
         rm -rf "${VH_SANDBOX:?}/Mods/farseer" "${VH_SANDBOX:?}/server/Mods/farseer"
     else
         echo "      - skipping: no competing LOD mod at bench/mods/farseer"

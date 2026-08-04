@@ -44,6 +44,20 @@ ahead of time.
 | `.vhinfo` | Status: cached/resident sections, meshes, current far edge, settings |
 | `.vhdetail [blocks]` | Distance before detail starts to halve (default 512). A higher value gives sharper far terrain and costs more VRAM and CPU. Try 1024. No argument reports the current value. |
 | `.vhfar <blocks>` | Cap the LOD render distance. `0` means unlimited, which is the default. |
+| `.vhdefer [on\|off]` | Whether to stay idle when another LOD mod is drawing. On by default. Applies at the next start, not straight away. |
+
+### If your server runs Farseer, ChunkLOD or TopoHorizon
+
+Those mods are required on the client, so joining such a server installs one on your
+machine whether you want it or not. Two LOD mods drawing at once fight over the camera
+far plane and draw over each other, so this one stays idle while another is **drawing**.
+
+Being installed is not the same as drawing. Switch Farseer off in its own dialog
+(Ctrl+Shift+F) and this mod takes over by itself, with nothing else to set. For the mods
+whose switch this one cannot read, `.vhdefer off` makes it draw anyway; switch the other
+mod off as well, or the two will draw over the same ground.
+
+`.vhinfo` names the mod being deferred to.
 
 Two server commands exist as well (`/`, not `.`). They need the controlserver
 privilege, which every singleplayer host has:
@@ -156,7 +170,9 @@ know that what was written can be read back.
 
 `matrix` covers the configurations other people put the mod in. It runs a vanilla
 server, a modded one, and a client without the mod at all. It also tests each admin
-switch, and deferral to a competing LOD mod.
+switch. Two scenarios cover competing LOD mods, in both directions: `deferral` proves we
+yield to one that is drawing, and `farseer-off` proves we do not yield to one the player
+has switched off.
 
 **There is no CI, and there cannot be.** Building this repo requires the Vintage Story
 assemblies from a local game install, and those are not redistributable, so no hosted
