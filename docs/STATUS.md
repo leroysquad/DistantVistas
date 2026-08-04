@@ -98,14 +98,26 @@ The lesson for anyone measuring this again: quote the resident section count bes
 phase number, or the number means nothing.
 
 Prune and schedule were first timed together, which was a mistake. They are different
-shapes, and a spike in the pair reads as a spike in scheduling.
+shapes, and a spike in the pair reads as a spike in scheduling. Separated, pruning turns
+out to cost 0.4us and scheduling 0.2us once the dirty set has drained.
+
+**Read the averages, not the maxima.** The per-phase maximum does not measure the phase.
+The far-distance scan averages 2us over a few hundred meshes and has been seen to report
+a 1624us maximum, which is 800x its own average for a loop that only multiplies and
+compares. Nothing in it can take that long. What the maximum records is whatever
+interrupted the frame, a garbage collection or the scheduler, charged to whichever phase
+happened to be running at the time. Every phase shows millisecond maxima for the same
+reason, and they should not be read as evidence about the code inside them.
 
 ### Known and not fixed
 
-- **Draw submission is the largest remaining phase**, at 360us a frame with spikes over
-  3ms, on a world with 951 sections. It runs `SetupSectionTransform` per section per
-  pass, twice for anything with water, and each call does four `HasDataSet` probes and
-  four uniform uploads. The open-edge flags change only when a neighbour gains data, and
+- **Draw submission and the quadtree walk are the two largest phases.** Measured at 951
+  sections they were 360us and 387us a frame; at 358 sections, 136us and 89us. Both
+  scale with the resident section count, and together they are nearly all of the
+  renderer's own frame cost.
+  Draw submission runs `SetupSectionTransform` per section per pass, twice over for
+  anything with water, and each call makes four `HasDataSet` probes and four uniform
+  uploads. The open-edge flags change only when a neighbour gains data, and
   `MarkChanged` already dirties the four neighbours, so they can be cached with the mesh.
 - **Mesh eviction is counted in frames, not time.** `EvictAfterFrames = 3600` is two
   minutes at 30 fps and eight seconds at the 450 fps some waypoints reach, so how long
