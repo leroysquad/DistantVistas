@@ -18,9 +18,13 @@ Three separate causes, each found by measuring rather than by reading the code:
   `scripts/bench-ab.sh` snapshots and restores both before every measured run.
 - **Settling was a fixed sleep.** Waypoints actually need 12s to over 75s depending on
   what is cached, so a 20s timer was measuring load bursts at three of five waypoints.
-  Settling now waits for the frame times to stop moving. The first version of that
-  check compared each window with the one before it, which accepts a steady climb
-  forever; it compares across the whole span now.
+  Settling now waits for the frame times to stop having a TREND, which is a different
+  question from whether they are quiet. Quiet was the first attempt, and `ridge-east`
+  could never satisfy it: at 13-19ms with 75ms worst frames its window medians never
+  agree, so it timed out at every attempt while its neighbours settled in 12s. It
+  settles in 18s now. Two further defects in that criterion were caught by testing it
+  against traces with known answers rather than by reasoning about it, and those traces
+  live in `bench/settle-criterion-check.py`.
 - **The page cache favoured whichever run went second.** Run A read a 171 MB world off
   cold disk and managed 82 fps on its first lap; run B found the same restored files in
   RAM and managed 369 fps at the same waypoint. The restore now reads the files back so
@@ -70,11 +74,39 @@ that spread a result.
   empty blob, and the client treated both as never, so a player joining a sweeping
   server lost those sections for the session. `AssistSection.Retryable` separates them.
 
+### The renderer's own frame cost, and why it is timed rather than benchmarked
+
+Each phase of the render frame is now timed directly and reported in the 15s stats line.
+The reason is arithmetic. These phases are tens to hundreds of microseconds, against a
+frame of ten thousand. The benchmark's own run-to-run spread is wider than any of them.
+A frame-rate comparison therefore cannot resolve them. It can only appear to.
+
+That measurement re-ranked the work three times, and each ranking was wrong in a way
+reading the code could not have shown:
+
+- One early sample said mesh scheduling cost 0.6us, so it was not worth touching.
+- Twelve samples from a served world said 16.7-18.1us, the largest of the phases.
+- A world with 951 resident sections said the walk cost 387us and the draw 360us.
+  Scheduling sat at 7us there, with a 2.6ms spike.
+
+All three are true. The costs depend on state. Scheduling dominates while the dirty set
+is large, which is during fill-in. The walk and the draw dominate once meshes exist, and
+both scale with the resident section count. A measurement on a small world under-reports
+the walk by roughly 40x.
+
+The lesson for anyone measuring this again: quote the resident section count beside any
+phase number, or the number means nothing.
+
+Prune and schedule were first timed together, which was a mistake. They are different
+shapes, and a spike in the pair reads as a spike in scheduling.
+
 ### Known and not fixed
 
-- **`ridge-east` never reaches steady state.** It is the only waypoint that times out
-  at 75s, and it has the worst frame times and the widest spread. Mesh eviction is ruled
-  out: the evict sweeps report nothing evicted at all.
+- **Draw submission is the largest remaining phase**, at 360us a frame with spikes over
+  3ms, on a world with 951 sections. It runs `SetupSectionTransform` per section per
+  pass, twice for anything with water, and each call does four `HasDataSet` probes and
+  four uniform uploads. The open-edge flags change only when a neighbour gains data, and
+  `MarkChanged` already dirties the four neighbours, so they can be cached with the mesh.
 - **Mesh eviction is counted in frames, not time.** `EvictAfterFrames = 3600` is two
   minutes at 30 fps and eight seconds at the 450 fps some waypoints reach, so how long
   the mod keeps a mesh swings by 15x with frame rate.
