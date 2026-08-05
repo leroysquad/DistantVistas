@@ -24,9 +24,11 @@ player on that server cannot follow.
 registering the network channel, so the game reported "Server sends me channel name
 vintagehorizons, but no client side mod registered it" at every join.
 
-**Fixed: a crashing client stopped flushing its LOD cache.** When the game went down its
-own shutdown crash path, our teardown ran off the main thread, the engine refused the
-call, and the exception skipped the storage writer's shutdown.
+**Fixed: a crashing client cleaned up almost nothing.** When the game went down its own
+shutdown crash path, our teardown ran off the main thread, where the engine refuses these
+calls, and each refusal skipped every step behind it. That cost the storage writer's
+shutdown, and then, once that was guarded, the release of every GPU mesh. Each step now
+stands alone, and our own work runs before the engine calls that can refuse.
 
 ## [0.2.0] - 2026-08-03
 

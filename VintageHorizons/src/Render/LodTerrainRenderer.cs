@@ -772,7 +772,10 @@ public class LodTerrainRenderer : IRenderer
 
     public void Dispose()
     {
-        capi.Event.UnregisterRenderer(this, EnumRenderStage.Opaque);
+        // Our own resources first. UnregisterRenderer refuses to run off the main thread,
+        // and the game's shutdown crash path disposes mods from another one, so putting
+        // the engine call first meant a crashing client freed none of its GPU meshes.
         ClearMeshes();
+        capi.Event.UnregisterRenderer(this, EnumRenderStage.Opaque);
     }
 }

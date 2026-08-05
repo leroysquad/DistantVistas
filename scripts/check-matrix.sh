@@ -11,7 +11,7 @@ set -euo pipefail
 #
 # Scenarios: client-only both no-client-mod serving-off capture-off pregen sweep
 #            nondestructive peekdiff generate generate-sp generate-survival radius
-#            deferral farseer-off
+#            deferral farseer-off defer-override
 
 source "$(dirname "${BASH_SOURCE[0]}")/test-lib.sh"
 
@@ -93,6 +93,16 @@ stop_client() {
     "$VH_ROOT/scripts/test-stop.sh" client >/dev/null 2>&1 || true
     vh_wait_stopped "$VH_SANDBOX/test-instance.pid" 120 \
         || echo "      - client still shutting down after 2 minutes"
+
+    # The game archives the chat, audit and debug logs on each start, but never
+    # client-main.log, which is the only one carrying mod errors and crash traces. Every
+    # scenario therefore destroyed the evidence from the one before it, and a failure
+    # found at the end of a run could not be traced back. That is why an intermittent
+    # shutdown fault was first diagnosed from a single sample, and diagnosed wrongly.
+    if [[ -f "$CLIENT_LOG" ]]; then
+        mkdir -p "$VH_SANDBOX/Logs/runs"
+        cp "$CLIENT_LOG" "$VH_SANDBOX/Logs/runs/$(date +%H%M%S)-client-main.log"
+    fi
 }
 
 assert_log() { python3 "$VH_ROOT/scripts/check-log.py" "$CLIENT_LOG" "$@"; }
@@ -909,13 +919,26 @@ if wants deferral; then
         cp -r "$VH_ROOT/bench/mods/farseer" "$VH_SANDBOX/server/Mods/"
         # This scenario needs Farseer switched ON, which is its default when it has no
         # config file. A file left behind by the farseer-off scenario would switch it off
-        # and turn this into a test of the opposite behaviour, silently.
-        rm -f "$VH_SANDBOX/ModConfig/farseer-client.json"
+        # and turn this into a test of the opposite behaviour, silently. Our own config
+        # matters for the same reason: defer-override writes IgnoreOtherLodMods into it,
+        # and a suite that dies before its cleanup leaves that set for the next run, where
+        # this scenario runs first and would fail for a reason that is not its own.
+        rm -f "$VH_SANDBOX/ModConfig/farseer-client.json" "$VH_SANDBOX/ModConfig/vintagehorizons.json"
         start_server
         # Deferring returns from StartClientSide before a world exists, so "Level
         # finalized" is never logged. The idle notice is the only marker there is.
         if run_client "staying idle" 15; then
             assert_log --label "deferral  " --expect-idle || fail "deferral"
+
+            # The one instruction that stops a player concluding the fix does not work.
+            # Which mod draws is settled at startup, so switching the other one off while
+            # playing changes nothing until the next start. A reword must not drop it.
+            if grep -q "restart the game" "$CLIENT_LOG"; then
+                echo "      - told the player the decision is made at startup"
+            else
+                echo "      x the idle notice never mentions restarting"
+                fail "deferral"
+            fi
         else
             fail "deferral"
         fi
@@ -935,7 +958,17 @@ fi
 if wants farseer-off; then
     echo "  [farseer-off] a competing mod that is switched off does not stop us"
     if [[ -d "$VH_ROOT/bench/mods/farseer" ]]; then
-        client_mod; server_mod
+        # The reporter's exact shape: their server runs Farseer and does NOT run this mod,
+        # so this client harvests its own terrain with no assist behind it. Farseer stays
+        # on the server, because that is what puts it on the client in the first place.
+        # defer-override covers the other combination, with this mod on the server too.
+        #
+        # The cache wipe is what makes this scenario standalone. Without it the client
+        # starts on whatever an earlier scenario left behind, already holding keys for the
+        # ground around it, and captures nothing: 1244 keys from cache, 0 written, 0
+        # selected, 0 meshes. It passed alone and failed after radius, which is the exact
+        # shape of the "scenarios were not standalone" fault this suite has hit before.
+        client_mod; no_server_mod; wipe_client_cache
         cp -r "$VH_ROOT/bench/mods/farseer" "$VH_SANDBOX/Mods/"
         cp -r "$VH_ROOT/bench/mods/farseer" "$VH_SANDBOX/server/Mods/"
 
@@ -948,7 +981,8 @@ if wants farseer-off; then
 
         start_server
         if run_client; then
-            assert_log --label "farseer-off" --expect-capture || fail "farseer-off"
+            assert_log --label "farseer-off" --expect-capture --expect-assist absent \
+                || fail "farseer-off"
 
             if grep -q "is staying idle" "$CLIENT_LOG"; then
                 echo "      x went idle for a mod that is switched off"
@@ -977,6 +1011,108 @@ if wants farseer-off; then
         fi
 
         rm -f "$VH_SANDBOX/ModConfig/farseer-client.json"
+        rm -rf "${VH_SANDBOX:?}/Mods/farseer" "${VH_SANDBOX:?}/server/Mods/farseer"
+    else
+        echo "      - skipping: no competing LOD mod at bench/mods/farseer"
+    fi
+fi
+
+# --- Scenario 10: the override, and a switch file we cannot parse. ---------------
+# Two states the reported player can reach that scenarios 8 and 9 do not cover.
+#
+# The override is advertised: the idle log line and the README both tell a player to run
+# '.vhdefer off' when their other LOD mod has no readable switch. Advice we never tested
+# is advice we should not be giving.
+#
+# The broken file is what a hand edit leaves behind. It must not decide anything: a parse
+# failure that read as "switched off" would put us on the same ground as a mod that is
+# still drawing, and one that escaped ReadOtherModSwitch would kill StartClientSide and
+# take the whole mod down with it.
+
+if wants defer-override; then
+    echo "  [defer-override] the advertised escape hatch, and an unreadable switch file"
+    if [[ -d "$VH_ROOT/bench/mods/farseer" ]]; then
+        # Wiped for the same reason as farseer-off: a client that already holds the keys
+        # for the ground around it captures nothing, and part 1 asserts that meshes get
+        # built.
+        client_mod; server_mod; wipe_client_cache
+        cp -r "$VH_ROOT/bench/mods/farseer" "$VH_SANDBOX/Mods/"
+        cp -r "$VH_ROOT/bench/mods/farseer" "$VH_SANDBOX/server/Mods/"
+        mkdir -p "$VH_SANDBOX/ModConfig"
+
+        # Part 1: Farseer switched ON, override set. We must draw regardless.
+        rm -f "$VH_SANDBOX/ModConfig/farseer-client.json"
+        cat > "$VH_SANDBOX/ModConfig/vintagehorizons.json" <<'JSON'
+{ "FarViewDistanceCap": 0, "DetailDistance": 512, "IgnoreOtherLodMods": true }
+JSON
+        start_server
+        if run_client; then
+            assert_log --label "override   " --expect-capture || fail "defer-override"
+            if grep -q "is staying idle" "$CLIENT_LOG"; then
+                echo "      x the override did not override"
+                fail "defer-override"
+            else
+                echo "      - drew with a switched-on Farseer, as the override promises"
+            fi
+            # The player is taking on the z-fighting, so they have to be told.
+            if grep -q "IgnoreOtherLodMods is set" "$CLIENT_LOG"; then
+                echo "      - warned that both mods now draw the same ground"
+            else
+                echo "      x drew beside another LOD mod without warning anyone"
+                fail "defer-override"
+            fi
+        else
+            fail "defer-override"
+        fi
+
+        # Part 2: no override, and a switch file that is not valid JSON. Deferring is the
+        # only safe reading, and the mod must still start.
+        rm -f "$VH_SANDBOX/ModConfig/vintagehorizons.json"
+        printf '{ "Enabled": fal\n' > "$VH_SANDBOX/ModConfig/farseer-client.json"
+        start_server
+        if run_client "staying idle" 15; then
+            assert_log --label "badswitch  " --expect-idle || fail "defer-override"
+            echo "      - deferred on a switch file it could not parse"
+        else
+            echo "      x a corrupt switch file stopped the mod from starting"
+            fail "defer-override"
+        fi
+
+        # Part 3: the escape hatch, driven the way a player drives it. '.vhdefer off' is
+        # what the idle log line and the README tell them to run, and it saves the config
+        # from a state where the renderer does not exist. SaveConfig used to read the
+        # renderer unconditionally, so this is the command whose failure would strand
+        # exactly the player it exists to rescue.
+        rm -f "$VH_SANDBOX/ModConfig/farseer-client.json" "$VH_SANDBOX/ModConfig/vintagehorizons.json"
+        start_server
+        # Waits for the RESULT line, not the "sending" line. The first version waited for
+        # the latter and passed while the command did nothing at all, because client-side
+        # commands are not dispatched by SendChatMessage.
+        if VINTAGEHORIZONS_AUTOCMD=".vhdefer off" run_client "Auto-command result:" 15; then
+            assert_log --label "vhdefer    " --expect-idle || fail "defer-override"
+
+            saved="$VH_SANDBOX/ModConfig/vintagehorizons.json"
+            if [[ -f "$saved" ]] && python3 -c "import json,sys; sys.exit(0 if json.load(open('$saved')).get('IgnoreOtherLodMods') is True else 1)" 2>/dev/null; then
+                echo "      - .vhdefer off saved the override from an idle client"
+            else
+                echo "      x .vhdefer off did not save the override"
+                fail "defer-override"
+            fi
+
+            # Saved is not applied: this session must still be idle, or the message that
+            # promises a restart is lying.
+            if grep -q "is staying idle" "$CLIENT_LOG"; then
+                echo "      - stayed idle for this session, as the restart notice says"
+            else
+                echo "      x the override took effect mid-session"
+                fail "defer-override"
+            fi
+        else
+            echo "      x the idle client never ran the auto-command"
+            fail "defer-override"
+        fi
+
+        rm -f "$VH_SANDBOX/ModConfig/farseer-client.json" "$VH_SANDBOX/ModConfig/vintagehorizons.json"
         rm -rf "${VH_SANDBOX:?}/Mods/farseer" "${VH_SANDBOX:?}/server/Mods/farseer"
     else
         echo "      - skipping: no competing LOD mod at bench/mods/farseer"

@@ -60,7 +60,11 @@ public class VintageHorizonsModSystem : ModSystem
     /// <summary>Set when another LOD mod is drawing; we then stay out of its way.</summary>
     string? deferringTo;
 
-    /// <summary>Optional server assist (DESIGN.md §10); null while deferring.</summary>
+    /// <summary>
+    /// Optional server assist (DESIGN.md §10). Created even while deferring, because the
+    /// channel has to be registered before the handshake either way; it simply never
+    /// greets, so it stays silent.
+    /// </summary>
     LodAssistClient? assist;
 
     public override void StartClientSide(ICoreClientAPI api)
@@ -95,9 +99,15 @@ public class VintageHorizonsModSystem : ModSystem
             Mod.Logger.Notification(
                 "'{0}' is installed and switched on, so VintageHorizons is staying idle to avoid "
                 + "drawing over it and fighting it for the camera far plane. Switch '{0}' off in its "
-                + "own settings to use VintageHorizons instead.",
+                + "own settings and restart the game to use VintageHorizons instead. This is decided "
+                + "once at startup, so switching it off now changes nothing until the next start.",
                 deferringTo);
             RegisterCommands();
+
+            // The idle path reaches no LevelFinalize handler of its own, so the dev hook
+            // is wired straight to the event here. Without it the matrix cannot drive
+            // '.vhdefer off' from the state that command exists for.
+            capi.Event.LevelFinalize += RegisterAutoCommand;
             return;
         }
 
@@ -120,6 +130,57 @@ public class VintageHorizonsModSystem : ModSystem
         RegisterCommands();
 
         Mod.Logger.Notification("VintageHorizons {0} loaded (client-only)", Mod.Info.Version);
+    }
+
+    /// <summary>
+    /// A dev hook for the matrix tier: send one chat command shortly after the world is
+    /// up. The harness cannot reach a detached server's console, and a second entry point
+    /// into a command would test something other than what players type. The delay lets
+    /// the handshake and the privilege grant settle first.
+    ///
+    /// Reachable from the idle path too, and not for symmetry: '.vhdefer off' is the
+    /// escape hatch we tell an idle player to use, and it writes the config file from a
+    /// state where the renderer does not exist. That is the one command whose failure
+    /// would strand exactly the player it is meant to rescue.
+    /// </summary>
+    void RegisterAutoCommand()
+    {
+        if (Environment.GetEnvironmentVariable("VINTAGEHORIZONS_AUTOCMD") is not { Length: > 0 } autoCmd)
+        {
+            return;
+        }
+
+        capi.Event.RegisterCallback(_ =>
+        {
+            Mod.Logger.Notification("Auto-command: {0}", autoCmd);
+
+            // SendChatMessage sends to the SERVER, so it runs '/' commands and silently
+            // does nothing with a client-side '.' one: the message goes out, no handler
+            // on either side claims it, and the log looks like a success. Client commands
+            // have to be dispatched locally.
+            if (autoCmd.StartsWith('.'))
+            {
+                capi.ChatCommands.ExecuteUnparsed(autoCmd, new TextCommandCallingArgs
+                {
+                    Caller = new Caller
+                    {
+                        Player = capi.World.Player,
+                        Pos = capi.World.Player.Entity.Pos.XYZ,
+                        FromChatGroupId = GlobalConstants.GeneralChatGroup,
+
+                        // The game fills these in when a person types the command; a
+                        // caller built here starts with none and is refused by its own
+                        // privilege test. Wildcard, because this hook exists only to
+                        // reproduce what a player does, and a test that cannot reach the
+                        // command tests nothing.
+                        CallerPrivileges = new[] { "*" },
+                    },
+                }, result => Mod.Logger.Notification("Auto-command result: {0}", result.StatusMessage));
+                return;
+            }
+
+            capi.SendChatMessage(autoCmd);
+        }, 15000);
     }
 
     /// <summary>
@@ -543,18 +604,7 @@ public class VintageHorizonsModSystem : ModSystem
             capi.Event.RegisterGameTickListener(_ => LogStats("Stats"), 15000);
         }
 
-        // A dev hook for the matrix tier: send one chat command shortly after the world
-        // is up. The harness cannot reach a detached server's console, and a second
-        // entry point into the generator would test something other than what players
-        // type. The delay lets the handshake and the privilege grant settle first.
-        if (Environment.GetEnvironmentVariable("VINTAGEHORIZONS_AUTOCMD") is { Length: > 0 } autoCmd)
-        {
-            capi.Event.RegisterCallback(_ =>
-            {
-                Mod.Logger.Notification("Auto-command: {0}", autoCmd);
-                capi.SendChatMessage(autoCmd);
-            }, 15000);
-        }
+        RegisterAutoCommand();
 
         autoExplore = Environment.GetEnvironmentVariable("VINTAGEHORIZONS_AUTOEXPLORE") == "1";
 
@@ -724,8 +774,9 @@ public class VintageHorizonsModSystem : ModSystem
             .HandleWith(_ => deferringTo != null
                 ? TextCommandResult.Success(
                     $"[VintageHorizons] idle: '{deferringTo}' is installed and switched on, so it is "
-                    + "drawing the distant terrain. Switch it off in its own settings to use "
-                    + "VintageHorizons instead, or run '.vhdefer off' to draw beside it.")
+                    + "drawing the distant terrain. Switch it off in its own settings, or run "
+                    + "'.vhdefer off' to draw beside it. Either way, restart the game afterwards: "
+                    + "this is decided once at startup.")
                 : TextCommandResult.Success(
                 $"[VintageHorizons] sections: {pipeline.World.Sections.Count} [{pipeline.World.DescribeLevels()}] " +
                 $"({pipeline.CachedSectionsLoaded} from cache), meshes: {renderer.MeshCount}, " +
@@ -838,32 +889,44 @@ public class VintageHorizonsModSystem : ModSystem
     {
         if (capi == null) return;
 
-        // The engine runs this on whichever thread is tearing the game down. On the
-        // vanilla shutdown crash path ("Can't use a disposed shader" out of the render
-        // stage) that is not the main thread, and UnregisterGameTickListener refuses to
-        // run off it. It threw there, and the throw took the two disposals below with
-        // it, so the one shutdown that most needs the storage writer stopped cleanly was
-        // the one where we skipped stopping it. Engine teardown is now allowed to fail;
-        // ours is not.
-        try
+        // The engine runs this on whichever thread is tearing the game down, and on the
+        // vanilla shutdown crash path ("Can't use a disposed shader" out of a render
+        // stage) that is not the main thread. Every engine call below refuses to run off
+        // it, and an exception that escapes one step skips every step behind it. Two
+        // rounds of this were needed to learn the general rule: the first version lost
+        // the storage writer's shutdown, and the second, which guarded only the events,
+        // lost the renderer's. So each step stands alone and none of them propagates.
+        Quietly(() =>
         {
             capi.Event.ChunkDirty -= OnChunkDirty;
             capi.Event.LevelFinalize -= OnLevelFinalize;
+            capi.Event.LevelFinalize -= RegisterAutoCommand;
             capi.Event.LeaveWorld -= OnLeaveWorld;
 
             // Nothing to unregister while deferring: that path registers no listener.
             if (deferringTo == null) capi.Event.UnregisterGameTickListener(tickListenerId);
+        });
+
+        // Stops the storage writer before the connection it writes through.
+        Quietly(() => pipeline?.Dispose());
+        Quietly(() => renderer?.Dispose());
+    }
+
+    /// <summary>
+    /// One shutdown step, and whatever it throws stays here. Only ever called from
+    /// <see cref="Dispose"/>, where the game is already going down and the alternative is
+    /// abandoning the steps behind this one.
+    /// </summary>
+    void Quietly(Action step)
+    {
+        try
+        {
+            step();
         }
         catch (Exception e)
         {
-            Mod.Logger.Debug("Event teardown refused at shutdown, which changes nothing by now: {0}",
+            Mod.Logger.Debug("A shutdown step was refused, which changes nothing by now: {0}",
                 e.Message);
-        }
-        finally
-        {
-            // Stops the storage writer before the connection it writes through.
-            pipeline?.Dispose();
-            renderer?.Dispose();
         }
     }
 }

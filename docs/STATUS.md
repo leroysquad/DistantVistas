@@ -1,5 +1,90 @@
 # M4/M5 status notes
 
+## Competing LOD mods, after the 0.2.0 field report (2026-08-04)
+
+A player on a Farseer server had switched Farseer off in its own dialog and used this mod
+instead. 0.2.0 tested only whether Farseer was **loaded**, which on such a server is always
+true, so it went idle and left them with no distant terrain from either mod.
+
+The states a player can be in, and where each one is now pinned. The rule that decides all
+of them: only an explicit "switched off" lets us draw, because a wrong guess that way costs
+only our own terrain, while a wrong guess the other way puts two mods on the same ground.
+
+| State | Outcome | Held by |
+|---|---|---|
+| No competing mod | draws | every other scenario |
+| Loaded, no config file | idle | `deferral`, and a fast-tier case |
+| Loaded, switched on | idle | `deferral` |
+| Loaded, switched off | draws | `farseer-off` |
+| Config file unparseable | idle, mod still starts | `defer-override` part 2 |
+| Switch cannot be read at all (ChunkLOD, TopoHorizon) | idle | fast tier |
+| Two loaded, one off, one on | idle for the one still drawing | fast tier |
+| `IgnoreOtherLodMods` set | draws, with a warning | `defer-override` part 1 |
+| `.vhdefer off` run from an idle client | saves, stays idle until restart | `defer-override` part 3 |
+
+`farseer-off` deliberately runs Farseer on the server and this mod on the client **only**,
+which is the reporter's exact shape. `defer-override` covers the other combination.
+
+### What the reproduction found that the report did not mention
+
+- **The idle path never registered the network channel**, so the game itself logged
+  "Server sends me channel name vintagehorizons, but no client side mod registered it" at
+  every join. It reads like a broken install.
+- **Teardown was one exception away from doing nothing.** The engine refuses
+  `UnregisterGameTickListener` and `UnregisterRenderer` off the main thread, and the
+  vanilla shutdown crash path disposes mods from another thread. The first throw skipped
+  every step behind it: first the storage writer's shutdown, then, once that was guarded,
+  the release of every GPU mesh. Each step now stands alone, and our own work runs before
+  any engine call. **The general rule is the finding**: in `Dispose`, treat every engine
+  call as one that can refuse.
+
+  Proven on the path itself, not argued. The crash is intermittent, so it took a loop of
+  the same scenario to catch one: run 4 of 6 hit "Can't use a disposed shader" out of
+  `MainRenderLoop`, and in that same run the mod logged zero phase failures and zero start
+  failures. Before the fix, that path produced both. A single clean run proves nothing
+  here, which is what made the first diagnosis wrong.
+- **The matrix could not see any of it**, because `check-log.py` never looked at what the
+  game said about our mod. The deferral scenario passed while the mod threw on every
+  shutdown. Those lines are fatal now, scoped to our own mod id so that a scenario which
+  deliberately installs Farseer cannot fail on Farseer's bugs.
+- **`SendChatMessage` cannot drive a client command.** It sends to the server, so a `.`
+  command goes out and nothing claims it, and the log still shows the "sending" line. The
+  first version of the `.vhdefer` test passed on exactly that. The hook now dispatches
+  locally, and the test waits for the command's *result* line.
+
+### Three harness faults, each of which had been hiding a real failure
+
+- **`check-log.py` never read what the game said about our mod.** The deferral scenario
+  passed while the mod threw on every shutdown.
+- **`SendChatMessage` cannot run a client command.** It sends to the server, so a `.`
+  command goes out and nothing claims it, while the log still shows the line that says we
+  sent it. The first `.vhdefer` test passed on exactly that, testing nothing.
+- **`client-main.log` was never preserved.** The game archives chat, audit and debug on
+  each start but not main, which is the only log carrying mod errors and crash traces, so
+  every scenario destroyed the previous one's evidence. `stop_client` now keeps a copy per
+  client run under `.testdata/Logs/runs/`. The very next failure was diagnosed from those
+  copies in one pass.
+
+Two more, found while proving the above:
+
+- **The server port budget was guesswork, and wrong three times.** Four attempts at 10s,
+  then six at 15s, then six at 15s again, which took the whole suite down at scenario 14
+  of 17. `test-server.sh` now waits on the condition, polling `ss` until the port is
+  genuinely clear, and keeps the retries only as a backstop.
+- **The two new scenarios were not standalone.** They asserted that meshes get built but
+  never wiped the client cache, so a client that already held the keys for the ground
+  around it captured nothing: 1244 keys from cache, 0 written, 0 selected, 0 meshes. They
+  passed alone and failed after `radius`. Every other capture scenario already wipes; this
+  is the second time that rule has been learned here.
+
+### Depends on Farseer's own file, so it can rot
+
+`OtherLodMods.Known` maps farseer to `farseer-client.json` and its `Enabled` field,
+verified against Farseer 1.4.0. Farseer rewrites that file from its own defaults on every
+load, so `farseer-off` asserts the value is still `false` afterwards. If Farseer ever
+renames the field, that assertion fails and names the reason, rather than the mod quietly
+going back to 0.2.0 behaviour.
+
 ## Optimisation pass (2026-08-03)
 
 A second performance pass, after 0.2.0. The rule was the same as last time and it

@@ -19,6 +19,38 @@ public static class DeferralChecks
         Table(c);
         Decisions(c);
         Reporting(c);
+        SwitchFileShapes(c);
+    }
+
+    /// <summary>
+    /// What the reader makes of the file itself. Every one of these is a file a player can
+    /// actually have: never run the mod, ran it once, edited it by hand and broke it.
+    /// Only an explicit false may let us draw, because everything else is a guess.
+    /// </summary>
+    static void SwitchFileShapes(Check c)
+    {
+        // The default is what an empty or partial file leaves behind, and it has to be
+        // "on". A default of false would make an unreadable file look like consent.
+        c.True(new OtherLodModSwitch().Enabled, "an unspecified switch reads as on");
+
+        // Our own default decides what happens to everyone upgrading from 0.2.0, whose
+        // config file has no such field at all: the reader leaves the field alone, so the
+        // class default is the whole answer. True here would silently start every one of
+        // those players drawing over their server's LOD mod.
+        c.False(new VintageHorizonsConfig().IgnoreOtherLodMods,
+            "an upgraded config defers rather than overriding");
+
+        // The shapes, as the reader sees them after LoadModConfig has had its turn.
+        c.Eq("farseer", Drawing(Only("farseer"), _ => true), "an explicit true defers");
+        c.True(Drawing(Only("farseer"), _ => false) is null, "an explicit false draws");
+        c.Eq("farseer", Drawing(Only("farseer"), _ => null),
+            "a file that could not be read at all defers");
+
+        // A parse failure reaches the decision as null, never as a thrown exception and
+        // never as false: ReadOtherModSwitch catches and returns null. If that ever
+        // changed to a rethrow, StartClientSide would die and take the whole mod with it.
+        c.Eq("farseer", Drawing(Only("farseer"), _ => null),
+            "a corrupt file defers rather than deciding for the player");
     }
 
     static void Table(Check c)

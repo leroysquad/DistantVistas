@@ -57,6 +57,10 @@ Being installed is not the same as drawing. Switch Farseer off in its own dialog
 whose switch this one cannot read, `.vhdefer off` makes it draw anyway; switch the other
 mod off as well, or the two will draw over the same ground.
 
+**Restart the game after either change.** Which mod draws is decided once, at startup,
+before a world exists. Switching the other mod off while you play changes nothing until
+the next start.
+
 `.vhinfo` names the mod being deferred to.
 
 Two server commands exist as well (`/`, not `.`). They need the controlserver

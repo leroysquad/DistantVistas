@@ -50,13 +50,34 @@ if [[ -n "$leftover" ]]; then
     echo "  (rm -rf $DATA/Mods/* for a vanilla server)" >&2
 fi
 
-# Retry: stopping and immediately restarting leaves the port in TIME_WAIT, and the
-# bind failure is transient. Anything else fails loudly with the console tail.
+# Wait for the port to actually clear before the first attempt, rather than launching
+# into a bind failure and hoping a fixed retry budget outlasts TIME_WAIT.
 #
-# Six attempts at 15s, not four at 10s: Linux holds TIME_WAIT for about 60s, so the old
-# 40s budget could not outlast it. That was survivable while every restart had a long
-# client run in front of it, and stopped being so once check-matrix.sh started restarting
-# the server twice in a row to compare one config against another.
+# That budget has now been raised twice after the fact, four attempts at 10s and then six
+# at 15s, and it failed a third time: a matrix run that restarts the server twice in a row
+# exhausted 90s of retries and took the whole suite down at scenario 14 of 17. Guessing how
+# long the kernel will hold a socket is the wrong shape of answer. This waits on the
+# condition itself, so the port either clears or the message says it never did.
+wait_for_port_to_clear() {
+    local waited=0 limit=240
+    while [ "$waited" -lt "$limit" ]; do
+        if ! ss -tanH "sport = :$PORT" 2>/dev/null | grep -q .; then
+            [ "$waited" -gt 0 ] && echo "Test server: port $PORT cleared after ${waited}s" >&2
+            return 0
+        fi
+        [ "$waited" = 0 ] && echo "Test server: waiting for port $PORT to clear" >&2
+        sleep 5
+        waited=$((waited + 5))
+    done
+    # Not fatal on its own: fall through to the retry loop, which reports what the server
+    # actually said. A held port with no owner we can see is worth the launch attempt.
+    echo "Test server: port $PORT still held after ${limit}s, launching anyway" >&2
+    return 0
+}
+wait_for_port_to_clear
+
+# Retry anyway: the wait above closes the common case, and a bind failure can still be
+# transient. Anything else fails loudly with the console tail.
 for attempt in 1 2 3 4 5 6; do
     ready=0
     if vh_launch "Test server" "$PIDFILE" "$DATA/console.log" \
