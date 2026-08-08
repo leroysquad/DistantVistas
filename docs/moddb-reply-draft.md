@@ -40,25 +40,25 @@ Two notes for when it lands:
 > render is spotty and undetailed. Typing the command .vhwhy shows me this
 > [L5 nodes at distance 417 and 420 with children in "loading" and "no-data"]
 
-Draft (**hold** until the manifest investigation is finished; the second half changes
-depending on which branch they are in):
+Draft:
 
-Thanks, the `.vhwhy` output is exactly what I needed.
+Thanks, the `.vhwhy` output is exactly what I needed, and it found a real bug.
 
-One question decides this: **is Vintage Horizons installed on the server, or only on your
-client?**
+The server sent its list of available sections **once**, when you joined, and never again.
+So anything generated after that point, including a pregen run while you were online, was
+invisible to you: the client only asks for sections it has been told about. That is what
+`no-data` in your output means, "the client does not know this section exists anywhere",
+for ground the server was holding the whole time. Relogging after the pregen finished
+would have filled it in, which is a miserable workaround. The next release sends the
+updates as they appear, so it fills in while you play.
 
-If it is only on your client, a server pregen cannot help, and that is by design rather
-than a bug. This mod builds its picture from chunks the server actually sends you, and a
-server never sends chunks outside your view distance, whoever generated them. Distant
-terrain therefore fills in as you travel. To get the pregen to reach you, the server needs
-this mod installed too, and then `/vhgen` builds a cache the server shares with everyone.
+One thing to check, because it changes what you should expect. **Is Vintage Horizons
+installed on the server, or only on your client?** If it is only on your client, a server
+pregen cannot reach you at all, and that part is by design rather than a bug: this mod
+builds its picture from chunks the server actually sends you, and a server never sends
+chunks beyond your view distance, whoever generated them. Distant terrain then fills in as
+you travel. Installing the mod on the server as well is what lets `/vhgen` build a cache
+everyone shares.
 
-If it *is* installed on the server, then this is a bug I have found and am fixing: the
-server offers its list of available sections once, when you join. Anything generated after
-that, including a pregen run while you are online, is never offered to you until you
-relog. `no-data` in that output means "the client does not know this section exists
-anywhere", which fits. Relogging after the pregen finishes should fill it in, and the next
-release removes the need to.
-
-Either way, please tell me which one it is, and I will confirm.
+If it was on the server, the next release should fix what you saw. Please do tell me if it
+does not.

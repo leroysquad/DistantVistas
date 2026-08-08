@@ -1,5 +1,39 @@
 # M4/M5 status notes
 
+## The manifest was sent once (2026-08-04)
+
+Second report against 0.2.0: terrain stayed coarse and patchy after a server pregen, with
+`.vhwhy` showing `no-data` for ground the server held.
+
+`SendManifest` had exactly one caller, `Answer`, which runs on the client's greeting at
+join. Nothing ever re-offered. A client only asks for keys it has been offered, so
+everything built after a player joined was unreachable to them until they relogged. A
+sweep finishing late, and other players exploring, had the same effect.
+
+The client needed no change: it merges every manifest it receives and only ever adds keys,
+so a later message is already a delta. The server now sweeps every five seconds and sends
+what the cache has gained.
+
+### The test passed before the fix, and nearly got away with it
+
+The first version of `live-manifest` asserted `offered > 0`. It went green on a broken
+build, because the server captures a handful of sections around spawn before the player
+has finished joining, and those are in the join manifest. The assertion had to be that the
+count **rises** while the player sits there. It then failed correctly, `73 -> 73` with one
+manifest message, and passes after the fix at `94 -> 189` over six.
+
+The existing `generate` scenario had been hiding this all along: it leaves and rejoins to
+fetch what `/vhgen` built, and the rejoin is exactly the workaround the defect forces.
+
+### Kept off the per-player path
+
+The first implementation held an offered set per player and scanned every key for each of
+them, which is O(keys x players) every tick. It is now one shared `announced` set, because
+a player who greets late is brought fully up to date by their own greeting, so after that
+a single set describes what everyone has heard. Comparing counts as a fast path was tried
+and dropped: it assumes the announced set stays a subset of the snapshot, so one key
+leaving the cache could let an equal count hide a new one permanently.
+
 ## Competing LOD mods, after the 0.2.0 field report (2026-08-04)
 
 A player on a Farseer server had switched Farseer off in its own dialog and used this mod

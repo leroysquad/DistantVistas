@@ -11,7 +11,7 @@ set -euo pipefail
 #
 # Scenarios: client-only both no-client-mod serving-off capture-off pregen sweep
 #            nondestructive peekdiff generate generate-sp generate-survival radius
-#            deferral farseer-off defer-override
+#            deferral farseer-off defer-override live-manifest
 
 source "$(dirname "${BASH_SOURCE[0]}")/test-lib.sh"
 
@@ -625,6 +625,64 @@ JSON
     fi
 
     [[ "$ok" == 1 ]] && echo "  generate: ok" || fail "generate"
+fi
+
+# --- Scenario 11b: a cache that grows while the player is still connected. --------
+# The scenario above proves the rejoin path, and in doing so hides this one: it leaves
+# and comes back, and the manifest a client gets on arrival is the only one it ever gets.
+# An admin who pre-generates while people are online has every one of them see nothing
+# until they relog, and ".vhwhy" says "no-data" for ground the server has held for hours.
+# Reported from the field against 0.2.0.
+#
+# One join, and the player stays. Everything the run builds has to reach them.
+
+if wants live-manifest; then
+    echo "  [live-manifest] a cache that grows mid-session must reach a connected player"
+    client_mod; server_mod; wipe_client_cache; wipe_server_cache
+    write_server_config <<'JSON'
+{
+  "EnableCapture": true,
+  "EnableServing": true,
+  "ServeRadiusBlocks": 0,
+  "MaxSectionsPerSecondPerPlayer": 64,
+  "MaxSectionsPerSecondTotal": 128,
+  "SweepSavegame": false,
+  "PregenRadiusChunks": 0,
+  "GenerateColumnsPerSecond": 32
+}
+JSON
+    start_server
+    ok=1
+
+    # The server cache starts empty, so the manifest sent at join is empty too. Anything
+    # this client ends up being offered can only have come from a later one.
+    VINTAGEHORIZONS_AUTOCMD="/vhgen start 10" run_client "Level finalized" 210 || ok=0
+
+    if ! grep -q "Generation finished" "$SERVER_LOG"; then
+        echo "      x generation did not finish inside the session; the run proves nothing"
+        ok=0
+    else
+        # Growth, not a bare count. The server has usually captured a handful of sections
+        # around spawn before the player has finished joining, so "offered > 0" passes on
+        # those alone: the first version of this check went green on 7 keys offered once
+        # at join and never added to, which is precisely the defect. What has to be true
+        # is that the count RISES while the player sits there.
+        first_offered="$(grep -oE "[0-9]+ offered" "$CLIENT_LOG" | head -1 | grep -oE "^[0-9]+")"
+        last_offered="$(assist_field "$CLIENT_LOG" offered)"
+        installed="$(assist_field "$CLIENT_LOG" installed)"
+        manifests="$(grep -c "keys received" "$CLIENT_LOG" || true)"
+        echo "      - offered went ${first_offered:-0} -> ${last_offered:-0} over the session" \
+             "(${installed:-0} installed, $manifests manifest messages)"
+
+        if [[ -n "$last_offered" && -n "$first_offered" && "$last_offered" -gt "$first_offered" ]]; then
+            echo "      - the growing cache reached the player without a relog"
+        else
+            echo "      x the offer never grew; the player must relog to see any of it"
+            ok=0
+        fi
+    fi
+
+    [[ "$ok" == 1 ]] && echo "  live-manifest: ok" || fail "live-manifest"
 fi
 
 # --- Scenario 6e: /vhgen IN SINGLEPLAYER. -----------------------------------------

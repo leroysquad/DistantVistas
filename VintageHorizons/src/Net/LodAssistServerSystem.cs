@@ -36,6 +36,13 @@ public class LodAssistServerSystem : ModSystem
         // with no token bucket to get subtly wrong.
         api.Event.RegisterGameTickListener(_ => ServePending(), 1000);
 
+        // Every five seconds, which is slow next to the serve loop on purpose: this walks
+        // the whole key snapshot per player, and the thing it is chasing (a pregen, a
+        // sweep, another player exploring) takes minutes, not milliseconds.
+        api.Event.RegisterGameTickListener(_ => OfferNewKeys(), 5000);
+
+        api.Event.PlayerDisconnect += OnPlayerDisconnect;
+
         api.ChatCommands.Create("vhserver")
             .WithDescription("VintageHorizons server assist status")
             .RequiresPrivilege(Privilege.controlserver)
@@ -48,7 +55,8 @@ public class LodAssistServerSystem : ModSystem
                     + $"{capture?.ColumnsCaptured ?? 0} columns captured. Served {sectionsServed} sections "
                     + $"({bytesServed / 1e6:0.0} MB, {(sectionsServed > 0 ? blobReadMs / sectionsServed : 0):0.00}ms avg read), "
                     + $"{sectionsOutsideRadius} refused as out of radius, {sectionsRefused} refused unserved, "
-                    + $"{pendingByPlayer.Count} players waiting. "
+                    + $"{pendingByPlayer.Count} players waiting, "
+                    + $"{manifestDeltasSent} follow-up offers sent to connected players. "
                     + (capture?.SweepStatus is string sw ? sw + ". " : "")
                     + (capture?.PregenStatus is string pg ? pg + ". " : "")
                     + (capture?.GenerateStatus is string gn ? gn + ". " : "")
@@ -101,7 +109,84 @@ public class LodAssistServerSystem : ModSystem
         }, player);
 
         if (keys.Length > 0) SendManifest(player, keys);
+
+        // Greeted, so the follow-up offers apply from here on. Recorded even when the
+        // cache was empty just now: that is the case that most needs them.
+        greeted.Add(player.PlayerUID);
+        announced.UnionWith(keys);
     }
+
+    /// <summary>Players who have greeted and so are tracking the manifest.</summary>
+    readonly HashSet<string> greeted = new();
+
+    /// <summary>
+    /// Every key that has been put into a manifest, for anyone. Held once rather than per
+    /// player, which is what keeps the sweep below independent of how many people are on:
+    /// a player who greets late is brought fully up to date by their own greeting, so
+    /// after that one shared set describes what everybody has heard.
+    /// </summary>
+    readonly HashSet<long> announced = new();
+
+    /// <summary>
+    /// Tell connected players about sections the cache gained since they joined.
+    ///
+    /// The manifest used to be sent once, on the greeting, and that was the only one a
+    /// client ever got. An admin running /vhgen while people were online therefore built
+    /// terrain none of them could ask for: a client only requests keys it has been
+    /// offered, so ".vhwhy" reported "no-data" for ground the server had held for hours,
+    /// and relogging was the only cure. Reported from the field against 0.2.0. A sweep
+    /// that finishes late, and ordinary exploring by other players, did the same.
+    ///
+    /// The client merges every manifest it receives and only ever adds keys, so a later
+    /// message is a delta already and this needs no protocol change.
+    /// </summary>
+    void OfferNewKeys()
+    {
+        if (greeted.Count == 0) return;
+
+        LodServerCaptureSystem? capture = sapi.ModLoader.GetModSystem<LodServerCaptureSystem>();
+        if (capture?.Capturing != true || capture.Config.EnableServing != true) return;
+
+        // Scanned in full every time. Comparing counts first would be cheaper and is
+        // wrong: it assumes the announced set is always a subset of the snapshot, so one
+        // key leaving the cache would let an equal count hide a new one for good. A
+        // HashSet probe per key, once every five seconds, is not worth that risk.
+        long[] keys = capture.SnapshotKeys();
+
+        // Allocated on the first miss: the ordinary tick finds nothing new and should not
+        // pay for a list to say so.
+        List<long>? fresh = null;
+        foreach (long key in keys)
+        {
+            if (!announced.Add(key)) continue;
+            (fresh ??= new List<long>()).Add(key);
+        }
+
+        if (fresh == null) return;
+
+        long[] delta = fresh.ToArray();
+        int told = 0;
+        foreach (IPlayer online in sapi.World.AllOnlinePlayers)
+        {
+            if (online is not IServerPlayer player || !greeted.Contains(player.PlayerUID)) continue;
+            SendManifest(player, delta);
+            told++;
+        }
+
+        if (told == 0) return;
+        manifestDeltasSent += told;
+        Mod.Logger.Debug("VintageHorizons: offered {0} newly cached sections to {1} player(s)",
+            delta.Length, told);
+    }
+
+    long manifestDeltasSent;
+
+    /// <summary>
+    /// Forget a player who has left. `announced` deliberately stays: it describes what has
+    /// been broadcast, not what any one player holds, and the next player to greet is
+    /// brought up to date by their own greeting anyway.
+    /// </summary>
+    void OnPlayerDisconnect(IServerPlayer player) => greeted.Remove(player.PlayerUID);
 
     /// <summary>
     /// Pending section requests, per player, oldest first. Held here rather than answered

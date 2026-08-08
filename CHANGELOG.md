@@ -5,6 +5,14 @@ Written when a version is released, not when a commit lands - see
 
 ## [Unreleased]
 
+**Fixed: a server cache that grew while you were online never reached you.** The list of
+sections a server has was sent once, when you joined, and never again. So an admin running
+`/vhgen` while people were playing built terrain none of them could ask for: a client only
+requests sections it has been offered. `.vhwhy` reported `no-data` for ground the server
+had been holding for hours, and relogging was the only cure. A sweep finishing late, or
+other players exploring, did the same. The server now offers what it has gained every few
+seconds, and `/vhserver` reports how many of those follow-up offers it has sent.
+
 **Fixed: another LOD mod that is switched off no longer switches this one off too.**
 0.2.0 went idle whenever Farseer, ChunkLOD, Vistas Beyond or TopoHorizon was loaded. On a
 server that runs one of those, every client is made to load it and the game downloads it
