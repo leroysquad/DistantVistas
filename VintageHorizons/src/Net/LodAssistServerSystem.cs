@@ -91,41 +91,30 @@ public class LodAssistServerSystem : ModSystem
     {
         LodServerCaptureSystem? capture = sapi.ModLoader.GetModSystem<LodServerCaptureSystem>();
         LodServerConfig config = capture?.Config ?? new LodServerConfig();
-        bool serving = capture?.Capturing == true && config.EnableServing;
+        bool capturing = capture?.Capturing == true;
+        bool serving = capturing && config.EnableServing;
         long[] keys = serving ? capture!.SnapshotKeys() : Array.Empty<long>();
+
+        (bool enabled, string status) = AssistGreeting.Describe(
+            capturing, serving, keys.Length, config.ServeRadiusBlocks);
 
         channel.SendPacket(new AssistWelcome
         {
             Protocol = LodAssist.Protocol,
             ModVersion = Mod.Info.Version,
-            Enabled = keys.Length > 0,
-            Status = keys.Length > 0
-                ? $"serving from {keys.Length} cached sections"
-                  + (config.ServeRadiusBlocks > 0 ? $" within {config.ServeRadiusBlocks} blocks" : "")
-                : capture?.Capturing != true
-                    ? "no LOD cache is being built on this server"
-                    : "this server has a LOD cache but is not sharing it",
+            Enabled = enabled,
+            Status = status,
             ManifestKeyCount = keys.Length,
         }, player);
 
         if (keys.Length > 0) SendManifest(player, keys);
 
-        // Greeted, so the follow-up offers apply from here on. Recorded even when the
-        // cache was empty just now: that is the case that most needs them.
-        greeted.Add(player.PlayerUID);
-        announced.UnionWith(keys);
+        // Recorded even when the cache was empty just now: that is the case that most
+        // needs the follow-up offers.
+        ledger.Greet(player.PlayerUID, keys);
     }
 
-    /// <summary>Players who have greeted and so are tracking the manifest.</summary>
-    readonly HashSet<string> greeted = new();
-
-    /// <summary>
-    /// Every key that has been put into a manifest, for anyone. Held once rather than per
-    /// player, which is what keeps the sweep below independent of how many people are on:
-    /// a player who greets late is brought fully up to date by their own greeting, so
-    /// after that one shared set describes what everybody has heard.
-    /// </summary>
-    readonly HashSet<long> announced = new();
+    readonly ManifestLedger ledger = new();
 
     /// <summary>
     /// Tell connected players about sections the cache gained since they joined.
@@ -142,33 +131,18 @@ public class LodAssistServerSystem : ModSystem
     /// </summary>
     void OfferNewKeys()
     {
-        if (greeted.Count == 0) return;
+        if (ledger.GreetedCount == 0) return;
 
         LodServerCaptureSystem? capture = sapi.ModLoader.GetModSystem<LodServerCaptureSystem>();
         if (capture?.Capturing != true || capture.Config.EnableServing != true) return;
 
-        // Scanned in full every time. Comparing counts first would be cheaper and is
-        // wrong: it assumes the announced set is always a subset of the snapshot, so one
-        // key leaving the cache would let an equal count hide a new one for good. A
-        // HashSet probe per key, once every five seconds, is not worth that risk.
-        long[] keys = capture.SnapshotKeys();
+        long[] delta = ledger.Delta(capture.SnapshotKeys());
+        if (delta.Length == 0) return;
 
-        // Allocated on the first miss: the ordinary tick finds nothing new and should not
-        // pay for a list to say so.
-        List<long>? fresh = null;
-        foreach (long key in keys)
-        {
-            if (!announced.Add(key)) continue;
-            (fresh ??= new List<long>()).Add(key);
-        }
-
-        if (fresh == null) return;
-
-        long[] delta = fresh.ToArray();
         int told = 0;
         foreach (IPlayer online in sapi.World.AllOnlinePlayers)
         {
-            if (online is not IServerPlayer player || !greeted.Contains(player.PlayerUID)) continue;
+            if (online is not IServerPlayer player || !ledger.HasGreeted(player.PlayerUID)) continue;
             SendManifest(player, delta);
             told++;
         }
@@ -181,12 +155,7 @@ public class LodAssistServerSystem : ModSystem
 
     long manifestDeltasSent;
 
-    /// <summary>
-    /// Forget a player who has left. `announced` deliberately stays: it describes what has
-    /// been broadcast, not what any one player holds, and the next player to greet is
-    /// brought up to date by their own greeting anyway.
-    /// </summary>
-    void OnPlayerDisconnect(IServerPlayer player) => greeted.Remove(player.PlayerUID);
+    void OnPlayerDisconnect(IServerPlayer player) => ledger.Forget(player.PlayerUID);
 
     /// <summary>
     /// Pending section requests, per player, oldest first. Held here rather than answered

@@ -250,6 +250,17 @@ public sealed class LodAssistClient
 
             if (!chunk.Last) continue;
 
+            // The first manifest is the join, and is worth a line. Everything after it is
+            // a follow-up offer, and those now arrive every few seconds while a server
+            // cache is growing. Repeating "complete" for each one would be noise, and the
+            // count it announced at join is no longer the number to measure against.
+            if (ManifestComplete)
+            {
+                logger.Debug("VintageHorizons: server offered more sections, {0} now known",
+                    RemoteKeys.Count);
+                continue;
+            }
+
             ManifestComplete = true;
             // Announced vs applied: a mismatch means keys were captured or evicted
             // mid-send, expected on a live server and worth seeing rather than silently

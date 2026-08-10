@@ -18,6 +18,130 @@ public static class ServerAssistChecks
         InFlightCapReleasesOnAnyReply(c);
         NotYetIsNotNever(c);
         NotYetGivesUpEventually(c);
+        ManifestKeepsOfferingWhatTheCacheGains(c);
+        ManifestDoesNotRepeatWhatItJustSent(c);
+        AnEmptyCacheIsNotASwitchedOffAssist(c);
+    }
+
+    /// <summary>
+    /// The greeting has to separate "this server will serve" from "this server is holding
+    /// something this second". Taking the answer from the key count, as 0.2.0 did, told
+    /// every player who joined a server before its cache was built that the assist was off,
+    /// and a client treats that as final for the session.
+    ///
+    /// Checked here rather than in the matrix because a live run only meets the case by
+    /// coincidence: the server usually captures a few sections around spawn while the
+    /// player is still joining, so the same scenario passes or fails on timing.
+    /// </summary>
+    static void AnEmptyCacheIsNotASwitchedOffAssist(Check c)
+    {
+        (bool enabled, string status) = AssistGreeting.Describe(
+            capturing: true, serving: true, keyCount: 0, serveRadiusBlocks: 0);
+        c.True(enabled, "a serving server with an empty cache still has the assist on");
+        c.True(status.Contains("empty"), "and says the cache is empty rather than implying it is off");
+
+        (bool warm, string warmStatus) = AssistGreeting.Describe(
+            capturing: true, serving: true, keyCount: 12, serveRadiusBlocks: 4096);
+        c.True(warm, "a serving server with a cache has the assist on");
+        c.True(warmStatus.Contains("12 cached sections"), "and reports what it holds");
+        c.True(warmStatus.Contains("4096 blocks"), "and the radius it will serve within");
+
+        c.False(AssistGreeting.Describe(true, true, 5, 0).Status.Contains("within"),
+            "an unlimited radius is not described as a limit");
+
+        // The two genuine off states keep their own wording, because a player who sees
+        // "off" needs to know which of the two settings to ask the admin about.
+        (bool off, string offStatus) = AssistGreeting.Describe(
+            capturing: true, serving: false, keyCount: 40, serveRadiusBlocks: 0);
+        c.False(off, "capture on and serving off is off");
+        c.True(offStatus.Contains("not sharing"), "and says the cache exists but is not shared");
+
+        (bool none, string noneStatus) = AssistGreeting.Describe(
+            capturing: false, serving: false, keyCount: 0, serveRadiusBlocks: 0);
+        c.False(none, "a server building no cache is off");
+        c.True(noneStatus.Contains("no LOD cache is being built"), "and says so");
+
+        // The property the defect broke, stated on its own: the key count decides the
+        // wording and nothing else.
+        foreach (int keys in new[] { 0, 1, 1000 })
+        {
+            c.True(AssistGreeting.Describe(true, true, keys, 0).Enabled,
+                $"the assist is on with {keys} cached sections");
+            c.False(AssistGreeting.Describe(true, false, keys, 0).Enabled,
+                $"serving off stays off with {keys} cached sections");
+        }
+    }
+
+    /// <summary>
+    /// A cache that grows while people are online has to reach the people who were already
+    /// there, and not only the next person to join.
+    ///
+    /// Both cases below were live defects. The first shipped in 0.2.0 and was reported from
+    /// the field: the manifest was sent once, at the greeting, so an admin running /vhgen
+    /// while people played built terrain none of them could ask for. The second was in the
+    /// fix for the first, and is narrower and worse, because it needs no admin at all.
+    /// </summary>
+    static void ManifestKeepsOfferingWhatTheCacheGains(Check c)
+    {
+        var one = new ManifestLedger();
+        one.Greet("A", new long[] { 1, 2 });
+        c.SeqEq(Array.Empty<long>(), one.Delta(new long[] { 1, 2 }),
+            "a cache that has not moved offers nothing");
+        c.SeqEq(new long[] { 3 }, one.Delta(new long[] { 1, 2, 3 }),
+            "a section captured after the greeting is offered");
+        c.SeqEq(Array.Empty<long>(), one.Delta(new long[] { 1, 2, 3 }),
+            "and is not offered a second time");
+
+        // The regression. A second player's greeting used to mark their whole manifest as
+        // heard by everybody, so section 3 below - captured while A was on, and known to B
+        // only because B joined later - reached A never.
+        var two = new ManifestLedger();
+        two.Greet("A", new long[] { 1, 2 });
+        two.Delta(new long[] { 1, 2 });
+        two.Greet("B", new long[] { 1, 2, 3 });
+        c.SeqEq(new long[] { 3 }, two.Delta(new long[] { 1, 2, 3 }),
+            "a section only the newest player was told about still reaches the others");
+
+        // A key leaving the cache must not let an unchanged count hide a new one.
+        var churn = new ManifestLedger();
+        churn.Greet("A", new long[] { 1, 2 });
+        c.SeqEq(new long[] { 3 }, churn.Delta(new long[] { 1, 3 }),
+            "a new key is found even when the count did not change");
+    }
+
+    /// <summary>
+    /// The other side of the same rule: offering too much. Every delta is a packet to every
+    /// connected player, so the ledger has to stay quiet when it has nothing to add.
+    /// </summary>
+    static void ManifestDoesNotRepeatWhatItJustSent(Check c)
+    {
+        var first = new ManifestLedger();
+        first.Greet("A", new long[] { 1, 2, 3 });
+        c.SeqEq(Array.Empty<long>(), first.Delta(new long[] { 1, 2, 3 }),
+            "the first greeting is not echoed straight back as a delta");
+
+        var empty = new ManifestLedger();
+        c.Eq(0, empty.GreetedCount, "a fresh ledger has nobody to tell");
+        c.SeqEq(Array.Empty<long>(), empty.Delta(new long[] { 1, 2 }),
+            "a server with nobody on offers nothing");
+
+        var cycled = new ManifestLedger();
+        cycled.Greet("A", new long[] { 1 });
+        c.True(cycled.HasGreeted("A"), "a greeted player is tracked");
+        cycled.Forget("A");
+        c.False(cycled.HasGreeted("A"), "a player who left is not");
+        c.Eq(0, cycled.GreetedCount, "and leaves nobody behind");
+        cycled.Greet("B", new long[] { 1, 2, 3 });
+        c.SeqEq(Array.Empty<long>(), cycled.Delta(new long[] { 1, 2, 3 }),
+            "the next arrival on an empty server sets a fresh baseline");
+
+        // Serving that opens after a join: the greeting carried nothing, so the first
+        // delta owes that player the whole cache. This is the case the welcome used to
+        // report as "the assist is off", which stopped the client listening for it.
+        var late = new ManifestLedger();
+        late.Greet("A", Array.Empty<long>());
+        c.SeqEq(new long[] { 1, 2 }, late.Delta(new long[] { 1, 2 }),
+            "a player greeted before the cache opened is owed all of it");
     }
 
     /// <summary>
@@ -146,8 +270,9 @@ public static class ServerAssistChecks
         c.Eq(LodAssist.Protocol, client.NegotiatedProtocol, "a newer server negotiates down to ours");
         c.True(client.Available, "a newer server is still usable");
 
-        // Serving switched off. Note Enabled is set from whether the server has keys, so an
-        // empty cache lands here too.
+        // Serving switched off. Enabled means "this server will serve", so an empty cache
+        // does NOT land here - it used to, and that switched the client off for the whole
+        // session on any server whose cache had not been built yet.
         client.Reset();
         client.OnWelcome(new AssistWelcome
         {

@@ -5,6 +5,14 @@ Written when a version is released, not when a commit lands - see
 
 ## [Unreleased]
 
+**Fixed: joining a server before its cache existed switched the assist off for the whole
+session.** The server reported the assist as "off" whenever its cache happened to be empty
+at the instant you joined, which is the ordinary state of a fresh server and of any server
+an admin is about to run `/vhgen` on. The client took that as final and ignored everything
+the server sent afterwards, so no amount of generating helped until you relogged. The
+answer now says whether the server *will* serve, not whether it holds anything that
+second, and a server with nothing yet says so plainly.
+
 **Fixed: a server cache that grew while you were online never reached you.** The list of
 sections a server has was sent once, when you joined, and never again. So an admin running
 `/vhgen` while people were playing built terrain none of them could ask for: a client only
