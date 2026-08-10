@@ -38,6 +38,14 @@ failures=0
 cleanup() { "$VH_ROOT/scripts/test-stop.sh" all >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
+# An unmatched grep in a bare assignment exits 1, and `set -e` then ends the run with no
+# scenario, no verdict and no reason at all - the output stops mid-scenario and the tier
+# reports CHECKS FAILED. That cost a 35 minute suite and hid a real defect behind it.
+# Every extraction below now tolerates a miss, and anything that still dies says where.
+# -E is what carries the trap into the helper functions.
+set -E
+trap 'echo "  [harness] line $LINENO exited $? running: $BASH_COMMAND" >&2' ERR
+
 wants() { [[ -z "$ONLY" || "$ONLY" == "$1" ]]; }
 fail()  { echo "  $1: FAILED"; failures=$((failures + 1)); }
 
@@ -295,7 +303,7 @@ print(*(c.execute('SELECT COUNT(*) FROM '+t).fetchone()[0] for t in ('mapchunk',
     if vh_wait_for "$SERVER_LOG" "Generation finished" 180 "$VH_SANDBOX/server/server.pid"; then
         ok=1
         requested="$(grep -oE "Generation finished around block [0-9-]+,[0-9-]+: [0-9]+ columns" "$SERVER_LOG" \
-            | tail -1 | grep -oE "[0-9]+ columns" | grep -oE "[0-9]+")"
+            | tail -1 | grep -oE "[0-9]+ columns" | grep -oE "[0-9]+")" || true
         [[ "$requested" == "25" ]] || { echo "      x expected 25 columns, got '$requested'"; ok=0; }
         # It must be the startup path, not a command someone typed.
         grep -q "Generation started by startup pre-generation" "$SERVER_LOG" \
@@ -438,7 +446,7 @@ JSON
     echo "/vhgen start 12 480000 480000" > "$VH_SANDBOX/server/console.in"
     ok=1
     if vh_wait_for "$SERVER_LOG" "Generation finished" 600 "$VH_SANDBOX/server/server.pid"; then
-        line="$(grep -o "Generation finished.*" "$SERVER_LOG" | tail -1)"
+        line="$(grep -o "Generation finished.*" "$SERVER_LOG" | tail -1)" || true
         echo "      - $line"
         # 25x25 columns, every one virgin: all generated, none loaded, none failed.
         echo "$line" | grep -q "625 generated" || { echo "      x expected 625 generated"; ok=0; }
@@ -459,7 +467,7 @@ JSON
     [[ "$before" == "$after" && -n "$before" ]] \
         || { echo "      x the savegame changed: keys or content differ"; ok=0; }
 
-    db="$(ls "$VH_SANDBOX"/server/ModData/vintagehorizons/*-server.db 2>/dev/null | head -1)"
+    db="$(ls "$VH_SANDBOX"/server/ModData/vintagehorizons/*-server.db 2>/dev/null | head -1)" || true
     sections=$(python3 -c "
 import sqlite3
 print(sqlite3.connect('file:$db?mode=ro', uri=True).execute('SELECT COUNT(*) FROM Section').fetchone()[0])" 2>/dev/null || echo 0)
@@ -525,31 +533,50 @@ JSON
     # Experiment A, on land no session has touched.
     echo "/vhgen diff 470000 470000" > "$VH_SANDBOX/server/console.in"
     if vh_wait_for "$SERVER_LOG" "surface height delta median" 420 "$VH_SANDBOX/server/server.pid"; then
-        grep -oE "Peek diff( at chunk|:) .*" "$SERVER_LOG" | tail -4 | sed 's/^/      - /'
+        grep -oE "Peek diff( at chunk|:) .*" "$SERVER_LOG" | tail -5 | sed 's/^/      - /'
 
-        only_loaded="$(grep -oE "ONLY IN THE FULL GENERATION \([0-9]+\)" "$SERVER_LOG" | tail -1 | grep -oE "[0-9]+")"
-        only_peek="$(grep -oE "ONLY IN THE PEEK \([0-9]+\)" "$SERVER_LOG" | tail -1 | grep -oE "[0-9]+")"
-        median="$(grep -oE "surface height delta median -?[0-9]+" "$SERVER_LOG" | tail -1 | grep -oE -- "-?[0-9]+$")"
-        peek_blocks="$(grep -oE "peek produced [0-9]+ blocks" "$SERVER_LOG" | tail -1 | grep -oE "[0-9]+")"
+        only_loaded="$(grep -oE "ONLY IN THE FULL GENERATION \([0-9]+\)" "$SERVER_LOG" | tail -1 | grep -oE "[0-9]+")" || true
+        peek_blocks="$(grep -oE "peek produced [0-9]+ blocks" "$SERVER_LOG" | tail -1 | grep -oE "[0-9]+")" || true
 
         # A peek that produced nothing would satisfy "something is missing" trivially.
         [[ "${peek_blocks:-0}" -gt 0 ]] || { echo "      x the peek produced no blocks at all"; ok=0; }
         [[ "${only_loaded:-0}" -gt 0 ]] || { echo "      x nothing was missing from the peek, which contradicts the pass list"; ok=0; }
 
-        # The strongest claim the data supports: a peek never invents anything. Every
-        # block type it produces also appears in a full generation, so generated LOD
-        # can only ever be INCOMPLETE, never wrong. In principle a later pass could
-        # replace every instance of some type and break this; that has not happened,
-        # and if it ever does the case is worth reading rather than tolerating.
-        [[ "${only_peek:-1}" == "0" ]] \
-            || { echo "      x the peek produced $only_peek block types absent from a real generation"; ok=0; }
+        # The strongest claim the data still supports: a peek invents no TERRAIN. Every
+        # block type it produces also appears in a full generation, so generated LOD can
+        # only ever be incomplete, never wrong.
+        #
+        # Seasonal surface cover is the one exception, and it is not a defect. A peek
+        # carries the snow the Terrain pass laid down; a full generation applies the
+        # current date and melts or lays it. The sandbox calendar advances every time a
+        # scenario boots a server, so this moves on its own between runs: three runs of a
+        # byte-identical peek (128832 blocks, 11 ids each time) met full generations of
+        # 78, 77 and 76 block types, the last of them with "ONLY IN THE PEEK (1):
+        # game:snowblock x794". It does not reach a player either way, because
+        # LodTerrainRenderer derives the snow line from live temperature every few
+        # seconds and applies it in the shader, over whatever the stored block is.
+        #
+        # So snow and ice are allowed by name, and anything else still fails and gets read.
+        peek_only="$(grep -oE "ONLY IN THE PEEK \([0-9]+\): .*" "$SERVER_LOG" | tail -1 | sed 's/^.*): //')" || true
+        unexpected="$(echo "$peek_only" | tr ',' '\n' | sed 's/^ *//; s/ *$//' \
+            | grep -vE '^(nothing|game:(snow|lakeice|glacierice)[a-z0-9-]*( x[0-9]+)?)$')" || true
+        [[ -z "$unexpected" ]] \
+            || { echo "      x the peek produced terrain no real generation has: $unexpected"; ok=0; }
 
-        # The ground itself must not move. Measured: median +1, because the snow layer
-        # (pass 4, which a Terrain peek never runs) adds one block on top of every
-        # exposed position - 1024 of them in a 32x32 column. So 0 or 1 is correct and
-        # anything larger means the Terrain pass alone is not setting the terrain.
-        [[ "${median:-99}" == "0" || "${median:-99}" == "1" ]] \
-            || { echo "      x surface height median delta is $median: the peek moved the ground"; ok=0; }
+        # The ground must not RISE above what the Terrain pass produced, because generated
+        # LOD would then sit below the terrain a player finds when they arrive. One block
+        # of rise is seasonal snow, in whichever direction the calendar has moved.
+        #
+        # The drop is deliberately not asserted. Caves are carved after the Terrain pass,
+        # so a peek shows solid ground where a real generation has a cave mouth, and how
+        # much of a chunk that touches is a property of the terrain there. The median of
+        # everything together was asserted here until it flipped from 0 to -1 between two
+        # runs of the same build, on a peek that was byte-identical in both.
+        raised="$(grep -oE "raised the ground by at most [0-9]+" "$SERVER_LOG" | tail -1 | grep -oE "[0-9]+$")" || true
+        [[ -n "$raised" ]] \
+            || { echo "      x the diff did not report how far the ground was raised"; ok=0; }
+        [[ "${raised:-99}" -le 1 ]] \
+            || { echo "      x a later pass raised the ground $raised blocks above the peek"; ok=0; }
     else
         echo "      x the diff never reported"
         ok=0
@@ -560,7 +587,7 @@ JSON
     echo "/vhgen edittest" > "$VH_SANDBOX/server/console.in"
     if vh_wait_for "$SERVER_LOG" "MARKER PRESENT WHEN PEEKED" 240 "$VH_SANDBOX/server/server.pid"; then
         grep -oE "Edit test:.*" "$SERVER_LOG" | tail -3 | sed 's/^/      - /'
-        verdict="$(grep -oE "MARKER PRESENT WHEN LOADED: (True|False)\. MARKER PRESENT WHEN PEEKED: (True|False)" "$SERVER_LOG" | tail -1)"
+        verdict="$(grep -oE "MARKER PRESENT WHEN LOADED: (True|False)\. MARKER PRESENT WHEN PEEKED: (True|False)" "$SERVER_LOG" | tail -1)" || true
         [[ "$verdict" == *"WHEN LOADED: True"* ]] \
             || { echo "      x the marker did not read back from the loaded world"; ok=0; }
         [[ "$verdict" == *"WHEN PEEKED: False"* ]] \
@@ -667,12 +694,28 @@ JSON
         # those alone: the first version of this check went green on 7 keys offered once
         # at join and never added to, which is precisely the defect. What has to be true
         # is that the count RISES while the player sits there.
-        first_offered="$(grep -oE "[0-9]+ offered" "$CLIENT_LOG" | head -1 | grep -oE "^[0-9]+")"
+        first_offered="$(grep -oE "[0-9]+ offered" "$CLIENT_LOG" | head -1 | grep -oE "^[0-9]+")" || true
         last_offered="$(assist_field "$CLIENT_LOG" offered)"
         installed="$(assist_field "$CLIENT_LOG" installed)"
-        manifests="$(grep -c "keys received" "$CLIENT_LOG" || true)"
+        # Only the FIRST manifest is logged at notification level; the follow-up offers go
+        # to debug, which does not reach this log. So this counts the join, not the
+        # offers, and the growth below is what carries the proof.
+        joins="$(grep -c "keys received" "$CLIENT_LOG" || true)"
+
+        # Checked before the counts, because it is the reason they would be missing. An
+        # empty cache is the normal state of a server at the moment somebody joins it, and
+        # reporting that as "the assist is off" switched the client off for the whole
+        # session: it then ignored every later offer, which is the case this scenario
+        # exists to cover. Without this line the run only says "no numbers".
+        if grep -q "the assist is off" "$CLIENT_LOG"; then
+            echo "      x the client was told the assist is off at join, so it stopped listening"
+            grep -oE "VintageHorizons: server has VintageHorizons but the assist is off.*" \
+                "$CLIENT_LOG" | tail -1 | sed 's/^/        /'
+            ok=0
+        fi
+
         echo "      - offered went ${first_offered:-0} -> ${last_offered:-0} over the session" \
-             "(${installed:-0} installed, $manifests manifest messages)"
+             "(${installed:-0} installed, $joins join manifest)"
 
         if [[ -n "$last_offered" && -n "$first_offered" && "$last_offered" -gt "$first_offered" ]]; then
             echo "      - the growing cache reached the player without a relog"

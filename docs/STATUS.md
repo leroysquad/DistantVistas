@@ -28,11 +28,51 @@ fetch what `/vhgen` built, and the rejoin is exactly the workaround the defect f
 ### Kept off the per-player path
 
 The first implementation held an offered set per player and scanned every key for each of
-them, which is O(keys x players) every tick. It is now one shared `announced` set, because
-a player who greets late is brought fully up to date by their own greeting, so after that
-a single set describes what everyone has heard. Comparing counts as a fast path was tried
-and dropped: it assumes the announced set stays a subset of the snapshot, so one key
-leaving the cache could let an equal count hide a new one permanently.
+them, which is O(keys x players) every tick. It is now one shared set. Comparing counts as
+a fast path was tried and dropped: it assumes the announced set stays a subset of the
+snapshot, so one key leaving the cache could let an equal count hide a new one permanently.
+
+### The reasoning for the shared set was wrong, and cost a second defect (2026-08-09)
+
+The justification written above at the time was that "a player who greets late is brought
+fully up to date by their own greeting, so after that a single set describes what everyone
+has heard". That is true of the greeter and of nobody else. `Answer` folded the joiner's
+whole manifest into the shared set, which claims the players already connected had heard
+it too:
+
+    t=0.0  cache {1,2}. A joins, full manifest {1,2}.  announced={1,2}
+    t=2.0  cache gains 3
+    t=3.0  B joins, full manifest {1,2,3}.             announced={1,2,3}
+    t=5.0  tick: 3 is already announced. Nothing sent. A never hears about it.
+
+So every join stranded, for everyone already on, whatever the cache gained in the five
+seconds before it. The same failure the fix was written to remove, with a trigger that
+needs no admin.
+
+The invariant is now stated where it can be held: the shared set must stay a **subset of
+what every greeted player knows**, so a greeting must never widen it. Only the first
+greeting sets the baseline, and a later joiner's extra keys go out on the next tick, which
+they ignore and the others need. `ManifestLedger` owns this, apart from the mod system,
+because the failure is an ordering and an ordering needs no server to test.
+
+### An empty cache at join is not a switched-off assist (2026-08-09)
+
+Found because the suite died inside `live-manifest`. `Answer` set `Enabled` from
+`keys.Length > 0`, so a server that was capturing and serving reported the assist **off**
+whenever its cache happened to be empty at the instant somebody joined. `OnWelcome` takes
+that as final - `NegotiatedProtocol = 0`, and `PumpServerAssist` returns early on
+`!Available` - so the client ignored every manifest and every section for the rest of the
+session.
+
+That is a fresh server, and any server an admin is about to run `/vhgen` on. It shipped in
+0.2.0 and it defeats the follow-up offers above: the server offers, the client is no longer
+listening. `Enabled` now means "this server will serve".
+
+`live-manifest` cannot hold this on its own. Whether the cache is empty at the greeting is
+a race with the server capturing sections around spawn while the player is still joining:
+the run that exposed it had 0 keys at join, the next run had 94. `AssistGreeting` is
+therefore a pure decision pinned in the fast tier, and the scenario additionally fails if
+the client log ever says the assist is off.
 
 ## Competing LOD mods, after the 0.2.0 field report (2026-08-04)
 
@@ -86,7 +126,7 @@ which is the reporter's exact shape. `defer-override` covers the other combinati
   first version of the `.vhdefer` test passed on exactly that. The hook now dispatches
   locally, and the test waits for the command's *result* line.
 
-### Three harness faults, each of which had been hiding a real failure
+### Harness faults, each of which had been hiding a real failure
 
 - **`check-log.py` never read what the game said about our mod.** The deferral scenario
   passed while the mod threw on every shutdown.
@@ -110,6 +150,54 @@ Two more, found while proving the above:
   around it captured nothing: 1244 keys from cache, 0 written, 0 selected, 0 meshes. They
   passed alone and failed after `radius`. Every other capture scenario already wipes; this
   is the second time that rule has been learned here.
+
+And a sixth, the worst of them:
+
+- **An unmatched grep ended the whole suite in silence.** In `live-manifest`,
+  `first_offered="$(grep ... | grep ...)"` had no `|| true`, unlike the `assist_field`
+  helper beside it. Under `set -e` an assignment from a failed substitution exits the
+  script, so a 35 minute run stopped mid-scenario and reported `CHECKS FAILED` with no
+  scenario, no verdict and no reason at all. It read as a flake. It was hiding the
+  empty-cache defect above, and the empty log it left behind was itself the evidence: the
+  client had printed no `offered` figure because it had switched the assist off at join.
+  All nine log extractions in the matrix now tolerate a miss, and an `ERR` trap names the
+  line, the status and the command for anything that still dies.
+
+### A peek assertion that measured the season, not the mod (2026-08-09)
+
+`peekdiff` failed twice in a row, on two different assertions, against a peek that never
+moved: the same fixed chunk, 128832 blocks over 11 distinct ids, in all three runs. What
+moved was the full generation it is compared against.
+
+| run | full generation | positions differing | median | only in the peek |
+|---|---|---|---|---|
+| 1 | 128844 blocks, 78 ids | 118 of 1024 | 0 | nothing |
+| 2 | 128031 blocks, 77 ids | 708 of 1024 | -1 | nothing |
+| 3 | 127945 blocks, 76 ids | 794 of 1024 | -1 | `game:snowblock x794` |
+
+794 snow blocks, and 794 positions differing. The differing positions **are** the
+snow-covered ones. The sandbox world's calendar advances every time a scenario boots a
+server, so the season moves across a suite run and between them: a peek carries the snow
+the Terrain pass laid down, and a full generation applies the current date.
+
+Neither assertion was measuring this mod. The median crosses from 0 to -1 as soon as more
+than half the columns differ, and "nothing invented by the peek" is false in exactly one
+category. Both had held by luck.
+
+What is asserted now:
+
+- **The raise**, the largest positive delta, must be at most 1. A later pass that lifts
+  ground above the Terrain pass would leave generated LOD below the terrain a player walks
+  on when they arrive, which is visible. One block is seasonal snow, in whichever direction
+  the calendar has moved.
+- **The peek invents no terrain.** Snow and ice are allowed by name; anything else fails
+  and gets read.
+- The drop is reported and not asserted. A peek showing solid ground where a real
+  generation has a cave mouth is a known limit of generated LOD, already documented.
+
+None of it reaches a player: `LodTerrainRenderer` derives the snow line from live
+temperature and the lapse rate every few seconds and applies it in the shader, over
+whatever block was stored.
 
 ### Depends on Farseer's own file, so it can rot
 

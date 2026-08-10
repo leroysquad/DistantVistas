@@ -42,15 +42,25 @@ Two notes for when it lands:
 
 Draft:
 
-Thanks, the `.vhwhy` output is exactly what I needed, and it found a real bug.
+Thanks, the `.vhwhy` output is exactly what I needed. It found two real bugs, and between
+them they explain what you saw.
 
-The server sent its list of available sections **once**, when you joined, and never again.
-So anything generated after that point, including a pregen run while you were online, was
-invisible to you: the client only asks for sections it has been told about. That is what
-`no-data` in your output means, "the client does not know this section exists anywhere",
-for ground the server was holding the whole time. Relogging after the pregen finished
-would have filled it in, which is a miserable workaround. The next release sends the
-updates as they appear, so it fills in while you play.
+The first: the server sent its list of available sections **once**, when you joined, and
+never again. So anything generated after that point, including a pregen run while you were
+online, was invisible to you: the client only asks for sections it has been told about.
+That is what `no-data` in your output means, "the client does not know this section exists
+anywhere", for ground the server was holding the whole time.
+
+The second is worse, and I only found it because the first fix went looking. If the
+server's cache happened to be **empty at the moment you joined** - which is the normal
+state of a server that has not built one yet - the server told your client the sharing was
+switched off, and your client believed it for the rest of that session. Everything the
+pregen then built was offered to somebody who had stopped listening. That fits "even after
+doing the pregen" exactly.
+
+Relogging after the pregen finished would have worked around both, which is miserable
+advice. The next release fixes both: the server keeps offering as the cache grows, and it
+no longer confuses "nothing yet" with "switched off".
 
 One thing to check, because it changes what you should expect. **Is Vintage Horizons
 installed on the server, or only on your client?** If it is only on your client, a server

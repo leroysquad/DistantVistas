@@ -225,8 +225,24 @@ public class LodPeekDiff
         onlyLoaded.Sort();
         onlyPeeked.Sort();
 
-        // Surface height. A median of 0 says the Terrain pass alone sets the ground,
-        // which is the assumption the whole feature rests on. Anything else is a find.
+        // Surface height, as full generation minus peek. The number the feature rests on
+        // is the RAISE: a later pass that lifts ground above what the Terrain pass
+        // produced would leave generated LOD sitting below the terrain a player walks on
+        // when they arrive. The snow layer does exactly one block of that, and nothing
+        // else does any.
+        //
+        // The drop is a different thing, and is expected twice over. Caves are carved
+        // after the Terrain pass, so a peek shows solid ground where a real generation has
+        // a cave mouth tens of blocks lower. And seasonal snow sits on top of the peek's
+        // ground but not on a summer generation's, or the reverse, one block at a time
+        // across most of a chunk.
+        //
+        // That second term is why the median was a bad thing to assert, and it was
+        // asserted here once. It crosses from 0 to -1 as soon as more than half the
+        // columns differ, and how many differ is the season, not this mod: three runs of
+        // a byte-identical peek gave 118 of 1024 positions differing, then 708, then 794
+        // - that last figure exactly the 794 snow blocks the peek held and the generation
+        // did not. The median is still reported. It is no longer trusted.
         var deltas = new List<int>(ChunkSize * ChunkSize);
         int shifted = 0;
         for (int i = 0; i < fromPeek.SurfaceY.Length; i++)
@@ -237,6 +253,8 @@ public class LodPeekDiff
         }
         deltas.Sort();
         int median = deltas[deltas.Count / 2];
+        int raisedBy = Math.Max(0, deltas[^1]);
+        int droppedBy = Math.Max(0, -deltas[0]);
 
         logger.Notification(
             "Peek diff at chunk {0},{1}: peek produced {2} blocks over {3} distinct ids; the "
@@ -250,9 +268,13 @@ public class LodPeekDiff
         logger.Notification(
             "Peek diff: surface height delta median {0}, {1} of {2} positions differ, range {3}..{4}",
             median, shifted, deltas.Count, deltas[0], deltas[^1]);
+        logger.Notification(
+            "Peek diff: a real generation raised the ground by at most {0} blocks above the "
+            + "peek, and dropped it by at most {1}", raisedBy, droppedBy);
 
         report($"{onlyLoaded.Count} block types exist only in a real generation, "
-            + $"{onlyPeeked.Count} only in the peek, surface median delta {median}. "
+            + $"{onlyPeeked.Count} only in the peek. A real generation raised the surface by "
+            + $"at most {raisedBy} blocks and dropped it by at most {droppedBy}. "
             + "The full lists are in the server log.");
     }
 
