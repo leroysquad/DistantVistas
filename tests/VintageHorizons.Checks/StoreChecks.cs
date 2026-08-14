@@ -14,6 +14,8 @@ public static class StoreChecks
     {
         RoundTrip(c);
         DeferredPalette(c);
+        AFailedLookupIsNotRemembered(c);
+        AColourlessCacheIsRepaired(c);
         Rejection(c);
         PurgeKeepsMatchingData(c);
     }
@@ -138,6 +140,92 @@ public static class StoreChecks
         c.Eq(0, back.Palette[0].BlockId, "block ids stay unresolved until the main thread runs");
         c.Eq((byte)0, back.Palette[0].TintSlot, "tint slots are re-derived, never persisted");
         c.Eq(0x00445566, back.Palette[0].Color, "colour is persisted and comes back");
+    }
+
+    /// <summary>
+    /// A block code that does not resolve must not become a permanent answer.
+    ///
+    /// The lookup runs on the storage thread against whatever the registry holds at that
+    /// moment, and sections start loading from cache before a world has finished coming
+    /// up. Caching the failure alongside the successes meant a code that lost that race
+    /// answered 0 for the rest of the session, and an entry with no block id keeps the
+    /// flags the capturing side worked out - so it was still drawn, as terrain, with the
+    /// colour a server leaves at zero. Black ground, correctly shaped, and nothing logged.
+    /// </summary>
+    static void AFailedLookupIsNotRemembered(Check c)
+    {
+        var section = new LodSection();
+        section.FindOrAddPaletteEntry(blockId: 0, color: 0, flags: 0, tintSlot: 0);
+        section.SetColumn(0, new[] { LodSection.PackRun(0, 10, 0) });
+        section.PendingPaletteCodes = new[] { "game:rock-granite" };
+
+        var store = new LodStore(null!);
+
+        // The registry is not ready yet, which is the race.
+        int calls = 0;
+        store.ResolvePendingPalette(section, _ => { calls++; return 0; });
+        c.Eq(1, calls, "the first resolve asks the registry");
+        c.Eq(0, section.Palette[0].BlockId, "and gets nothing, because nothing is registered yet");
+        c.SeqEq(new[] { "game:rock-granite" }, store.UnresolvedCodes(),
+            "the code that did not resolve is recorded, so it can be named rather than guessed at");
+
+        // Same code, same store, registry now up. Asking again is the whole point.
+        section.PendingPaletteCodes = new[] { "game:rock-granite" };
+        store.ResolvePendingPalette(section, _ => { calls++; return 42; });
+        c.Eq(2, calls, "a code that failed is asked again rather than answered from cache");
+        c.Eq(42, section.Palette[0].BlockId, "and resolves once the registry has it");
+        c.Eq(0, store.UnresolvedCodes().Length, "and stops being reported as unresolved");
+
+        // A code that DID resolve is cached, because that is the hot path.
+        section.PendingPaletteCodes = new[] { "game:rock-granite" };
+        store.ResolvePendingPalette(section, _ => { calls++; return 99; });
+        c.Eq(2, calls, "a code that resolved is answered from cache and not looked up again");
+        c.Eq(42, section.Palette[0].BlockId, "keeping the id it first resolved to");
+    }
+
+    /// <summary>
+    /// A cache holding sections with no palette colour must repair itself as it loads.
+    ///
+    /// A capturing server stores 0 for every colour, because it has no texture atlas, and
+    /// the receiving client fills them in. A client also PERSISTS what it received, so
+    /// anything that stopped the fill-in was written to disk and stayed there. Measured on
+    /// a real world afterwards: 7 sections entirely uncoloured and 59 partly, on ground as
+    /// ordinary as soil-low-normal and rock-slate. Colour 0 draws as pure black, and no
+    /// amount of fixing the cause reaches a cache that already has it.
+    /// </summary>
+    static void AColourlessCacheIsRepaired(Check c)
+    {
+        c.True(LodPaletteRepair.NeedsColor(0), "colour 0 is what a writer leaves when it cannot answer");
+        c.False(LodPaletteRepair.NeedsColor(unchecked((int)0xFF000000)),
+            "opaque black is a real colour and is left alone");
+        c.False(LodPaletteRepair.NeedsColor(1), "so is anything else");
+
+        var section = new LodSection();
+        section.FindOrAddPaletteEntry(blockId: 11, color: 0, flags: 0, tintSlot: 0);
+        section.FindOrAddPaletteEntry(blockId: 12, color: unchecked((int)0xFF336699), flags: 0, tintSlot: 0);
+        section.FindOrAddPaletteEntry(blockId: 0, color: 0, flags: 0, tintSlot: 0);
+
+        int asked = 0;
+        int repaired = LodPaletteRepair.Fill(section, id =>
+        {
+            asked++;
+            return id == 11 ? unchecked((int)0xFF112233) : 0;
+        });
+
+        c.Eq(2, repaired, "both uncoloured entries are repaired");
+        c.Eq(2, asked, "and the entry that already had a colour is not asked about");
+        c.Eq(unchecked((int)0xFF112233), section.Palette[0].Color, "a known block takes its real colour");
+        c.Eq(unchecked((int)0xFF336699), section.Palette[1].Color, "an already-coloured entry is untouched");
+
+        // The provider answered 0 for the unknown block. Storing that would leave the
+        // entry needing repair for ever, and repairing marks the section dirty, so the
+        // cache would be rewritten on every single load.
+        c.Eq(LodPaletteRepair.UnknownBlockColor, section.Palette[2].Color,
+            "a block nothing can colour becomes grey rather than staying black");
+        c.False(LodPaletteRepair.NeedsColor(section.Palette[2].Color),
+            "so the repair finishes instead of running again every load");
+
+        c.Eq(0, LodPaletteRepair.Fill(section, _ => 0), "a repaired section needs no second pass");
     }
 
     /// <summary>

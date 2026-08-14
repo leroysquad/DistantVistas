@@ -227,6 +227,45 @@ public class LodStore : SQLiteDBConnection
     /// </summary>
     public System.Func<int, (byte Flags, byte TintSlot)>? ClassifyBlock;
 
+    /// <summary>
+    /// A block code to a live block id, or 0 when the registry does not know it.
+    ///
+    /// Only a SUCCESS is cached. Caching the failure too was the obvious thing, and it is
+    /// wrong: this runs on the storage thread against whatever the registry holds at that
+    /// moment, and sections start loading from cache before a world has finished coming up.
+    /// A lookup that lost that race used to answer 0 for that code for the rest of the
+    /// session, however many times it was asked and however ready the registry became. A
+    /// miss costs an AssetLocation parse and a registry lookup, which is the price of not
+    /// being permanently wrong; the hit path, which is nearly all of them, is unchanged.
+    /// </summary>
+    int LookUpBlockId(string code, System.Func<string, int> lookUp)
+    {
+        int blockId = lookUp(code);
+        if (blockId <= 0)
+        {
+            unresolvedCodes.TryAdd(code, 0);
+            return 0;
+        }
+
+        unresolvedCodes.TryRemove(code, out _);
+        blockIdByCode[code] = blockId;
+        return blockId;
+    }
+
+    /// <summary>The registry lookup, as a seam: a test needs to fail one and then succeed.</summary>
+    static System.Func<string, int> RegistryLookup(IWorldAccessor world) =>
+        code => world.GetBlock(new Vintagestory.API.Common.AssetLocation(code))?.BlockId ?? 0;
+
+    /// <summary>
+    /// Codes no lookup has ever resolved. Held so the count and the names can be reported
+    /// rather than guessed at: an unresolved code becomes terrain with no colour, and the
+    /// only previous symptom was black ground in a screenshot.
+    /// </summary>
+    readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> unresolvedCodes = new();
+
+    /// <summary>Codes that never resolved, for the status commands. Empty is the norm.</summary>
+    public string[] UnresolvedCodes() => unresolvedCodes.Keys.ToArray();
+
     void Reclassify(LodSection section, int index, int blockId)
     {
         if (ClassifyBlock == null || blockId <= 0) return;
@@ -238,7 +277,10 @@ public class LodStore : SQLiteDBConnection
         section.Palette[index] = e;
     }
 
-    public void ResolvePendingPalette(LodSection section, IWorldAccessor world)
+    public void ResolvePendingPalette(LodSection section, IWorldAccessor world) =>
+        ResolvePendingPalette(section, RegistryLookup(world));
+
+    public void ResolvePendingPalette(LodSection section, System.Func<string, int> lookUp)
     {
         string[]? codes = section.PendingPaletteCodes;
         if (codes == null) return;
@@ -250,9 +292,7 @@ public class LodStore : SQLiteDBConnection
 
             if (!blockIdByCode.TryGetValue(code, out int blockId))
             {
-                Block? block = world.GetBlock(new Vintagestory.API.Common.AssetLocation(code));
-                blockId = block?.BlockId ?? 0;
-                blockIdByCode[code] = blockId;
+                blockId = LookUpBlockId(code, lookUp);
             }
 
             LodPaletteEntry e = section.Palette[i];
@@ -375,12 +415,7 @@ public class LodStore : SQLiteDBConnection
                 }
                 else if (code.Length > 0 && !blockIdByCode.TryGetValue(code, out blockId))
                 {
-                    // Cached: a session reloads the same few hundred codes across
-                    // thousands of sections, each miss costing an AssetLocation parse
-                    // plus a registry lookup.
-                    Block? block = world!.GetBlock(new Vintagestory.API.Common.AssetLocation(code));
-                    blockId = block?.BlockId ?? 0;
-                    blockIdByCode[code] = blockId;
+                    blockId = LookUpBlockId(code, RegistryLookup(world!));
                 }
                 section.Palette.Add(new LodPaletteEntry { BlockId = blockId, Color = color, Flags = flags });
 

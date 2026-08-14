@@ -5,6 +5,23 @@ Written when a version is released, not when a commit lands - see
 
 ## [Unreleased]
 
+**Fixed: patches of distant terrain were solid black, and stayed black.** A server has no
+texture atlas, so it stores no colour and the client fills it in on arrival. The client
+also saves what it receives. So anything that stopped the fill-in was written to the cache
+and stayed there, drawing as pure black ground for as long as that world existed.
+
+What stopped it was a block code that failed to resolve. That answer used to be remembered
+for the rest of the session, and the lookup runs while a world is still coming up, so one
+common block losing that race left every section saved afterwards with no colour at all.
+Measured on a real world: 7 sections with no colour anywhere and 59 more in patches, on
+ground as ordinary as soil, slate and tall grass.
+
+A failed lookup is no longer remembered, so it is simply tried again. Sections already
+saved without colour are repaired as they load, from the texture atlas, and written back,
+so a cache fixes itself as you play and nothing is discarded. A block this game genuinely
+does not have now draws as plain grey, and both the count and the block codes are logged
+rather than left as a black patch with no explanation.
+
 **Fixed: joining a server before its cache existed switched the assist off for the whole
 session.** The server reported the assist as "off" whenever its cache happened to be empty
 at the instant you joined, which is the ordinary state of a fresh server and of any server

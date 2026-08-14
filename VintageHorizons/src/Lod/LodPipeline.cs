@@ -62,6 +62,19 @@ public class LodPipeline
     LodStore? store;
     LodStorageThread? storageThread;
 
+    /// <summary>Block codes the registry never answered for; empty is the norm.</summary>
+    public string[] UnresolvedBlockCodes() => store?.UnresolvedCodes() ?? Array.Empty<string>();
+
+    /// <summary>
+    /// Colours palette entries that were saved without one. Set by the client, which has
+    /// the texture atlas; a server leaves it null, because storing 0 is what a server is
+    /// supposed to do. See LodPaletteRepair for why an existing cache needs this.
+    /// </summary>
+    public System.Func<LodSection, int>? RepairUncoloredPalette;
+
+    /// <summary>Palette entries given a colour on load because the cache had none.</summary>
+    public int PaletteEntriesRepaired { get; private set; }
+
     readonly ConcurrentDictionary<long, byte> queuedColumns = new();
     readonly ConcurrentQueue<long> pendingColumns = new();
     readonly BlockPos paletteSamplePos = new(0, 0, 0);
@@ -319,6 +332,7 @@ public class LodPipeline
 
         while (storageThread.LoadResults.TryDequeue(out (long Key, LodSection? Section) result))
         {
+            int repaired = 0;
             // Palette ids are resolved here, on the world thread, before anything can
             // read them: the storage thread must not touch the block registry.
             if (result.Section != null && store != null)
@@ -328,8 +342,18 @@ public class LodPipeline
                 // runs for anything that is no longer terrain (fire, meta) from sections
                 // captured under an older policy, without needing a re-explore.
                 result.Section.RemoveRunsWithFlag(LodPaletteEntry.FlagSkip);
+                repaired = RepairUncoloredPalette?.Invoke(result.Section) ?? 0;
             }
             World.InstallLoaded(result.Key, result.Section);
+
+            // Written back, so the repair is done once rather than on every load for the
+            // rest of the world's life. This is the only reason a read marks a section
+            // dirty, and it stops as soon as the cache is clean.
+            if (repaired > 0)
+            {
+                PaletteEntriesRepaired += repaired;
+                World.MarkChanged(result.Key);
+            }
         }
     }
 

@@ -115,6 +115,11 @@ public class VintageHorizonsModSystem : ModSystem
             (int)LodWorld.MinDetailDistance, (int)LodWorld.MaxDetailDistance);
 
         pipeline = new LodPipeline(capi, Mod.Logger, DescribePalette, block => (byte)tints.SlotFor(block));
+
+        // Repairs a cache written while a block lookup was poisoned, which saved sections
+        // with no palette colour at all and drew them as black ground. Client-side only:
+        // it needs the texture atlas, and a server stores 0 on purpose.
+        pipeline.RepairUncoloredPalette = section => LodPaletteRepair.Fill(section, AtlasColorOf);
         renderer = new LodTerrainRenderer(capi, pipeline.World, pipeline.Worker, tints)
         {
             AutoUnpause = Environment.GetEnvironmentVariable("VINTAGEHORIZONS_AUTOUNPAUSE") == "1",
@@ -427,7 +432,23 @@ public class VintageHorizonsModSystem : ModSystem
         for (int i = 0; i < section.Palette.Count; i++)
         {
             LodPaletteEntry entry = section.Palette[i];
-            if (entry.BlockId <= 0) continue;
+
+            // A code the block registry could not answer for. It still carries the flags
+            // the capturing side worked out, so it is still drawn as terrain - and a
+            // server stores 0 for every colour, so leaving this one alone drew it at
+            // exactly RGB 0,0,0. Black ground, correctly shaped, with nothing anywhere
+            // saying why. The shader cannot save it either: shade bottoms out at 0.55 and
+            // daylight is clamped to 0.02, but zero times anything is still zero.
+            //
+            // Neutral grey instead, and counted. Wrong-but-plausible stone beats a hole
+            // in the world, and the count is what turns the next report into a log line.
+            if (entry.BlockId <= 0)
+            {
+                entry.Color = LodPaletteRepair.UnknownBlockColor;
+                section.Palette[i] = entry;
+                uncoloredForeignEntries++;
+                continue;
+            }
 
             Block block = capi.World.Blocks[entry.BlockId];
             int subId = block.TextureSubIdForBlockColor;
@@ -462,6 +483,25 @@ public class VintageHorizonsModSystem : ModSystem
 
     /// <summary>Average colour of unknown.png (near-white, not magenta - measured).</summary>
     int unknownTextureColor;
+
+    /// <summary>Foreign palette entries drawn as grey because no block matched.</summary>
+    int uncoloredForeignEntries;
+
+    /// <summary>
+    /// Colour for one block id, for repairing a cache saved without any. Separate from
+    /// DescribePalette because that one also answers the tint slot and needs a world
+    /// position; here the block is all there is to go on.
+    /// </summary>
+    int AtlasColorOf(int blockId)
+    {
+        if (blockId <= 0) return LodPaletteRepair.UnknownBlockColor;
+
+        Block block = capi.World.Blocks[blockId];
+        int subId = block.TextureSubIdForBlockColor;
+        return IsUsableAtlasTexture(subId)
+            ? capi.BlockTextureAtlas.GetAverageColor(subId)
+            : ColorFromAnyTexture(block, ColorUtil.WhiteArgb);
+    }
 
     /// <summary>
     /// Whether an atlas sub-id actually names a texture. `GetAverageColor` on an unassigned
@@ -706,6 +746,32 @@ public class VintageHorizonsModSystem : ModSystem
                 assist.RemoteKeys.Count, pipeline.RemoteOnly.Count, pipeline.RemoteWanted().Length,
                 assist.SectionsRequested, assist.SectionsReceived, pipeline.ForeignSectionsInstalled,
                 assist.InFlight, assist.SectionsRefused);
+        }
+
+        // Repairing means the cache on disk was written without colours, which drew as
+        // black ground. Worth saying out loud, and worth being able to watch go to zero.
+        if (pipeline.PaletteEntriesRepaired > 0)
+        {
+            Mod.Logger.Notification(
+                "  repaired {0} palette entries that were cached with no colour at all; "
+                + "they drew as black terrain and are written back as they load.",
+                pipeline.PaletteEntriesRepaired);
+        }
+
+        // Warning, not notification: this is terrain drawn as a guess. Naming the codes is
+        // the whole point - the previous symptom was black ground and nothing to grep for.
+        if (uncoloredForeignEntries > 0)
+        {
+            string[] codes = pipeline.UnresolvedBlockCodes();
+            Mod.Logger.Warning(
+                "  {0} palette entries came from blocks this game does not have, and are drawn as "
+                + "plain grey. {1}",
+                uncoloredForeignEntries,
+                codes.Length > 0
+                    ? "Codes: " + string.Join(", ", codes.Take(12))
+                      + (codes.Length > 12 ? $" and {codes.Length - 12} more" : "")
+                    : "No unresolved codes were recorded, so these arrived over the network rather "
+                      + "than from the cache.");
         }
 
         if (renderer != null && renderer.WalkCost.Calls > 0)
