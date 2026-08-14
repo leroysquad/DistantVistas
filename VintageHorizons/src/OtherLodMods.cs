@@ -34,15 +34,20 @@ public static class OtherLodMods
     /// against Farseer 1.4.0 by writing a one-field file and reading back what it stored.
     ///
     /// ChunkLOD and TopoHorizon expose no config file we could find, so they get null and
-    /// we keep deferring to them. VistasBeyond is "side": "server", so it is never in a
-    /// client's mod list at all; it stays listed because installing it client-side is not
-    /// something we can rule out.
+    /// we keep deferring to them.
+    ///
+    /// Every entry must name a mod that actually RENDERS distant terrain. Vistas Beyond
+    /// was listed here once, guessed from its name, and it does not belong: it is a
+    /// server-side worldgen config mod (it adjusts landforms.json) and draws nothing, so
+    /// there is no far plane to fight over. A player who installed it in singleplayer
+    /// still had it show up as "loaded", and this mod went idle over a conflict that
+    /// cannot exist - reported from the field, and the exact pairing (dramatic terrain
+    /// plus long views) that both mods' users want.
     /// </summary>
     public static readonly (string ModId, string? SwitchFile)[] Known =
     {
         ("farseer", "farseer-client.json"),
         ("chunklod", null),
-        ("vistasbeyond", null),
         ("topohorizon", null),
     };
 

@@ -5,6 +5,12 @@ Written when a version is released, not when a commit lands - see
 
 ## [Unreleased]
 
+**Fixed: Vistas Beyond no longer switches this mod off.** Vistas Beyond was on the
+list of LOD mods this one defers to, guessed from its name. It does not belong there: it
+is a server-side worldgen mod that adjusts terrain generation and draws nothing, so there
+is no conflict to avoid. Installing both now gives exactly what that pairing promises -
+more dramatic terrain, visible from further away. Reported from the field.
+
 **Fixed: patches of distant terrain were solid black, and stayed black.** A server has no
 texture atlas, so it stores no colour and the client fills it in on arrival. The client
 also saves what it receives. So anything that stopped the fill-in was written to the cache

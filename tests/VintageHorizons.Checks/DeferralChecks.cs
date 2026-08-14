@@ -61,8 +61,15 @@ public static class DeferralChecks
         c.True(ids.Contains("farseer"), "farseer is a known LOD mod");
         c.True(ids.Contains("chunklod"), "chunklod is a known LOD mod");
         c.True(ids.Contains("topohorizon"), "topohorizon is a known LOD mod");
-        c.True(ids.Contains("vistasbeyond"), "vistasbeyond is a known LOD mod");
         c.Eq(ids.Length, ids.Distinct().Count(), "no mod id is listed twice");
+
+        // Pinned as ABSENT, because it was present once, on a guess from the name.
+        // Vistas Beyond is "side": "Server" and draws nothing: it is a worldgen config
+        // mod (landforms.json), so there is no far plane to fight over. Deferring to it
+        // cost a player all distant terrain for no conflict at all - reported from the
+        // field. Every entry in this table must name a mod that actually RENDERS.
+        c.False(ids.Contains("vistasbeyond"),
+            "vistasbeyond does not draw, so it is not deferred to");
 
         // The file name is not cosmetic: it is what we hand to LoadModConfig, and a typo
         // reads as "file missing", which silently restores the 0.2.0 behaviour.
