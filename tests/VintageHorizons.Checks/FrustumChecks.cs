@@ -5,7 +5,7 @@ namespace VintageHorizons.Checks;
 /// <summary>
 /// View-frustum plane extraction and the p-vertex box test.
 ///
-/// docs/STATUS.md has claimed since the performance pass that this has a standalone
+/// notes/STATUS.md has claimed since the performance pass that this has a standalone
 /// harness. It did not - nothing matching it exists in the tree or anywhere in the history.
 /// This is that harness, written for real.
 ///

@@ -4,11 +4,13 @@ A Distant Horizons-style extended-render-distance LOD mod for Vintage Story that
 **fully client-side**: it works on any server, vanilla or modded, because it builds its
 LODs exclusively from chunk data the client already receives.
 
-Supporting research (file-path-anchored deep dives) lives in `docs/research/`:
+Supporting research is kept privately, in `notes/research/`, and is not published. It
+covers the Vintage Story client API and how the two established LOD mods are built.
 
-- [`distant-horizons-architecture.md`](docs/research/distant-horizons-architecture.md) - the veteran design (LGPL-3.0; concepts only, clean reimplementation)
-- [`voxy-architecture.md`](docs/research/voxy-architecture.md) - the fast newcomer (all-rights-reserved; **ideas only, never copy code**)
-- [`vintage-story-api.md`](docs/research/vintage-story-api.md) - everything the VS 1.22.x client API gives us, with citations
+What matters publicly is the provenance, so it is stated here rather than left implied.
+**Distant Horizons** (LGPL-3.0) informed concepts only; the implementation here is a clean
+one. **Voxy** is all-rights-reserved, so it contributed ideas and **no code was copied from
+it**. Neither project's source is redistributed by this repository.
 
 ## 1. Why this is possible (and why nobody has done it in VS yet)
 

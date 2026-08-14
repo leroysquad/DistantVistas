@@ -5,7 +5,7 @@ The mod reports its whole internal state through a handful of format strings who
 shape is stable, so a run's logs are a machine-readable record of what the pipeline
 did. That is what makes the sandbox tiers assertable rather than just watchable.
 
-Every claim in DESIGN.md and docs/STATUS.md was originally established by reading
+Every claim in DESIGN.md and notes/STATUS.md was originally established by reading
 these same numbers off a screen by hand, once. This reads them every time.
 
 Usage:
