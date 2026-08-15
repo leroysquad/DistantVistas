@@ -5,6 +5,14 @@ Written when a version is released, not when a commit lands - see
 
 ## [Unreleased]
 
+**Fixed: reloading a singleplayer world crashed with "cache file not writable".** When
+you left a world, the mod parked an open handle to the server-side cache in a connection
+pool. The handle lived as long as the game process. On the next load of the same world,
+the integrated server failed to open its own cache file. On platforms whose file sharing
+blocks a writer while any handle is open, this failed every time. 0.1.0 had no
+server-side cache, so this fault did not exist there. The mod now closes the handle,
+and a check watches the process's handle table so that this stays true.
+
 **Fixed: Vistas Beyond no longer switches this mod off.** Vistas Beyond was on the
 list of LOD mods this one defers to, guessed from its name. It does not belong there: it
 is a server-side worldgen mod that adjusts terrain generation and draws nothing, so there

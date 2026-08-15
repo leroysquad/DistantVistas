@@ -46,11 +46,21 @@ public sealed class LodLocalOfferSource : IDisposable
         {
             // Read-only, and shared: in singleplayer the server side of this same process
             // has the file open and is very likely still writing to it.
+            //
+            // Pooling off, and it is not an optimisation choice. Microsoft.Data.Sqlite
+            // pools by default, and a pooled connection's Dispose parks the native handle
+            // in a process-wide pool instead of closing it. This handle points at the
+            // server side's cache, so it outlived leaving the world - and the next load
+            // of the same world had the integrated server refused by its own cache file,
+            // "it seems to be not writable", every time, on the platform whose file
+            // sharing blocks a writer while any handle is open. This connection is opened
+            // once per world and queried in bulk; pooling bought nothing to begin with.
             var builder = new SqliteConnectionStringBuilder
             {
                 DataSource = path,
                 Mode = SqliteOpenMode.ReadOnly,
                 Cache = SqliteCacheMode.Shared,
+                Pooling = false,
             };
             var opened = new SqliteConnection(builder.ToString());
             opened.Open();

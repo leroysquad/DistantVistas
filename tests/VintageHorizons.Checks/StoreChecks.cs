@@ -16,6 +16,7 @@ public static class StoreChecks
         DeferredPalette(c);
         AFailedLookupIsNotRemembered(c);
         AColourlessCacheIsRepaired(c);
+        DisposingTheOfferReaderReleasesItsFileHandle(c);
         Rejection(c);
         PurgeKeepsMatchingData(c);
     }
@@ -226,6 +227,83 @@ public static class StoreChecks
             "so the repair finishes instead of running again every load");
 
         c.Eq(0, LodPaletteRepair.Fill(section, _ => 0), "a repaired section needs no second pass");
+    }
+
+    /// <summary>
+    /// Disposing the local offer reader must release its file handle, not park it.
+    ///
+    /// Microsoft.Data.Sqlite pools connections by default: Dispose returns the native
+    /// handle to a process-wide pool keyed by connection string, and the file stays open
+    /// until the process exits. In singleplayer that handle points at the server side's
+    /// cache, and it survived leaving the world - so the next load of the same world had
+    /// the integrated server's LodStore.Open refused with "it seems to be not writable",
+    /// every time, on the platform whose file sharing blocks it. Reported from the field
+    /// against 0.2.0, the release that introduced this reader; 0.1.0 had nothing to leak.
+    ///
+    /// Proven through /proc/self/fd, which is why the assertion is Linux-only: the leak is
+    /// a handle held by this process, and that is where a process's handles are listed.
+    /// </summary>
+    static void DisposingTheOfferReaderReleasesItsFileHandle(Check c)
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "vh-offer-check-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        try
+        {
+            string clientDb = Path.Combine(dir, "world.db");
+            string serverDb = Path.Combine(dir, "world-server.db");
+
+            // A throwaway unpooled writer builds the fixture file, so the only connection
+            // that can linger afterwards is the one under test.
+            var writer = new Microsoft.Data.Sqlite.SqliteConnectionStringBuilder
+            {
+                DataSource = serverDb,
+                Pooling = false,
+            };
+            using (var w = new Microsoft.Data.Sqlite.SqliteConnection(writer.ToString()))
+            {
+                w.Open();
+                using var cmd = w.CreateCommand();
+                cmd.CommandText =
+                    "CREATE TABLE Section (Detail INTEGER, SX INTEGER, SZ INTEGER, "
+                    + "Data BLOB, ApplyToParent INTEGER, ModifiedMs INTEGER);"
+                    + "INSERT INTO Section VALUES (0, 1, 2, x'00', 0, 0);";
+                cmd.ExecuteNonQuery();
+            }
+
+            var logger = new CaptureLogger();
+            LodLocalOfferSource? offers = LodLocalOfferSource.TryOpen(clientDb, logger);
+            c.True(offers != null, "the server-side cache beside a client path opens");
+            if (offers == null) return;
+
+            c.Eq(1, offers.Keys().Length, "and lists its sections");
+            offers.Dispose();
+
+            if (OperatingSystem.IsLinux())
+            {
+                c.False(ProcessHoldsHandleTo(serverDb),
+                    "Dispose releases the file handle instead of pooling it for the rest of the process");
+            }
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* temp dir; best effort */ }
+        }
+    }
+
+    static bool ProcessHoldsHandleTo(string path)
+    {
+        foreach (string fd in Directory.EnumerateFiles("/proc/self/fd"))
+        {
+            try
+            {
+                if (new FileInfo(fd).LinkTarget == path) return true;
+            }
+            catch
+            {
+                // A descriptor can close between listing and reading; not this check's business.
+            }
+        }
+        return false;
     }
 
     /// <summary>
