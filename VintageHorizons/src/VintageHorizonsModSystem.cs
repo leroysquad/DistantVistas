@@ -32,7 +32,6 @@ public class VintageHorizonsConfig
 /// </summary>
 public class VintageHorizonsModSystem : ModSystem
 {
-    const int ChunkSize = GlobalConstants.ChunkSize;
 
     ICoreClientAPI capi = null!;
     LodPipeline pipeline = null!;
@@ -453,9 +452,20 @@ public class VintageHorizonsModSystem : ModSystem
 
             Block block = capi.World.Blocks[entry.BlockId];
             int subId = block.TextureSubIdForBlockColor;
-            entry.Color = IsUsableAtlasTexture(subId)
+            int color = IsUsableAtlasTexture(subId)
                 ? capi.BlockTextureAtlas.GetAverageColor(subId)
                 : ColorFromAnyTexture(block, ColorUtil.WhiteArgb);
+
+            // A colour texture that resolved to the unknown.png placeholder is not a
+            // colour, it is the absence of one. Chiselled blocks land here: their colour
+            // lives in a block entity this path has no position to read (the section came
+            // from a server or a peek), so the honest answer is the same neutral grey an
+            // unknown block gets - not the placeholder's near-white.
+            if (unknownTextureColor != 0 && color == unknownTextureColor)
+            {
+                color = ColorFromAnyTexture(block, LodPaletteRepair.UnknownBlockColor);
+            }
+            entry.Color = color;
             section.Palette[i] = entry;
         }
     }
@@ -465,11 +475,17 @@ public class VintageHorizonsModSystem : ModSystem
     /// texture atlas, plus which live tint applies. Stored untinted on purpose, so the
     /// shader can follow the calendar instead of freezing the season it was captured in.
     /// A server has no atlas and cannot answer this at all (DESIGN.md §10.4).
+    ///
+    /// The position is the exact block being described, and that is load-bearing:
+    /// GetColorWithoutTint reads the world at pos - chiselled blocks average the
+    /// materials in their block entity there, the same way the world map colours them.
+    /// A synthetic chunk-centre position made that lookup miss, so every chisel took
+    /// the placeholder texture's near-white instead of its own materials.
     /// </summary>
-    (int Color, byte TintSlot) DescribePalette(int blockId, int cx, int cz, int sampleY)
+    (int Color, byte TintSlot) DescribePalette(int blockId, int blockX, int blockY, int blockZ)
     {
         Block block = capi.World.Blocks[blockId];
-        paletteSamplePos.Set(cx * ChunkSize + ChunkSize / 2, sampleY, cz * ChunkSize + ChunkSize / 2);
+        paletteSamplePos.Set(blockX, blockY, blockZ);
         int color = block.GetColorWithoutTint(capi, paletteSamplePos);
 
         if (!IsUsableAtlasTexture(block.TextureSubIdForBlockColor)
@@ -499,9 +515,18 @@ public class VintageHorizonsModSystem : ModSystem
 
         Block block = capi.World.Blocks[blockId];
         int subId = block.TextureSubIdForBlockColor;
-        return IsUsableAtlasTexture(subId)
+        int color = IsUsableAtlasTexture(subId)
             ? capi.BlockTextureAtlas.GetAverageColor(subId)
             : ColorFromAnyTexture(block, ColorUtil.WhiteArgb);
+
+        // Same rule as the foreign path: the placeholder's average is not a colour.
+        // The repair has only a block id to go on, so a chiselled block repairs to
+        // neutral grey here and gets its real materials on the next capture.
+        if (unknownTextureColor != 0 && color == unknownTextureColor)
+        {
+            color = ColorFromAnyTexture(block, LodPaletteRepair.UnknownBlockColor);
+        }
+        return color;
     }
 
     /// <summary>
@@ -540,9 +565,17 @@ public class VintageHorizonsModSystem : ModSystem
     /// </summary>
     int ColorFromAnyTexture(Block block, int fallback)
     {
-        if (missingTextureColorFallback.TryGetValue(block.BlockId, out int cached)) return cached;
+        // The cache holds only the block's own answer, with 0 for "no usable texture"
+        // (no real block averages to 0, the same invariant colour-0 repair rests on).
+        // The fallback is the caller's and is applied per call: the capture path passes
+        // the probe colour, the foreign path passes grey, and caching whichever caller
+        // came first hands one caller's stand-in to the others.
+        if (missingTextureColorFallback.TryGetValue(block.BlockId, out int cached))
+        {
+            return cached != 0 ? cached : fallback;
+        }
 
-        int found = fallback;
+        int found = 0;
         if (block.Textures != null)
         {
             foreach (CompositeTexture tex in block.Textures.Values)
@@ -568,7 +601,7 @@ public class VintageHorizonsModSystem : ModSystem
                 + "The mod uses another of its own textures instead, so it does not render wrong at distance.",
                 block.Code);
         }
-        return found;
+        return found != 0 ? found : fallback;
     }
 
     /// <summary>

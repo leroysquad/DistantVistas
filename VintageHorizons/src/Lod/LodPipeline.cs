@@ -15,7 +15,7 @@ namespace VintageHorizons;
 /// <param name="cx">Chunk column X, for sampling position.</param>
 /// <param name="cz">Chunk column Z, for sampling position.</param>
 /// <param name="sampleY">Y of the run's top, for sampling position.</param>
-public delegate (int Color, byte TintSlot) LodPaletteDescriber(int blockId, int cx, int cz, int sampleY);
+public delegate (int Color, byte TintSlot) LodPaletteDescriber(int blockId, int blockX, int blockY, int blockZ);
 
 /// <summary>Which live tint applies to a block. The server has none and answers 0.</summary>
 public delegate byte LodTintSlotResolver(Block block);
@@ -465,7 +465,11 @@ public class LodPipeline
                 int blockId = LodSection.RunPaletteId(runs[i]); // raw block id from capture
                 if (!pidByBlockId.TryGetValue(blockId, out int pid))
                 {
-                    pid = RegisterPaletteEntry(section, result, blockId, LodSection.RunYTop(runs[i]));
+                    // One palette entry per block id per section, coloured from the first
+                    // run seen. For chiselled blocks that means one chisel's material mix
+                    // stands in for the whole section - coarse, but theirs, where the
+                    // centre probe answered with the placeholder texture for all of them.
+                    pid = RegisterPaletteEntry(section, result.SectionKey, blockId, col, runs[i]);
                     pidByBlockId[blockId] = pid;
                 }
 
@@ -486,10 +490,28 @@ public class LodPipeline
         }
     }
 
-    int RegisterPaletteEntry(LodSection section, CaptureResult result, int blockId, int sampleY)
+    /// <summary>
+    /// World position of the top block of a run. The describer must get the block's own
+    /// position, not a stand-in: chiselled blocks answer GetColorWithoutTint from the
+    /// block entity at that exact position, and a probe at the chunk-column centre made
+    /// every chisel average unknown.png instead - a real cache held that near-white
+    /// (0x00FCFCFC) 8319 times. Capture results are always level 0, where a column is
+    /// one block wide, and yTop is exclusive (a run spans [yBottom, yTop)).
+    /// </summary>
+    public static (int X, int Y, int Z) CaptureBlockPos(long sectionKey, int col, ulong run)
+    {
+        int localX = col % LodSection.GridSize;
+        int localZ = col / LodSection.GridSize;
+        return (LodWorld.KeySx(sectionKey) * LodSection.SectionBlocks + localX,
+                LodSection.RunYTop(run) - 1,
+                LodWorld.KeySz(sectionKey) * LodSection.SectionBlocks + localZ);
+    }
+
+    int RegisterPaletteEntry(LodSection section, long sectionKey, int blockId, int col, ulong run)
     {
         Block block = api.World.Blocks[blockId];
-        (int color, byte tintSlot) = describePalette(blockId, result.Cx, result.Cz, sampleY);
+        (int x, int y, int z) = CaptureBlockPos(sectionKey, col, run);
+        (int color, byte tintSlot) = describePalette(blockId, x, y, z);
         return section.FindOrAddPaletteEntry(blockId, color, LodBlockPolicy.FlagsFor(block), tintSlot);
     }
 

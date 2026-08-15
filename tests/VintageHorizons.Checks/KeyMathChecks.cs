@@ -14,6 +14,38 @@ public static class KeyMathChecks
         Footprint(c);
         Distance(c);
         WantedLevelFromSquaredDistance(c);
+        CaptureSamplePositionIsTheBlockItself(c);
+    }
+
+    /// <summary>
+    /// The palette describer must get the exact position of the block it describes.
+    /// Chiselled blocks answer GetColorWithoutTint from the block entity at that
+    /// position, so a stand-in position silently degrades to the placeholder texture's
+    /// average - a real cache held that near-white for every chisel in it. The old code
+    /// probed the chunk-column centre, one block above the run's top, and this check
+    /// fails against that arithmetic on every axis.
+    /// </summary>
+    static void CaptureSamplePositionIsTheBlockItself(Check c)
+    {
+        // Section (0, 3, 2) spans blocks [192,256) x [128,192). Column (5, 60) inside it
+        // is the block column at world x=197, z=188 - deliberately nowhere near a chunk
+        // centre on either axis.
+        long key = LodWorld.SectionKey(0, 3, 2);
+        int col = LodSection.ColumnIndex(5, 60);
+        ulong run = LodSection.PackRun(7, 71, 64);
+
+        (int x, int y, int z) = LodPipeline.CaptureBlockPos(key, col, run);
+        c.Eq(3 * LodSection.SectionBlocks + 5, x, "x is the column's own block, not a chunk centre");
+        c.Eq(2 * LodSection.SectionBlocks + 60, z, "z is the column's own block, not a chunk centre");
+        c.Eq(70, y, "y is the run's top block: yTop is exclusive, so the block sits at yTop - 1");
+
+        // The corner column of the origin section, so an off-by-one on the decode
+        // direction (x from col/GridSize instead of col%GridSize) cannot hide.
+        (x, y, z) = LodPipeline.CaptureBlockPos(LodWorld.SectionKey(0, 0, 0), LodSection.ColumnIndex(63, 1),
+            LodSection.PackRun(1, 2, 1));
+        c.Eq(63, x, "x decodes from the fast axis of the column index");
+        c.Eq(1, z, "z decodes from the slow axis of the column index");
+        c.Eq(1, y, "a one-block run at y=1 samples y=1");
     }
 
     /// <summary>

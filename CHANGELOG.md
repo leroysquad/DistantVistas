@@ -5,6 +5,17 @@ Written when a version is released, not when a commit lands - see
 
 ## [Unreleased]
 
+**Fixed: chiselled blocks drew as one flat wrong colour in the distance.** Reported as
+purple. A chiselled block's colour lives in its block entity, and only a probe at the
+block's exact position finds it - the world map colours chisel work the same way. The
+LOD colour probe asked at a stand-in position, the centre of the chunk column, found no
+block entity there, and fell through to the placeholder texture. So every chisel in a
+section took the placeholder's colour. The probe now uses the block's own position, and
+distant chisel work takes the materials it is made of. Chiselled terrain that came from
+a server or from transient generation has no block entity to read. That now draws a
+neutral grey instead of the placeholder colour. Ground already cached with the wrong
+colour corrects itself when you visit it again.
+
 **Fixed: reloading a singleplayer world crashed with "cache file not writable".** When
 you left a world, the mod parked an open handle to the server-side cache in a connection
 pool. The handle lived as long as the game process. On the next load of the same world,
