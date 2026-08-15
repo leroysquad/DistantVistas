@@ -13,66 +13,69 @@ blocks a writer while any handle is open, this failed every time. 0.1.0 had no
 server-side cache, so this fault did not exist there. The mod now closes the handle,
 and a check watches the process's handle table so that this stays true.
 
-**Fixed: Vistas Beyond no longer switches this mod off.** Vistas Beyond was on the
-list of LOD mods this one defers to, guessed from its name. It does not belong there: it
-is a server-side worldgen mod that adjusts terrain generation and draws nothing, so there
-is no conflict to avoid. Installing both now gives exactly what that pairing promises -
-more dramatic terrain, visible from further away. Reported from the field.
+**Fixed: Vistas Beyond no longer switches this mod off.** Vistas Beyond was on the list
+of LOD mods that this one defers to, a guess made from its name. It does not belong
+there: it is a server-side worldgen mod that adjusts terrain generation and draws
+nothing, so there is no conflict to avoid. The two together now give exactly what that
+pairing promises: more dramatic terrain, visible from further away. Reported from the
+field.
 
-**Fixed: patches of distant terrain were solid black, and stayed black.** A server has no
-texture atlas, so it stores no colour and the client fills it in on arrival. The client
-also saves what it receives. So anything that stopped the fill-in was written to the cache
-and stayed there, drawing as pure black ground for as long as that world existed.
+**Fixed: patches of distant terrain were solid black, and stayed black.** A server has
+no texture atlas, so it stores no colour, and the client adds the colour on arrival. The
+client also saves what it receives. So anything that stopped the colour step went to the
+cache without colour and stayed there. That ground drew as pure black for as long as
+that world existed.
 
-What stopped it was a block code that failed to resolve. That answer used to be remembered
-for the rest of the session, and the lookup runs while a world is still coming up, so one
-common block losing that race left every section saved afterwards with no colour at all.
-Measured on a real world: 7 sections with no colour anywhere and 59 more in patches, on
-ground as ordinary as soil, slate and tall grass.
+What stopped it was a block code that failed to resolve. The mod kept that answer for
+the rest of the session, and the lookup runs while a world still starts. So when one
+common block lost that race, every section saved after it had no colour at all. The
+measurement on a real world found 7 sections with no colour anywhere and 59 more in
+patches, on ground as ordinary as soil, slate and tall grass.
 
-A failed lookup is no longer remembered, so it is simply tried again. Sections already
-saved without colour are repaired as they load, from the texture atlas, and written back,
-so a cache fixes itself as you play and nothing is discarded. A block this game genuinely
-does not have now draws as plain grey, and both the count and the block codes are logged
-rather than left as a black patch with no explanation.
+The mod no longer keeps a failed lookup, and tries the code again instead. Sections that
+were saved without colour get their colour from the texture atlas as they load, and the
+mod writes them back. So a cache repairs itself as you play, and nothing is discarded. A
+block that this game does not have now draws as plain grey, and the log names both the
+count and the block codes. A black patch with no explanation cannot occur again.
 
 **Fixed: joining a server before its cache existed switched the assist off for the whole
-session.** The server reported the assist as "off" whenever its cache happened to be empty
-at the instant you joined, which is the ordinary state of a fresh server and of any server
-an admin is about to run `/vhgen` on. The client took that as final and ignored everything
-the server sent afterwards, so no amount of generating helped until you relogged. The
-answer now says whether the server *will* serve, not whether it holds anything that
-second, and a server with nothing yet says so plainly.
+session.** The server reported the assist as "off" whenever its cache was empty at the
+instant you joined. An empty cache is the ordinary state of a fresh server, and of any
+server just before an admin runs `/vhgen`. The client took that answer as final and
+ignored everything that the server sent afterwards. No amount of generation helped until
+you relogged. The answer now says whether the server *will* serve, not whether it holds
+anything at that second, and a server with nothing yet says so plainly.
 
-**Fixed: a server cache that grew while you were online never reached you.** The list of
-sections a server has was sent once, when you joined, and never again. So an admin running
-`/vhgen` while people were playing built terrain none of them could ask for: a client only
-requests sections it has been offered. `.vhwhy` reported `no-data` for ground the server
-had been holding for hours, and relogging was the only cure. A sweep finishing late, or
-other players exploring, did the same. The server now offers what it has gained every few
-seconds, and `/vhserver` reports how many of those follow-up offers it has sent.
+**Fixed: a server cache that grew while you were online never reached you.** The server
+sent its list of sections once, when you joined, and never again. A client only requests
+sections that the server offered. So an admin who ran `/vhgen` while people played built
+terrain that none of them had a way to request. `.vhwhy` reported `no-data` for ground
+that the server held for hours, and a relog was the only cure. A sweep that finished
+late did the same, and so did other players who explored. The server now offers what it
+gained every few seconds, and `/vhserver` reports how many of those follow-up offers it
+sent.
 
 **Fixed: another LOD mod that is switched off no longer switches this one off too.**
-0.2.0 went idle whenever Farseer, ChunkLOD, Vistas Beyond or TopoHorizon was loaded. On a
-server that runs one of those, every client is made to load it and the game downloads it
-for you, so "loaded" never meant "drawing". A player who had switched Farseer off in its
-own dialog and used this mod instead was left with no distant terrain from either mod.
+0.2.0 went idle whenever Farseer, ChunkLOD, Vistas Beyond or TopoHorizon was loaded. On a server that
+runs one of those, the game makes every client load it, and downloads it for you. So
+"loaded" never meant "drawing". A player who switched Farseer off in its own dialog and
+used this mod instead got no distant terrain from either mod.
 
-This mod now reads Farseer's own switch, in `farseer-client.json`, and draws when Farseer
-is switched off. Nothing to configure: the setting is already on disk. The mods whose
-switch cannot be read still get deference, and `IgnoreOtherLodMods` in
-`vintagehorizons.json` is the escape hatch for those, with `.vhdefer on|off` to set it
-from chat. It applies on the next start, never mid-session.
+This mod now reads Farseer's own switch, in `farseer-client.json`, and draws when
+Farseer is off. There is nothing to configure: the setting is already on disk. For the
+mods whose switch this mod cannot read, it still defers. `IgnoreOtherLodMods` in
+`vintagehorizons.json` overrides that, and `.vhdefer on|off` sets it from chat. A change
+applies at the next start, never in the middle of a session.
 
-`.vhinfo` and the log line no longer say to remove the other mod, which is advice a
-player on that server cannot follow.
+`.vhinfo` and the log line no longer tell you to remove the other mod. That is advice
+that a player on such a server cannot obey.
 
-**Fixed: an idle client made the game log a channel warning.** Deferring returned before
-registering the network channel, so the game reported "Server sends me channel name
-vintagehorizons, but no client side mod registered it" at every join.
+**Fixed: an idle client made the game log a channel warning.** The deferral path
+returned before it registered the network channel. The game then reported "Server sends
+me channel name vintagehorizons, but no client side mod registered it" at every join.
 
-**Fixed: a crashing client cleaned up almost nothing.** When the game went down its own
-shutdown crash path, our teardown ran off the main thread, where the engine refuses these
+**Fixed: a crashing client cleaned up almost nothing.** When the game crashed during its
+own shutdown, our teardown ran off the main thread, where the engine refuses these
 calls, and each refusal skipped every step behind it. That cost the storage writer's
 shutdown, and then, once that was guarded, the release of every GPU mesh. Each step now
 stands alone, and our own work runs before the engine calls that can refuse.

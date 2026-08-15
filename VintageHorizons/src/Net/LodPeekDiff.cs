@@ -257,7 +257,7 @@ public class LodPeekDiff
         int droppedBy = Math.Max(0, -deltas[0]);
 
         logger.Notification(
-            "Peek diff at chunk {0},{1}: peek produced {2} blocks over {3} distinct ids; the "
+            "Peek diff at chunk {0},{1}: peek produced {2} blocks over {3} distinct ids. The "
             + "full generation produced {4} blocks over {5} ids.",
             centreCx, centreCz, fromPeek.TotalBlocks, fromPeek.CountByBlockId.Count,
             fromLoad.TotalBlocks, fromLoad.CountByBlockId.Count);

@@ -23,8 +23,8 @@ public static class AssistGreeting
         if (!serving)
         {
             return (false, capturing
-                ? "this server has a LOD cache but is not sharing it"
-                : "no LOD cache is being built on this server");
+                ? "this server has a LOD cache but does not share it"
+                : "this server does not build a LOD cache");
         }
 
         // keyCount reaches the wording and stops there. It must never reach the answer.

@@ -154,7 +154,7 @@ def main():
              hits[0].strip() if hits else "")
 
     if args.expect_idle:
-        idle = [l for l in lines if "is staying idle to avoid drawing over it" in l]
+        idle = [l for l in lines if "so VintageHorizons stays idle" in l]
         r.ok(bool(idle), "the mod deferred to the competing LOD mod")
         r.ok(not any(CACHE_OPEN.search(l) for l in lines),
              "an idle mod opens no cache")

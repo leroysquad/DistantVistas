@@ -153,10 +153,10 @@ public class LodServerCaptureSystem : ModSystem
         if (!captureDrivenByLoads)
         {
             Mod.Logger.Notification(
-                "Singleplayer or LAN-hosted world with sweeping off: the server side stays "
-                + "idle. The client side already captures everything this process loads. "
-                + "Set SweepSavegame to index terrain from earlier sessions; /vhgen opens a "
-                + "server-side cache on demand for terrain the client cannot reach itself.");
+                "Singleplayer or LAN-hosted world with the sweep off: the server side stays "
+                + "idle. The client side already captures everything that this process loads. "
+                + "Set SweepSavegame to index terrain from earlier sessions. /vhgen opens a "
+                + "server-side cache on demand, for terrain that the client cannot reach itself.");
             return;
         }
 
@@ -349,7 +349,7 @@ public class LodServerCaptureSystem : ModSystem
         }
         if (!worldReady)
         {
-            return TextCommandResult.Error("[VintageHorizons] The world is still starting; try again shortly.");
+            return TextCommandResult.Error("[VintageHorizons] The world still starts up. Try again shortly.");
         }
         if (generate is { Done: false })
         {
@@ -390,9 +390,9 @@ public class LodServerCaptureSystem : ModSystem
         return TextCommandResult.Success(
             $"[VintageHorizons] Generating LOD around {(fromSpawn ? "spawn " : "")}{(int)bx},{(int)bz} "
             + $"out to {radius} chunks ({radius * cs} blocks): {columns} columns, roughly {time} if "
-            + "the server keeps up. Terrain nobody has visited is generated from the seed and "
+            + "the server keeps up. Terrain that nobody visited is generated from the seed and "
             + "thrown away - nothing is written to the savegame, and no chunk is loaded for any "
-            + "player. /vhgen status shows progress; /vhgen stop cancels.");
+            + "player. /vhgen status shows progress. /vhgen stop cancels.");
     }
 
     TextCommandResult OnGenerateStop(TextCommandCallingArgs args)

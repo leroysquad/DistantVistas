@@ -3,10 +3,10 @@
 Distant Horizons-style extended render distance for [Vintage Story](https://www.vintagestory.at/).
 It works on any server, and that server needs nothing installed.
 
-Other VS LOD mods (Farseer, ChunkLOD) must be installed on the server. This one does not.
-It builds a persistent level-of-detail cache from the chunk data your client already
-receives as you play. It then draws that cache far past the normal view distance.
-Coverage grows as you explore, and it persists across sessions.
+Other VS LOD mods (Farseer, ChunkLOD) must be on the server. This one needs no server
+install. It builds a persistent level-of-detail cache from the chunk data that your
+client already receives as you play. It then draws that cache far past the normal view
+distance. Coverage grows as you explore, and it persists across sessions.
 
 You can also install it on your server. Then it shares its own cache with players and an
 admin can build the horizon on request. Neither is necessary, and players without the mod
@@ -20,48 +20,48 @@ are unaffected.
 - **Translucent water**, drawn over the lake and sea floors beneath it.
 - **Live seasonal colour**. Grass and foliage follow the game's own climate and season
   maps. The mod derives a snow line from the local temperature lapse rate. So the far
-  terrain changes with the seasons instead of freezing at capture time.
-- **Persistent per-world cache** that keeps growing as you play, with join time and
-  memory use independent of how much you have explored.
+  terrain changes with the seasons. It does not keep the colours it had at capture time.
+- **Persistent per-world cache** that grows as you play. Join time and memory use do not
+  depend on the size of the explored area.
 
 ## What it cannot do
 
-A client-side mod knows only the terrain the server sent it. Land you have never been
-near never reached your client. It is not in the cache, so the mod cannot draw it. A new
-world therefore shows nothing past the vanilla view distance until you travel.
+A client-side mod knows only the terrain that the server sent it. Land that you never
+came near never reached your client. It is not in the cache, so the mod cannot draw it.
+A new world therefore shows nothing past the vanilla view distance until you travel.
 
 Server-side generators (Farseer, ChunkLOD) ask the world generator directly and do not
-have this limit. The trade is that they must be installed on the server.
+have this limit. In exchange, those mods must be on the server.
 
-Here, the edge of the explored area fades into the horizon instead of ending in a cliff.
-The picture fills in the more you play. If you run the server, `/vhgen` fills it in
-ahead of time.
+In this mod, the edge of the explored area fades into the horizon. It does not end in a
+cliff. The picture fills in the more you play. If you run the server, `/vhgen` builds it
+in advance.
 
 ## In-game commands
 
 | Command | Purpose |
 | --- | --- |
 | `.vhinfo` | Status: cached/resident sections, meshes, current far edge, settings |
-| `.vhdetail [blocks]` | Distance before detail starts to halve (default 512). A higher value gives sharper far terrain and costs more VRAM and CPU. Try 1024. No argument reports the current value. |
+| `.vhdetail [blocks]` | Distance before detail starts to halve (default 512). A higher value gives sharper far terrain and costs more VRAM and CPU. Try 1024. Without an argument, the command reports the current value. |
 | `.vhfar <blocks>` | Cap the LOD render distance. `0` means unlimited, which is the default. |
-| `.vhdefer [on\|off]` | Whether to stay idle when another LOD mod is drawing. On by default. Applies at the next start, not straight away. |
+| `.vhdefer [on\|off]` | Stay idle when another LOD mod draws (on by default). A change applies at the next start, not at once. |
 
 ### If your server runs Farseer, ChunkLOD or TopoHorizon
 
-Those mods are required on the client, so joining such a server installs one on your
-machine whether you want it or not. Two LOD mods drawing at once fight over the camera
-far plane and draw over each other, so this one stays idle while another is **drawing**.
+The client must have those mods, so the game installs one on your machine when you join
+such a server. If two LOD mods draw at the same time, they fight over the camera far
+plane and draw over each other. So this mod stays idle while another mod **draws**.
 
-Being installed is not the same as drawing. Switch Farseer off in its own dialog
-(Ctrl+Shift+F) and this mod takes over by itself, with nothing else to set. For the mods
-whose switch this one cannot read, `.vhdefer off` makes it draw anyway; switch the other
-mod off as well, or the two will draw over the same ground.
+An installed mod does not always draw. Switch Farseer off in its own dialog
+(Ctrl+Shift+F). This mod then draws by itself, and there is nothing else to set. For the
+mods whose switch this one cannot read, `.vhdefer off` makes it draw anyway. Then switch
+the other mod off as well, or the two will draw over the same ground.
 
-**Restart the game after either change.** Which mod draws is decided once, at startup,
-before a world exists. Switching the other mod off while you play changes nothing until
-the next start.
+**Restart the game after either change.** The mod decides which one draws once, at
+startup, before a world exists. If you switch the other mod off while you play, nothing
+changes until the next start.
 
-`.vhinfo` names the mod being deferred to.
+`.vhinfo` names the mod that this one defers to.
 
 Two server commands exist as well (`/`, not `.`). They need the controlserver
 privilege, which every singleplayer host has:
@@ -73,7 +73,7 @@ privilege, which every singleplayer host has:
 
 Both settings persist in `VintagestoryData/ModConfig/vintagehorizons.json`.
 The per-world cache lives in `VintagestoryData/ModData/vintagehorizons/<savegame-id>.db`.
-The mod discards that cache when an update changes what the stored data means. A stale
+When an update changes what the stored data means, the mod discards that cache. A stale
 cache can therefore never degrade a newer version.
 
 ## Building
@@ -97,17 +97,17 @@ scripts/dev-run.sh myworld      # a different world
 
 ### Savegame sweeping
 
-A savegame holds every chunk column anyone has ever generated. The LOD cache saw only the
-part that streamed past a player who ran this mod. Sweeping loads those columns so capture
-sees them. You get a horizon over everywhere you have already been, without flying back
-over it.
+A savegame holds every chunk column that anyone ever generated. The LOD cache saw only
+the part that streamed past a player who ran this mod. The sweep loads those columns so
+that capture sees them. You get a horizon over every place that you visited before, and
+you do not fly back over it.
 
 Sweeping is on by default, in singleplayer too. The settings are `SweepSavegame`,
 `SweepRadiusChunks` and `SweepColumnsPerSecond`, in
 `ModConfig/vintagehorizons-server.json`.
 
-It is safe to default on because it **generates nothing**. The sweep skips a position
-that nobody has visited. It also skips a border around the explored terrain, because a
+The default is safe because the sweep **generates nothing**. The sweep skips a position
+that nobody visited. It also skips a border around the explored terrain, because a
 load there makes the engine generate the missing neighbours.
 
 `PregenRadiusChunks` takes the opposite trade. It creates terrain nobody has visited, so
@@ -124,18 +124,18 @@ The engine's `PeekChunkColumn` runs real worldgen from the seed and returns the 
 transiently. The mod captures it and throws the terrain away. A column that already
 exists loads normally instead, so player builds stay correct.
 
-Every run then re-probes a sample of the positions it generated. It reports the result on
-its finish line, as "Verified 256/256 sampled absent positions still absent". The check
-regimen also asserts the savegame promise byte for byte, but only against vanilla
-worldgen. The runtime check is what watches it on a modded server.
+Every run then re-probes a sample of the positions that it generated. It reports the
+result on its finish line, as "Verified 256/256 sampled absent positions still absent".
+The check regimen also asserts the savegame promise byte for byte, but only against
+vanilla worldgen. The runtime check is what watches it on a modded server.
 
 **Generated terrain is bare.** It carries the landform, the rock strata, caves, rivers,
-and the soil and sand on top. Nothing else. Measured against a full generation of the
-same column, a peek misses 67 block types. The missing types are snow, ore, cave
-dressing, surface boulders, small water, worldgen ruins with their contents, and trees
-in a forested column.
+and the soil and sand on top. Nothing else. A comparison with a full generation of the
+same column shows that a peek misses 67 block types. The missing types are snow, ore,
+cave dressing, surface boulders, small water, worldgen ruins with their contents, and
+trees in a forested column.
 
-What a peek does produce is never wrong. Nothing appears in a peek that a real generation
+What a peek produces is never wrong. Nothing appears in a peek that a real generation
 does not also make. So generated terrain reads as a correct but plain version of itself,
 and real capture fills in the rest the first time a player visits. `/vhgen diff` prints
 the measurement for your own world.
@@ -158,8 +158,8 @@ scripts/check.sh smoke        # one end-to-end sandbox run (~5 min)
 scripts/check.sh matrix       # install combinations and admin controls (~20 min)
 ```
 
-Run `fast` constantly. It needs no game process and finishes in under a second once built.
-Run the whole thing before you commit.
+Run `fast` constantly. It needs no game process, and after the first build it finishes in
+less than a second. Run all three tiers before you commit.
 
 The three tiers answer different questions.
 
@@ -169,14 +169,14 @@ clamps are in it too. It also covers the invariants that span files, which no co
 example is the shader's `TINT_SLOTS` matching `LodTintRegistry.MaxSlots`.
 
 `smoke` starts a vanilla dedicated server and a sandboxed client, then asserts on what the
-run logged. It includes a second pass against the warm cache. That pass is the only way to
-know that what was written can be read back.
+run logged. It includes a second pass against the warm cache. That pass is the only way
+to know that the client can read back what it wrote.
 
-`matrix` covers the configurations other people put the mod in. It runs a vanilla
+`matrix` covers the configurations that other people put the mod in. It runs a vanilla
 server, a modded one, and a client without the mod at all. It also tests each admin
-switch. Two scenarios cover competing LOD mods, in both directions: `deferral` proves we
-yield to one that is drawing, and `farseer-off` proves we do not yield to one the player
-has switched off.
+switch. Two scenarios cover competing LOD mods, in both directions: `deferral` proves
+that we yield to one that draws, and `farseer-off` proves that we do not yield to one
+that the player switched off.
 
 **There is no CI, and there cannot be.** Building this repo requires the Vintage Story
 assemblies from a local game install, and those are not redistributable, so no hosted
@@ -203,9 +203,10 @@ They also record the child PID, and they make sure that `/proc/<pid>/cmdline` na
 sandbox before they signal anything. Without that step, a stale pidfile and a reused PID
 together kill an unrelated process.
 
-Useful env knobs for unattended runs: `VINTAGEHORIZONS_AUTOUNPAUSE=1` (keep ticking without
-window focus), `VINTAGEHORIZONS_AUTOEXPLORE=1` and `VINTAGEHORIZONS_EXPLORE_HOP=<blocks>`
-(teleport along a spiral so fresh chunks keep streaming).
+Useful env variables for unattended runs: `VINTAGEHORIZONS_AUTOUNPAUSE=1` (game ticks
+continue without window focus), `VINTAGEHORIZONS_AUTOEXPLORE=1` and
+`VINTAGEHORIZONS_EXPLORE_HOP=<blocks>` (teleport along a spiral so that fresh chunks
+stream in).
 
 ### Development notes
 

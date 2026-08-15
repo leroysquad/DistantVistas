@@ -97,10 +97,11 @@ public class VintageHorizonsModSystem : ModSystem
         if (deferringTo != null)
         {
             Mod.Logger.Notification(
-                "'{0}' is installed and switched on, so VintageHorizons is staying idle to avoid "
-                + "drawing over it and fighting it for the camera far plane. Switch '{0}' off in its "
-                + "own settings and restart the game to use VintageHorizons instead. This is decided "
-                + "once at startup, so switching it off now changes nothing until the next start.",
+                "'{0}' is installed and switched on, so VintageHorizons stays idle. Two LOD mods "
+                + "draw over each other and fight for the camera far plane. Switch '{0}' off in its "
+                + "own settings, then restart the game to use VintageHorizons instead. The mod "
+                + "decides this once at startup: if you switch the other mod off now, nothing "
+                + "changes until the next start.",
                 deferringTo);
             RegisterCommands();
 
@@ -298,8 +299,8 @@ public class VintageHorizonsModSystem : ModSystem
         {
             loggedRemoteKeys = true;
             Mod.Logger.Notification(
-                "Server assist: {0} sections offered that this client has never captured; "
-                + "fetching them as the view needs them.", pipeline.RemoteOnly.Count);
+                "Server assist: {0} sections offered that this client never captured. "
+                + "The mod fetches them as the view needs them.", pipeline.RemoteOnly.Count);
         }
     }
 
@@ -377,8 +378,8 @@ public class VintageHorizonsModSystem : ModSystem
                     loggedLocalOffers = true;
                     // Sweeps and /vhgen both fill the sibling cache; this line covers either.
                     Mod.Logger.Notification(
-                        "Server-side cache offers {0} sections locally; adopting them as the "
-                        + "view needs them.", offered.Length);
+                        "Server-side cache offers {0} sections locally. The mod adopts them as "
+                        + "the view needs them.", offered.Length);
                 }
             }
         }
@@ -563,8 +564,8 @@ public class VintageHorizonsModSystem : ModSystem
         {
             loggedMissingTexture = true;
             Mod.Logger.Notification(
-                "Block '{0}' has no usable block-colour texture (vanilla resolved it to unknown.png); "
-                + "using another of its own textures instead so it does not render wrong at distance.",
+                "Block '{0}' has no usable block-colour texture (vanilla resolved it to unknown.png). "
+                + "The mod uses another of its own textures instead, so it does not render wrong at distance.",
                 block.Code);
         }
         return found;
@@ -753,8 +754,8 @@ public class VintageHorizonsModSystem : ModSystem
         if (pipeline.PaletteEntriesRepaired > 0)
         {
             Mod.Logger.Notification(
-                "  repaired {0} palette entries that were cached with no colour at all; "
-                + "they drew as black terrain and are written back as they load.",
+                "  repaired {0} palette entries that were cached with no colour at all. "
+                + "They drew as black terrain, and the repair is written back as they load.",
                 pipeline.PaletteEntriesRepaired);
         }
 
@@ -864,7 +865,7 @@ public class VintageHorizonsModSystem : ModSystem
         // Registered in both states on purpose: the player who most needs this one is the
         // player we are currently idle for.
         capi.ChatCommands.Create("vhdefer")
-            .WithDescription("Stay idle when another LOD mod is drawing (default on; off draws anyway)")
+            .WithDescription("Stay idle when another LOD mod draws. Default on. Off draws anyway.")
             .WithArgs(capi.ChatCommands.Parsers.OptionalBool("on"))
             .HandleWith(args =>
             {
@@ -894,7 +895,7 @@ public class VintageHorizonsModSystem : ModSystem
         if (deferringTo != null) return;
 
         capi.ChatCommands.Create("vhwhy")
-            .WithDescription("Explain why nearby LOD terrain is drawn coarser than it should be")
+            .WithDescription("Explain why nearby LOD terrain draws coarser than the detail setting allows")
             .HandleWith(_ =>
             {
                 var at = capi.World.Player.Entity.Pos;
@@ -916,7 +917,7 @@ public class VintageHorizonsModSystem : ModSystem
             });
 
         capi.ChatCommands.Create("vhdetail")
-            .WithDescription("Distance in blocks before LOD detail starts halving (default 512; higher = sharper far terrain, more VRAM/CPU)")
+            .WithDescription("Distance in blocks before LOD detail starts to halve. Default 512. A higher value gives sharper far terrain and costs more VRAM and CPU.")
             .WithArgs(capi.ChatCommands.Parsers.OptionalInt("blocks"))
             .HandleWith(args =>
             {

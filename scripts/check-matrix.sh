@@ -771,7 +771,7 @@ JSON
         || { echo "      x the cache never opened lazily"; ok=0; }
 
     # The client must notice the cache that appeared mid-session and adopt from it.
-    if ! vh_wait_for "$CLIENT_LOG" "adopting them as the view needs them" 240 \
+    if ! vh_wait_for "$CLIENT_LOG" "adopts them as the view needs them" 240 \
         "$VH_SANDBOX/test-instance.pid"; then
         echo "      x the client never saw the late-appearing server cache"
         ok=0
@@ -1028,7 +1028,7 @@ if wants deferral; then
         start_server
         # Deferring returns from StartClientSide before a world exists, so "Level
         # finalized" is never logged. The idle notice is the only marker there is.
-        if run_client "staying idle" 15; then
+        if run_client "VintageHorizons stays idle" 15; then
             assert_log --label "deferral  " --expect-idle || fail "deferral"
 
             # The one instruction that stops a player concluding the fix does not work.
@@ -1085,7 +1085,7 @@ if wants farseer-off; then
             assert_log --label "farseer-off" --expect-capture --expect-assist absent \
                 || fail "farseer-off"
 
-            if grep -q "is staying idle" "$CLIENT_LOG"; then
+            if grep -q "VintageHorizons stays idle" "$CLIENT_LOG"; then
                 echo "      x went idle for a mod that is switched off"
                 fail "farseer-off"
             else
@@ -1149,7 +1149,7 @@ JSON
         start_server
         if run_client; then
             assert_log --label "override   " --expect-capture || fail "defer-override"
-            if grep -q "is staying idle" "$CLIENT_LOG"; then
+            if grep -q "VintageHorizons stays idle" "$CLIENT_LOG"; then
                 echo "      x the override did not override"
                 fail "defer-override"
             else
@@ -1171,7 +1171,7 @@ JSON
         rm -f "$VH_SANDBOX/ModConfig/vintagehorizons.json"
         printf '{ "Enabled": fal\n' > "$VH_SANDBOX/ModConfig/farseer-client.json"
         start_server
-        if run_client "staying idle" 15; then
+        if run_client "VintageHorizons stays idle" 15; then
             assert_log --label "badswitch  " --expect-idle || fail "defer-override"
             echo "      - deferred on a switch file it could not parse"
         else
@@ -1202,7 +1202,7 @@ JSON
 
             # Saved is not applied: this session must still be idle, or the message that
             # promises a restart is lying.
-            if grep -q "is staying idle" "$CLIENT_LOG"; then
+            if grep -q "VintageHorizons stays idle" "$CLIENT_LOG"; then
                 echo "      - stayed idle for this session, as the restart notice says"
             else
                 echo "      x the override took effect mid-session"

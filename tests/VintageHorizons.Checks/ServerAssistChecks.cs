@@ -54,12 +54,12 @@ public static class ServerAssistChecks
         (bool off, string offStatus) = AssistGreeting.Describe(
             capturing: true, serving: false, keyCount: 40, serveRadiusBlocks: 0);
         c.False(off, "capture on and serving off is off");
-        c.True(offStatus.Contains("not sharing"), "and says the cache exists but is not shared");
+        c.True(offStatus.Contains("does not share"), "and says that the cache exists but is not shared");
 
         (bool none, string noneStatus) = AssistGreeting.Describe(
             capturing: false, serving: false, keyCount: 0, serveRadiusBlocks: 0);
         c.False(none, "a server building no cache is off");
-        c.True(noneStatus.Contains("no LOD cache is being built"), "and says so");
+        c.True(noneStatus.Contains("does not build a LOD cache"), "and says so");
 
         // The property the defect broke, stated on its own: the key count decides the
         // wording and nothing else.
@@ -278,11 +278,11 @@ public static class ServerAssistChecks
         {
             Protocol = LodAssist.Protocol,
             Enabled = false,
-            Status = "this server has a LOD cache but is not sharing it",
+            Status = "this server has a LOD cache but does not share it",
         });
         c.False(client.Available, "a disabled assist is not available");
         c.Eq(0, client.NegotiatedProtocol, "a disabled assist negotiates nothing");
-        c.True(client.Status.Contains("not sharing"), "the server's own reason is passed through to the player");
+        c.True(client.Status.Contains("does not share"), "the server's own reason is passed through to the player");
 
         // An unusable protocol must leave the assist off rather than half on.
         client.Reset();
