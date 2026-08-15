@@ -5,6 +5,8 @@ Written when a version is released, not when a commit lands - see
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-08-15
+
 **Fixed: chiselled blocks drew as one flat wrong colour in the distance.** Reported as
 purple. A chiselled block's colour lives in its block entity, and only a probe at the
 block's exact position finds it - the world map colours chisel work the same way. The
@@ -65,6 +67,33 @@ that the server held for hours, and a relog was the only cure. A sweep that fini
 late did the same, and so did other players who explored. The server now offers what it
 gained every few seconds, and `/vhserver` reports how many of those follow-up offers it
 sent.
+
+**Fixed: a section requested too early was lost for the rest of the session.** The
+server answers every request, but it refused with the same empty packet both when it
+will never have that section and when it simply did not write it yet. The client read
+both answers as "never" and stopped asking. A server that sweeps or runs `/vhgen` is in
+the "not yet" state all the time, so a player who joined in the middle of a run gave up
+on sections whose data arrived seconds later. The two answers are now distinct, and the
+client retries "not yet" a bounded number of times. An older client ignores the new
+field and keeps the behaviour it had.
+
+**Fixed: short freezes while exploring with a cold cache.** A capture that landed on a
+section no longer in memory read and decompressed that section inline, on the game
+tick. The worst measured case took 113 ms, which is more than two whole game ticks.
+Capture now waits for the section to load in the background, and results apply in
+order when it arrives.
+
+**Faster.** Flat water broke into one rectangle per depth step of the seabed under it,
+because the merge grouped surface quads by a depth they never draw. A flat sea now
+collapses the way the mesher always intended: water quads over a sloping seabed went
+from 602 to 35, with identical geometry on screen. Opening a world with a large cache
+now reads only the keys it needs - 931 ms down to 13 ms on a 691 MB cache. The
+singleplayer client now asks the server-side cache what it holds once a second, not
+twice a frame, which cost up to 105 ms of main-thread time per second on a large
+world. The renderer's per-frame walk drops a square root and a logarithm per node. The
+sky colour is computed only for the horizon ring that uses it. And meshing a section
+stops allocating 241 KB of scratch buffers - simple terrain now allocates less than
+1 KB.
 
 **Fixed: another LOD mod that is switched off no longer switches this one off too.**
 0.2.0 went idle whenever Farseer, ChunkLOD, Vistas Beyond or TopoHorizon was loaded. On a server that
