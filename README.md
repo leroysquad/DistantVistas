@@ -69,7 +69,7 @@ privilege, which every singleplayer host has:
 | Command | Purpose |
 | --- | --- |
 | `/vhserver` | Server assist status: settings in force, cache size, transfer counters |
-| `/vhgen start [radius] [x z]` | Build the LOD cache around you (or around `x z`), generating terrain nobody has visited. Also `stop` and `status`. See below. |
+| `/vhgen start [radius] [x z]` | Build the LOD cache around you (or around `x z`). It generates terrain that nobody visited yet. Also `stop` and `status`. See below. |
 
 Both settings persist in `VintagestoryData/ModConfig/vintagehorizons.json`.
 The per-world cache lives in `VintagestoryData/ModData/vintagehorizons/<savegame-id>.db`.
@@ -110,7 +110,7 @@ The default is safe because the sweep **generates nothing**. The sweep skips a p
 that nobody visited. It also skips a border around the explored terrain, because a
 load there makes the engine generate the missing neighbours.
 
-`PregenRadiusChunks` takes the opposite trade. It creates terrain nobody has visited, so
+`PregenRadiusChunks` takes the opposite trade. It creates terrain that nobody visited yet, so
 it stays off unless an admin asks for it. That setting now uses the same transient
 generation `/vhgen` uses, so it too writes nothing to the savegame.
 
@@ -118,7 +118,7 @@ generation `/vhgen` uses, so it too writes nothing to the savegame.
 
 Sweeping and capture cover only terrain that exists. `/vhgen start [radius] [x z]` covers
 the rest. It builds the LOD picture around you, or around coordinates you give, for land
-nobody has visited. It writes **nothing** to the savegame.
+that nobody visited yet. It writes **nothing** to the savegame.
 
 The engine's `PeekChunkColumn` runs real worldgen from the seed and returns the column
 transiently. The mod captures it and throws the terrain away. A column that already

@@ -7,7 +7,7 @@ hit it partway through - read it once before starting.
 
 ```sh
 git status                # clean, nothing stray staged
-scripts/check.sh           # all three tiers; ~25 min
+scripts/check.sh           # all three tiers; roughly 65 min
 ```
 
 Do this before touching version numbers. A release built on a red check is not a release,
@@ -120,5 +120,6 @@ Manual, on mods.vintagestory.at:
 ## Not doing
 
 No automated publish to ModDB. It has no API for this, and an upload to a public listing
-should stay a deliberate human action regardless. No `-dev`/prerelease version suffixes,
-because this project has not used them and there is no need invented here.
+stays a deliberate human action regardless. Between releases the working version carries
+a `-dev` suffix (`0.2.1-dev`), so a development build identifies itself in logs instead
+of wearing the last release's number. The release drops the suffix.
