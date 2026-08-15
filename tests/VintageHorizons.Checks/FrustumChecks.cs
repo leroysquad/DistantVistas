@@ -5,9 +5,9 @@ namespace VintageHorizons.Checks;
 /// <summary>
 /// View-frustum plane extraction and the p-vertex box test.
 ///
-/// notes/STATUS.md has claimed since the performance pass that this has a standalone
-/// harness. It did not - nothing matching it exists in the tree or anywhere in the history.
-/// This is that harness, written for real.
+/// A note from the performance pass claimed that this had a standalone harness. It did
+/// not - nothing matching it exists in the tree or anywhere in the history. This is
+/// that harness, written for real.
 ///
 /// Matrices are built with the game's own Mat4f rather than by hand, which is what keeps
 /// the extraction's column-major assumption honest: an assumption tested against a matrix

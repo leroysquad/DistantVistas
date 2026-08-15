@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Sandboxed Vintage Story CLIENT for VintageHorizons testing.
 #
-# Isolation guarantees (all of them matter - see notes/STATUS.md "test isolation"):
+# Isolation guarantees (all of them matter - each one exists because its absence failed):
 #  - Own dataPath (.testdata): never touches the user's real game data.
 #  - Own TMPDIR: the game's single-instance pipe (CoreFxPipe_SingleInstance
 #    VintageStoryWithUriScheme) lives in $TMPDIR. Without this, launching with
