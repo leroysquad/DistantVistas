@@ -1,4 +1,6 @@
-namespace VintageHorizons.Checks;
+using DistantVistas;
+
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// Whether to stay idle for another LOD mod.
@@ -37,7 +39,7 @@ public static class DeferralChecks
         // config file has no such field at all: the reader leaves the field alone, so the
         // class default is the whole answer. True here would silently start every one of
         // those players drawing over their server's LOD mod.
-        c.False(new VintageHorizonsConfig().IgnoreOtherLodMods,
+        c.False(new DistantVistasConfig().IgnoreOtherLodMods,
             "an upgraded config defers rather than overriding");
 
         // The shapes, as the reader sees them after LoadModConfig has had its turn.

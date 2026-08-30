@@ -1,4 +1,4 @@
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// Section key packing and the quadtree coordinate math built on it. Everything the
@@ -14,6 +14,7 @@ public static class KeyMathChecks
         Footprint(c);
         Distance(c);
         WantedLevelFromSquaredDistance(c);
+        WantedLevelHonoursVisualCap(c);
         CaptureSamplePositionIsTheBlockItself(c);
     }
 
@@ -116,6 +117,23 @@ public static class KeyMathChecks
 
         c.True(atFiveTwelve != atTwoThousand,
             "changing the detail distance changes the answer, so the table is rebuilt");
+    }
+
+    static void WantedLevelHonoursVisualCap(Check c)
+    {
+        int original = LodWorld.MaxVisualLevel;
+        try
+        {
+            LodWorld.MaxVisualLevel = 2;
+            c.Eq(2, LodWorld.WantedLevelFor(1_000_000),
+                "extreme distance never selects columns coarser than four blocks");
+            c.True(LodWorld.WantedLevelFor(0) <= 2,
+                "the visual cap does not disturb nearer levels");
+        }
+        finally
+        {
+            LodWorld.MaxVisualLevel = original;
+        }
     }
 
     static void Packing(Check c)

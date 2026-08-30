@@ -30,8 +30,8 @@ done
 
 CLIENT_LOG="$VH_SANDBOX/Logs/client-main.log"
 SERVER_LOG="$VH_SANDBOX/server/Logs/server-main.log"
-SERVER_CONFIG="$VH_SANDBOX/server/ModConfig/vintagehorizons-server.json"
-BENCH_BUILT="$VH_ROOT/bench/VintageHorizonsBench/bin/Debug/net10.0/Mods/vintagehorizonsbench"
+SERVER_CONFIG="$VH_SANDBOX/server/ModConfig/distantvistas-server.json"
+BENCH_BUILT="$VH_ROOT/bench/DistantVistasBench/bin/Debug/net10.0/Mods/distantvistasbench"
 PORT="${VH_TEST_PORT:-42425}"
 failures=0
 
@@ -53,11 +53,11 @@ fail()  { echo "  $1: FAILED"; failures=$((failures + 1)); }
 
 client_mod()   { "$VH_ROOT/scripts/deploy-sandbox.sh" client >/dev/null; }
 server_mod()   { "$VH_ROOT/scripts/deploy-sandbox.sh" server >/dev/null; }
-no_client_mod(){ rm -rf "${VH_SANDBOX:?}/Mods/vintagehorizons"; }
-no_server_mod(){ rm -rf "${VH_SANDBOX:?}/server/Mods/vintagehorizons"; }
+no_client_mod(){ rm -rf "${VH_SANDBOX:?}/Mods/distantvistas"; }
+no_server_mod(){ rm -rf "${VH_SANDBOX:?}/server/Mods/distantvistas"; }
 
-wipe_client_cache() { rm -rf "${VH_SANDBOX:?}/ModData/vintagehorizons"; }
-wipe_server_cache() { rm -rf "${VH_SANDBOX:?}/server/ModData/vintagehorizons"; }
+wipe_client_cache() { rm -rf "${VH_SANDBOX:?}/ModData/distantvistas"; }
+wipe_server_cache() { rm -rf "${VH_SANDBOX:?}/server/ModData/distantvistas"; }
 
 # Written before the server starts; it sanitizes and rewrites this file on load, so
 # reading it back afterwards also proves the round trip.
@@ -467,7 +467,7 @@ JSON
     [[ "$before" == "$after" && -n "$before" ]] \
         || { echo "      x the savegame changed: keys or content differ"; ok=0; }
 
-    db="$(ls "$VH_SANDBOX"/server/ModData/vintagehorizons/*-server.db 2>/dev/null | head -1)" || true
+    db="$(ls "$VH_SANDBOX"/server/ModData/distantvistas/*-server.db 2>/dev/null | head -1)" || true
     sections=$(python3 -c "
 import sqlite3
 print(sqlite3.connect('file:$db?mode=ro', uri=True).execute('SELECT COUNT(*) FROM Section').fetchone()[0])" 2>/dev/null || echo 0)
@@ -709,7 +709,7 @@ JSON
         # exists to cover. Without this line the run only says "no numbers".
         if grep -q "the assist is off" "$CLIENT_LOG"; then
             echo "      x the client was told the assist is off at join, so it stopped listening"
-            grep -oE "VintageHorizons: server has VintageHorizons but the assist is off.*" \
+            grep -oE "DistantVistas: server has DistantVistas but the assist is off.*" \
                 "$CLIENT_LOG" | tail -1 | sed 's/^/        /'
             ok=0
         fi
@@ -739,7 +739,7 @@ if wants generate-sp; then
     client_mod
     # The integrated server reads the same ModConfig directory as the client sandbox.
     mkdir -p "$VH_SANDBOX/ModConfig"
-    cat > "$VH_SANDBOX/ModConfig/vintagehorizons-server.json" <<'JSON'
+    cat > "$VH_SANDBOX/ModConfig/distantvistas-server.json" <<'JSON'
 {
   "EnableCapture": true,
   "SweepSavegame": false,
@@ -796,7 +796,7 @@ if wants generate-survival; then
     echo "  [generate-survival] a survival host can run /vhgen, with no creative mode"
     client_mod
     mkdir -p "$VH_SANDBOX/ModConfig"
-    cat > "$VH_SANDBOX/ModConfig/vintagehorizons-server.json" <<'JSON'
+    cat > "$VH_SANDBOX/ModConfig/distantvistas-server.json" <<'JSON'
 {
   "EnableCapture": true,
   "SweepSavegame": false,
@@ -997,9 +997,9 @@ JSON
                 echo "      x expected two screenshots, got $shots"
                 failures=$((failures + 1))
             fi
-            rm -rf "${VH_SANDBOX:?}/Mods/vintagehorizonsbench"
+            rm -rf "${VH_SANDBOX:?}/Mods/distantvistasbench"
         else
-            echo "      - skipping the visual pair: build bench/VintageHorizonsBench first"
+            echo "      - skipping the visual pair: build bench/DistantVistasBench first"
         fi
     fi
 fi
@@ -1024,11 +1024,11 @@ if wants deferral; then
         # matters for the same reason: defer-override writes IgnoreOtherLodMods into it,
         # and a suite that dies before its cleanup leaves that set for the next run, where
         # this scenario runs first and would fail for a reason that is not its own.
-        rm -f "$VH_SANDBOX/ModConfig/farseer-client.json" "$VH_SANDBOX/ModConfig/vintagehorizons.json"
+        rm -f "$VH_SANDBOX/ModConfig/farseer-client.json" "$VH_SANDBOX/ModConfig/distantvistas.json"
         start_server
         # Deferring returns from StartClientSide before a world exists, so "Level
         # finalized" is never logged. The idle notice is the only marker there is.
-        if run_client "VintageHorizons stays idle" 15; then
+        if run_client "DistantVistas stays idle" 15; then
             assert_log --label "deferral  " --expect-idle || fail "deferral"
 
             # The one instruction that stops a player concluding the fix does not work.
@@ -1085,7 +1085,7 @@ if wants farseer-off; then
             assert_log --label "farseer-off" --expect-capture --expect-assist absent \
                 || fail "farseer-off"
 
-            if grep -q "VintageHorizons stays idle" "$CLIENT_LOG"; then
+            if grep -q "DistantVistas stays idle" "$CLIENT_LOG"; then
                 echo "      x went idle for a mod that is switched off"
                 fail "farseer-off"
             else
@@ -1143,13 +1143,13 @@ if wants defer-override; then
 
         # Part 1: Farseer switched ON, override set. We must draw regardless.
         rm -f "$VH_SANDBOX/ModConfig/farseer-client.json"
-        cat > "$VH_SANDBOX/ModConfig/vintagehorizons.json" <<'JSON'
+        cat > "$VH_SANDBOX/ModConfig/distantvistas.json" <<'JSON'
 { "FarViewDistanceCap": 0, "DetailDistance": 512, "IgnoreOtherLodMods": true }
 JSON
         start_server
         if run_client; then
             assert_log --label "override   " --expect-capture || fail "defer-override"
-            if grep -q "VintageHorizons stays idle" "$CLIENT_LOG"; then
+            if grep -q "DistantVistas stays idle" "$CLIENT_LOG"; then
                 echo "      x the override did not override"
                 fail "defer-override"
             else
@@ -1168,10 +1168,10 @@ JSON
 
         # Part 2: no override, and a switch file that is not valid JSON. Deferring is the
         # only safe reading, and the mod must still start.
-        rm -f "$VH_SANDBOX/ModConfig/vintagehorizons.json"
+        rm -f "$VH_SANDBOX/ModConfig/distantvistas.json"
         printf '{ "Enabled": fal\n' > "$VH_SANDBOX/ModConfig/farseer-client.json"
         start_server
-        if run_client "VintageHorizons stays idle" 15; then
+        if run_client "DistantVistas stays idle" 15; then
             assert_log --label "badswitch  " --expect-idle || fail "defer-override"
             echo "      - deferred on a switch file it could not parse"
         else
@@ -1184,7 +1184,7 @@ JSON
         # from a state where the renderer does not exist. SaveConfig used to read the
         # renderer unconditionally, so this is the command whose failure would strand
         # exactly the player it exists to rescue.
-        rm -f "$VH_SANDBOX/ModConfig/farseer-client.json" "$VH_SANDBOX/ModConfig/vintagehorizons.json"
+        rm -f "$VH_SANDBOX/ModConfig/farseer-client.json" "$VH_SANDBOX/ModConfig/distantvistas.json"
         start_server
         # Waits for the RESULT line, not the "sending" line. The first version waited for
         # the latter and passed while the command did nothing at all, because client-side
@@ -1192,7 +1192,7 @@ JSON
         if VINTAGEHORIZONS_AUTOCMD=".vhdefer off" run_client "Auto-command result:" 15; then
             assert_log --label "vhdefer    " --expect-idle || fail "defer-override"
 
-            saved="$VH_SANDBOX/ModConfig/vintagehorizons.json"
+            saved="$VH_SANDBOX/ModConfig/distantvistas.json"
             if [[ -f "$saved" ]] && python3 -c "import json,sys; sys.exit(0 if json.load(open('$saved')).get('IgnoreOtherLodMods') is True else 1)" 2>/dev/null; then
                 echo "      - .vhdefer off saved the override from an idle client"
             else
@@ -1202,7 +1202,7 @@ JSON
 
             # Saved is not applied: this session must still be idle, or the message that
             # promises a restart is lying.
-            if grep -q "VintageHorizons stays idle" "$CLIENT_LOG"; then
+            if grep -q "DistantVistas stays idle" "$CLIENT_LOG"; then
                 echo "      - stayed idle for this session, as the restart notice says"
             else
                 echo "      x the override took effect mid-session"
@@ -1213,7 +1213,7 @@ JSON
             fail "defer-override"
         fi
 
-        rm -f "$VH_SANDBOX/ModConfig/farseer-client.json" "$VH_SANDBOX/ModConfig/vintagehorizons.json"
+        rm -f "$VH_SANDBOX/ModConfig/farseer-client.json" "$VH_SANDBOX/ModConfig/distantvistas.json"
         rm -rf "${VH_SANDBOX:?}/Mods/farseer" "${VH_SANDBOX:?}/server/Mods/farseer"
     else
         echo "      - skipping: no competing LOD mod at bench/mods/farseer"

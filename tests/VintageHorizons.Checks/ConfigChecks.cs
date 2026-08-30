@@ -1,6 +1,6 @@
-using VintageHorizons.Net;
+using DistantVistas.Net;
 
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// The server-side admin knobs. Sanitize is the boundary between a config file an admin

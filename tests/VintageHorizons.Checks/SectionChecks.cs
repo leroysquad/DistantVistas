@@ -1,4 +1,4 @@
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// The RLE column store. Runs live in one flat array with per-column prefix offsets, so

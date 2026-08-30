@@ -1,6 +1,6 @@
 
 
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// Random sequences of column edits, with the structural invariants re-checked after

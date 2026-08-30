@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Sandboxed Vintage Story CLIENT for VintageHorizons testing.
+# Sandboxed Vintage Story CLIENT for DistantVistas testing.
 #
 # Isolation guarantees (all of them matter - each one exists because its absence failed):
 #  - Own dataPath (.testdata): never touches the user's real game data.

@@ -33,9 +33,9 @@ write the entry properly, rather than ship it thin.
 
 Two places carry a description of what the mod does, and neither updates itself:
 
-- **`VintageHorizons/modinfo.json`**, the `"description"` field - shown in-game on the
+- **`DistantVistas/modinfo.json`**, the `"description"` field - shown in-game on the
   mod list and read by ModDB's own listing.
-- **The ModDB page itself** (mods.vintagestory.at/vintagehorizons) - a separate, manual
+- **The ModDB page itself** (mods.vintagestory.at/distantvistas) - a separate, manual
   edit; there is no API or script for this repo to reach it.
 
 Re-read the current text against what the release actually does before assuming it still
@@ -48,8 +48,8 @@ automatically, because nothing checks prose against capability.
 Both of these must carry the exact same version string, and a fast-tier check
 (`StaticAssetChecks`) fails the build if they disagree:
 
-- `VintageHorizons/modinfo.json` - `"version"`
-- `VintageHorizons/VintageHorizons.csproj` - `<Version>`
+- `DistantVistas/modinfo.json` - `"version"`
+- `DistantVistas/DistantVistas.csproj` - `<Version>`
 
 ## 6. Re-run the fast tier
 
@@ -66,8 +66,8 @@ seconds. No need to repeat smoke/matrix for a version-only change.
 scripts/package.sh
 ```
 
-Produces `dist/vintagehorizons_X.Y.Z.zip` from a Release build. Spot-check the zip before
-trusting it - `unzip -l dist/vintagehorizons_X.Y.Z.zip`:
+Produces `dist/distantvistas_X.Y.Z.zip` from a Release build. Spot-check the zip before
+trusting it - `unzip -l dist/distantvistas_X.Y.Z.zip`:
 
 - `LICENSE` is present (0.1.0 shipped without it - this is the regression check for that).
 - No `.pdb` file.
@@ -82,7 +82,7 @@ it against a vanilla server at least once before publishing:
 
 ```sh
 mkdir -p /tmp/vh-release-check && cd /tmp/vh-release-check
-unzip -o ~/Projects/VintageHorizons/dist/vintagehorizons_X.Y.Z.zip -d vintagehorizons
+unzip -o ~/Projects/DistantVistas/dist/distantvistas_X.Y.Z.zip -d distantvistas
 # point a throwaway client's addModPath here and confirm it loads and captures
 ```
 
@@ -93,9 +93,9 @@ commits (`git show v0.1.1`, `git show v0.1.0` for reference). Say what is in the
 and why it is shaped this way, not a changelog copy-paste:
 
 ```sh
-git add VintageHorizons/modinfo.json VintageHorizons/VintageHorizons.csproj CHANGELOG.md
+git add DistantVistas/modinfo.json DistantVistas/DistantVistas.csproj CHANGELOG.md
 git commit -m "Release X.Y.Z"
-git tag -a vX.Y.Z -m "Vintage Horizons X.Y.Z"
+git tag -a vX.Y.Z -m "Distant Vistas X.Y.Z"
 ```
 
 ## 10. Push
@@ -113,7 +113,7 @@ repo.
 
 Manual, on mods.vintagestory.at:
 
-- Upload `dist/vintagehorizons_X.Y.Z.zip`.
+- Upload `dist/distantvistas_X.Y.Z.zip`.
 - Paste the new `CHANGELOG.md` entry into the version's changelog field.
 - Update the page description if step 4 changed it.
 

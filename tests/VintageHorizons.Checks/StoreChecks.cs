@@ -1,4 +1,4 @@
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// The on-disk blob format, round-tripped with no database.
@@ -16,6 +16,8 @@ public static class StoreChecks
         DeferredPalette(c);
         AFailedLookupIsNotRemembered(c);
         AColourlessCacheIsRepaired(c);
+        AStaleStableColourIsRefreshed(c);
+        DerivedMipUpgradeKeepsDetailedLeaves(c);
         DisposingTheOfferReaderReleasesItsFileHandle(c);
         Rejection(c);
         PurgeKeepsMatchingData(c);
@@ -62,7 +64,8 @@ public static class StoreChecks
             // Now make the stored version disagree. The purge must fire, and say how
             // much it took - silent destruction of a player's cache is the thing to
             // avoid, not the destruction itself.
-            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection("Data Source=" + path))
+            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(
+                "Data Source=" + path + ";Pooling=False"))
             {
                 conn.Open();
                 using var cmd = conn.CreateCommand();
@@ -227,6 +230,66 @@ public static class StoreChecks
             "so the repair finishes instead of running again every load");
 
         c.Eq(0, LodPaletteRepair.Fill(section, _ => 0), "a repaired section needs no second pass");
+    }
+
+    static void AStaleStableColourIsRefreshed(Check c)
+    {
+        var section = new LodSection();
+        section.FindOrAddPaletteEntry(blockId: 11, color: unchecked((int)0xFF806040), flags: 0);
+        section.FindOrAddPaletteEntry(blockId: 12, color: unchecked((int)0xFF112233), flags: 0);
+
+        int refreshed = LodPaletteRepair.RefreshStable(section, id =>
+            id == 11 ? unchecked((int)0xFF336699) : null);
+
+        c.Eq(1, refreshed, "one stale stable palette colour is refreshed");
+        c.Eq(unchecked((int)0xFF336699), section.Palette[0].Color,
+            "old cached grass takes the current stable composite");
+        c.Eq(unchecked((int)0xFF112233), section.Palette[1].Color,
+            "position-dependent palette colour is preserved");
+        c.Eq(0, LodPaletteRepair.RefreshStable(section, id =>
+            id == 11 ? unchecked((int)0xFF336699) : null),
+            "a refreshed palette does not rewrite every time it loads");
+    }
+
+    static void DerivedMipUpgradeKeepsDetailedLeaves(Check c)
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "vh-mip-upgrade-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "cache.db");
+        try
+        {
+            var store = new LodStore(new CaptureLogger());
+            c.True(store.Open(path), "derived-mip fixture cache opens");
+            store.SaveBlob(0, 4, 4, new byte[] { 1 }, applyToParent: false);
+            store.SaveBlob(1, 2, 2, new byte[] { 1 }, applyToParent: false);
+            store.Dispose();
+
+            using (var conn = new Microsoft.Data.Sqlite.SqliteConnection(
+                "Data Source=" + path + ";Pooling=False"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText =
+                    "INSERT OR REPLACE INTO Meta (Key, Value) VALUES ('DerivedMipVersion', 'old')";
+                cmd.ExecuteNonQuery();
+            }
+
+            var logger = new CaptureLogger();
+            var reopened = new LodStore(logger);
+            c.True(reopened.Open(path), "cache with old derived mips reopens");
+            var keys = new List<(int Level, bool Apply)>();
+            int kept = reopened.LoadAllKeys((level, _, _, apply) => keys.Add((level, apply)));
+
+            c.Eq(1, kept, "the rebuild discards compressed parents but preserves detailed L0");
+            c.Eq(0, keys[0].Level, "the preserved row is detailed L0 terrain");
+            c.True(keys[0].Apply, "the preserved L0 row is queued to rebuild its parents");
+            c.True(logger.Contains("rebuild"), "the cache explains why coarse levels were removed");
+            reopened.Dispose();
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* temp dir */ }
+        }
     }
 
     /// <summary>

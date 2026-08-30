@@ -1,8 +1,8 @@
 using System.Reflection;
 using ProtoBuf;
-using VintageHorizons.Net;
+using DistantVistas.Net;
 
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// The packet layout on the wire, pinned.

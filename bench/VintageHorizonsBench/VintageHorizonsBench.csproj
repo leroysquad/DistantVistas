@@ -1,6 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
-  <!-- Measurement harness, deliberately a SEPARATE mod from VintageHorizons: it has to
+  <!-- Measurement harness, deliberately a SEPARATE mod from DistantVistas: it has to
        run unchanged while a competing LOD mod (Farseer, ChunkLOD) is the one under
        test, so it cannot live inside our own mod. Never shipped in the release zip. -->
 
@@ -9,8 +9,8 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <AssemblyName>VintageHorizonsBench</AssemblyName>
-    <RootNamespace>VintageHorizonsBench</RootNamespace>
+    <AssemblyName>DistantVistasBench</AssemblyName>
+    <RootNamespace>DistantVistasBench</RootNamespace>
     <Version>0.1.0</Version>
   </PropertyGroup>
 
@@ -32,7 +32,7 @@
 
   <Target Name="PackageModFolder" AfterTargets="Build">
     <PropertyGroup>
-      <ModFolder>$(OutputPath)Mods/vintagehorizonsbench/</ModFolder>
+      <ModFolder>$(OutputPath)Mods/distantvistasbench/</ModFolder>
     </PropertyGroup>
     <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ModFolder)" />
     <Copy SourceFiles="modinfo.json" DestinationFolder="$(ModFolder)" />

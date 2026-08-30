@@ -1,4 +1,4 @@
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// Section snapshot to vertex data. Two things are worth pinning here: the greedy merge,
@@ -20,7 +20,8 @@ public static class MesherChecks
         WaterIsASeparatePass(c);
         ThinMats(c);
         CoverageRules(c);
-        Frontier(c);
+        MissingNeighbourDoesNotBecomeCliff(c);
+        UncapturedColumnDoesNotBecomeCliff(c);
     }
 
     static void Empty(Check c)
@@ -34,18 +35,18 @@ public static class MesherChecks
     /// <summary>
     /// The reason the mesher exists in this shape. A flat plain is 4096 columns with
     /// identical tops; naively that is 4096 quads for the surface plus a wall per column
-    /// edge. Merged it is one rectangle and four frontier ribbons.
+    /// edge. With no loaded neighbours, unknown coverage must not become a cliff.
     /// </summary>
     static void GreedyMerge(Check c)
     {
         LodSection flat = Solid(yTop: 10, yBottom: 0);
         MeshResult mesh = LodMesher.BuildMesh(Fixtures.Job(flat));
 
-        // 1 top rectangle + 4 frontier walls. No bottom faces: yBottom is 0, and the mesher
-        // skips floors at or below y=1 because nothing can ever see under the world.
-        c.Eq(5, Quads(mesh.VertexCount), "a flat 64x64 plain collapses to five quads");
-        c.Eq(20, mesh.VertexCount, "five quads is twenty vertices");
-        c.Eq(30, mesh.IndexCount, "five quads is thirty indices (two triangles each)");
+        // One top rectangle. Missing neighbours are unknown coverage, not world edges.
+        // No bottom faces: yBottom is 0, and nothing can see under the world.
+        c.Eq(1, Quads(mesh.VertexCount), "a flat section without neighbours has no frontier walls");
+        c.Eq(4, mesh.VertexCount, "one quad is four vertices");
+        c.Eq(6, mesh.IndexCount, "one quad is six indices");
 
         // The merged top must actually span the section, not just claim to.
         float[] xs = Every3rd(mesh.Xyz, 0);
@@ -227,36 +228,33 @@ public static class MesherChecks
             "a solid wall is not culled by thin cover beside it");
     }
 
-    /// <summary>
-    /// A missing neighbour section is the edge of explored space, and renders as a wall.
-    /// Treating it as covered would open the world at every frontier; treating a present
-    /// but empty neighbour as a wall would build one down the middle of every plain.
-    /// </summary>
-    static void Frontier(Check c)
+    static void MissingNeighbourDoesNotBecomeCliff(Check c)
     {
         LodSection flat = Solid(yTop: 10, yBottom: 0);
 
         MeshResult alone = LodMesher.BuildMesh(Fixtures.Job(flat));
-        c.Eq(5, Quads(alone.VertexCount), "with no neighbours, all four frontier walls are drawn");
+        c.Eq(1, Quads(alone.VertexCount),
+            "a missing neighbour does not create a full-height white cliff");
 
-        // West neighbour present and matching: that wall goes away.
-        var withWest = new SectionSnapshot?[4];
-        withWest[0] = Fixtures.Snap(flat);
-        MeshResult joined = LodMesher.BuildMesh(Fixtures.Job(flat, 0, withWest));
-        c.Eq(4, Quads(joined.VertexCount), "a matching west neighbour removes the west wall");
-
-        // All four present: only the surface remains.
-        var allFour = new SectionSnapshot?[4];
-        for (int i = 0; i < 4; i++) allFour[i] = Fixtures.Snap(flat);
-        MeshResult surrounded = LodMesher.BuildMesh(Fixtures.Job(flat, 0, allFour));
-        c.Eq(1, Quads(surrounded.VertexCount), "fully surrounded terrain is just its surface");
-
-        // A neighbour that is present but shorter leaves the exposed part of the wall.
         LodSection shorter = Solid(yTop: 4, yBottom: 0);
-        var withShort = new SectionSnapshot?[4];
-        for (int i = 0; i < 4; i++) withShort[i] = Fixtures.Snap(shorter);
-        MeshResult stepped = LodMesher.BuildMesh(Fixtures.Job(flat, 0, withShort));
-        c.Eq(5, Quads(stepped.VertexCount), "a shorter neighbour leaves the exposed wall above it");
+        var neighbors = new SectionSnapshot?[4];
+        for (int i = 0; i < neighbors.Length; i++) neighbors[i] = Fixtures.Snap(shorter);
+
+        MeshResult stepped = LodMesher.BuildMesh(Fixtures.Job(flat, neighbors: neighbors));
+        c.Eq(5, Quads(stepped.VertexCount),
+            "a loaded shorter neighbour still exposes a real cliff");
+    }
+
+    static void UncapturedColumnDoesNotBecomeCliff(Check c)
+    {
+        var partial = new LodSection();
+        int rock = partial.FindOrAddPaletteEntry(blockId: 1, color: 0x00808080, flags: 0);
+        partial.SetColumn(LodSection.ColumnIndex(10, 10),
+            new[] { LodSection.PackRun(rock, 30, 0) });
+
+        MeshResult mesh = LodMesher.BuildMesh(Fixtures.Job(partial));
+        c.Eq(1, Quads(mesh.VertexCount),
+            "unknown columns inside a partial section do not form a skinny full-height tower");
     }
 
     // ---- helpers ----

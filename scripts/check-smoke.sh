@@ -36,7 +36,7 @@ echo "  smoke: deploying a fresh build"
 
 # A vanilla server, deliberately: the mod must work as a client-side-only install, and
 # that is the configuration almost every player is actually in.
-rm -rf "${VH_SANDBOX:?}/server/Mods/vintagehorizons"
+rm -rf "${VH_SANDBOX:?}/server/Mods/distantvistas"
 
 cleanup
 echo "  smoke: starting a vanilla dedicated server"
@@ -72,7 +72,7 @@ run_client() {
 
 # --- Pass 1: cold cache. ---
 # Wiped, so every section in this run was captured from scratch this session.
-rm -rf "${VH_SANDBOX:?}/ModData/vintagehorizons"
+rm -rf "${VH_SANDBOX:?}/ModData/distantvistas"
 
 if run_client "cold" "Level finalized"; then
     python3 "$VH_ROOT/scripts/check-log.py" "$CLIENT_LOG" \
@@ -93,8 +93,8 @@ fi
 
 cleanup
 
-if [[ -d "$VH_SANDBOX/ModData/vintagehorizons" ]]; then
-    echo "      - cache on disk: $(du -sh "$VH_SANDBOX/ModData/vintagehorizons" | cut -f1)"
+if [[ -d "$VH_SANDBOX/ModData/distantvistas" ]]; then
+    echo "      - cache on disk: $(du -sh "$VH_SANDBOX/ModData/distantvistas" | cut -f1)"
 fi
 
 exit $((failures > 0 ? 1 : 0))

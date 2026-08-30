@@ -1,0 +1,21 @@
+{
+    "type":  "code",
+    "modid":  "distantvistas",
+    "name":  "Distant Vistas",
+    "version":  "0.7.16",
+    "side":  "Universal",
+    "requiredOnClient":  true,
+    "requiredOnServer":  false,
+    "description":  "Distant Horizons-style far LODs for Vintage Story. Fork of Vintage Horizons (MIT, AliasFactory) with Farseer-inspired rendering (MIT, Badgerson). Built and maintained by IllLeroySquad.",
+    "authors":  [
+                    "IllLeroySquad"
+                ],
+    "contributors":  [
+                         "AliasFactory",
+                         "Badgerson"
+                     ],
+    "website":  "https://github.com/AliasFactory/Vintage-Horizons",
+    "dependencies":  {
+                         "game":  "1.22.5"
+                     }
+}

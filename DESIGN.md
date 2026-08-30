@@ -1,4 +1,4 @@
-# VintageHorizons - Design
+# DistantVistas - Design
 
 A Distant Horizons-style extended-render-distance LOD mod for Vintage Story that is
 **fully client-side**: it works on any server, vanilla or modded, because it builds its
@@ -98,7 +98,7 @@ if a level's merge produced no change, stop climbing (Voxy).
 ## 5. Storage
 
 - **SQLite**, WAL mode, one DB per (server, world). Path:
-  `VintagestoryData/ModData/vintagehorizons/<serverAddress>/<worldId>.db`. `worldId`
+  `VintagestoryData/ModData/distantvistas/<serverAddress>/<worldId>.db`. `worldId`
   derives from client-visible world identity (seed/dimension when available - Voxy's
   hash trick - else server address + world name).
 - Tables: `Sections(detail, x, z, blob, palette, applyToParent, timestamps)` with PK
@@ -190,7 +190,7 @@ occlusion. Never required; the 3.3 path remains complete.
 
 ## 9. Licensing
 
-VintageHorizons is **MIT**. DH (LGPL), Voxy (ARR) and Algernon's Terrain Sampler (no
+DistantVistas is **MIT**. DH (LGPL), Voxy (ARR) and Algernon's Terrain Sampler (no
 LICENSE shipped, so ARR) inform concepts only - no code is copied from any of them;
 `reference/` clones are gitignored and never redistributed. Farseer (MIT) code may be
 adapted with attribution (will be credited in README and source headers where used).
@@ -208,28 +208,28 @@ ChunkLOD and TopoHorizon genuinely do better: we can only draw terrain the serve
 already sent us. A brand-new world shows nothing past the vanilla view distance until
 the player travels, and the flanks of a flight path stay empty.
 
-Those mods solve it by generating LOD server-side - and pay for it by being
-`requiredOnClient`, so a server running one forces the mod on everybody and a client
-running one cannot join a server without it. It is all-or-nothing in both directions.
+Those mods solve it by generating LOD server-side. Distant Vistas keeps its server
+component optional, but a server that installs that component must also make sure joining
+players have the matching client code.
 
 The assist closes our gap without taking on theirs: **works on every server, better on
 servers that opt in.**
 
 ### 10.2 The constraint everything else is subordinate to
 
-The client must never require the server side. If installing this on a server starts
-forcing it on joining players, we have reimplemented Farseer and thrown away the only
-reason this project exists.
+The client must never require the server side. A client-only install still has to join
+vanilla servers. The reverse direction is stricter: when a server installs Distant Vistas,
+joining players need the matching client code or the network channel fails after login.
 
-Vintage Story supports exactly what is needed. From `ModInfo.RequiredOnClient`:
+In practice, Vintage Story 1.22 does not reliably turn an optional Universal server mod
+into a client download. Declaring the client required makes the game obtain the zip before
+the connection reaches the mod channel:
 
-> If set to false and the mod is universal, clients don't need the mod to join.
-
-So one mod, shipped once:
+One mod is still shipped once:
 
 ```json
 "side": "Universal",
-"requiredOnClient": false,
+"requiredOnClient": true,
 "requiredOnServer": false
 ```
 
@@ -238,12 +238,12 @@ Both flags matter, in opposite directions:
 | installed on | result |
 | --- | --- |
 | client only | today's behaviour, unchanged, on any vanilla server |
-| server only | server serves data; clients without the mod are unaffected and still join |
+| server only | joining clients are prompted to download the matching mod |
 | both | channel connects; unvisited terrain is filled in |
 | neither | n/a |
 
 `requiredOnServer: false` is what keeps a client with the mod able to join a vanilla
-server - dropping it inverts the problem instead of solving it.
+server. `requiredOnClient: true` only applies when the server chose to install the mod.
 
 One mod rather than a companion download also removes a compatibility matrix that
 would rot: no pairing of client 0.1.1 against server 0.2.0 to reason about, one
@@ -336,7 +336,7 @@ It must be admin-configurable, and the default must be conservative:
 Going Universal means the assembly loads on servers for the first time. Split by side
 rather than branching inside one system:
 
-- `VintageHorizonsModSystem` - `ShouldLoad(side) => side == Client` (unchanged)
+- `DistantVistasModSystem` - `ShouldLoad(side) => side == Client` (unchanged)
 - a new server system - `ShouldLoad(side) => side == Server`
 
 The client system casts `capi.World` to `ClientMain`, compiles shaders and registers a
@@ -403,7 +403,7 @@ being wrong.
    shot was `.vhwhy`, which prints each coarse-drawn node's four children with their actual
    state (`no-data` / `not-resident` / `loading` / `load-failed` / `empty` / `meshing` /
    `no-mesh!` / `ok`). Instrument the decision, do not infer it.
-5. ~~Admin config and defaults~~ **done**. `ModConfig/vintagehorizons-server.json`, written
+5. ~~Admin config and defaults~~ **done**. `ModConfig/distantvistas-server.json`, written
    on first start so the options are discoverable without reading source:
    `EnableCapture`, `EnableServing`, `ServeRadiusBlocks` (default 8192), and both rate
    caps. Values are clamped on load, so a hand-edited file cannot wedge the server.
@@ -465,7 +465,7 @@ It stays optional, and below capture, for reasons that are not incidental:
   overwritten the moment real data for the same key arrives.
 - **It forces a client download.** Its `modinfo.json` declares `RequiredOnClient: true`
   even though `ShouldLoad` restricts it to the server, so a server that installs it
-  makes *every* player fetch it - including players not running VintageHorizons. An
+  makes *every* player fetch it - including players not running DistantVistas. An
   admin add-on that taxes uninvolved players is a real cost to state plainly in the
   docs, not a footnote.
 - **It is only as right as the worldgen it models.** Accuracy degrades with terrain-gen
@@ -529,7 +529,7 @@ message names, and keep the handshake at the end of the handler behind a `try`. 
 optional feature must never sit upstream of the work it is optional to.
 
 **One cosmetic cost on vanilla servers.** The client logs
-*"Client registered 1 network channels (vintagehorizons) the server does not know about"*
+*"Client registered 1 network channels (distantvistas) the server does not know about"*
 at startup. Unavoidable for an optional channel - registration has to precede the
 connection handshake, so there is no point at which we could know to skip it - and it is
 a log line, not a dialog.
@@ -557,7 +557,7 @@ regimen is local-only by necessity, not by preference.
 | `smoke` | ~5 min | the pipeline runs end to end, cold and then warm |
 | `matrix` | ~20 min | install combinations and every admin control |
 
-`fast` is a plain console assert harness in `tests/VintageHorizons.Checks`, run with
+`fast` is a plain console assert harness in `tests/DistantVistas.Checks`, run with
 `dotnet run`. No test framework: this repo has no NuGet dependencies at all and none
 cached locally, so a framework would mean the fast tier could not run without a network.
 It is also sequential, which is not a limitation to work around - `LodWorld.DetailDistance`
@@ -858,10 +858,10 @@ The full list, kept short deliberately:
 
 | Surface | When | Notes |
 |---|---|---|
-| `ModData/vintagehorizons/<world>.db` | continuously | the client LOD cache |
-| `ModData/vintagehorizons/<world>-server.db` | capture on | the server LOD cache |
-| `ModConfig/vintagehorizons.json` | on settings change | client settings |
-| `ModConfig/vintagehorizons-server.json` | on clean load only | never overwritten when it fails to parse |
+| `ModData/distantvistas/<world>.db` | continuously | the client LOD cache |
+| `ModData/distantvistas/<world>-server.db` | capture on | the server LOD cache |
+| `ModConfig/distantvistas.json` | on settings change | client settings |
+| `ModConfig/distantvistas-server.json` | on clean load only | never overwritten when it fails to parse |
 
 The savegame is reached only through engine APIs, never as a file. One honest caveat:
 a sweep or a generation run LOADS existing columns, and the game ticks a loaded column

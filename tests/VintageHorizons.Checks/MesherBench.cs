@@ -1,12 +1,12 @@
 using System.Diagnostics;
 
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// Quad counts and build time for the mesher, on terrain shapes chosen to tell different
 /// merge behaviours apart. Not part of the check tier: it asserts nothing, because a
 /// timing assertion on shared CI hardware fails for reasons that have nothing to do with
-/// this code. Run it with `dotnet run --project tests/VintageHorizons.Checks -- bench`.
+/// this code. Run it with `dotnet run --project tests/DistantVistas.Checks -- bench`.
 ///
 /// Quad count is the number that matters. It is deterministic, it is what the vertex
 /// buffer costs, and it is what the fill rate and the upload budget both scale with. The

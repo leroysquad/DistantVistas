@@ -1,4 +1,4 @@
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// Which sections the client fetches from a server rather than from its own disk.

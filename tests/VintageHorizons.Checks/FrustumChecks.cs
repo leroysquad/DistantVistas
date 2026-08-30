@@ -1,6 +1,6 @@
 using Vintagestory.API.MathTools;
 
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// View-frustum plane extraction and the p-vertex box test.

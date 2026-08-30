@@ -1,0 +1,204 @@
+namespace DistantVistas.Net;
+
+/// <summary>
+/// What a bulk pass over the world can safely do at one position.
+/// </summary>
+public enum EnumColumnAction
+{
+    /// <summary>Not in the savegame. Safe to generate transiently from the seed.</summary>
+    Peek,
+
+    /// <summary>In the savegame, with a complete neighbourhood. Safe to load as it is.</summary>
+    Load,
+
+    /// <summary>In the savegame, but a neighbour is missing. Touch nothing.</summary>
+    SkipFrontier,
+}
+
+/// <summary>
+/// Records which chunk columns the savegame holds, and decides what a bulk pass can
+/// safely do at each position. The class has no game types on purpose: this rule keeps
+/// the "generates nothing" promise, so it must be testable without a game process.
+/// Extracted from <see cref="LodSavegameSweep"/>, which was the only holder before
+/// generation needed the same map.
+/// </summary>
+public class LodColumnMap
+{
+    /// <summary>
+    /// How far the neighbourhood must be intact before a column is safe to load.
+    ///
+    /// Four, from measurement rather than reasoning. The worldgen pass dependency
+    /// reaches much further than the intuitive one ring. We swept one world at each
+    /// setting and counted the chunk columns the savegame gained:
+    ///
+    ///   no check   1460 generated
+    ///   radius 1    714 generated
+    ///   radius 2    509 generated
+    ///   radius 4      0 generated
+    ///
+    /// 3 was not tested, so 4 can be one wider than strictly necessary. Wide is the
+    /// safe direction. Too narrow silently breaks the promise. Too wide only leaves a
+    /// slightly thicker border of real terrain uncaptured.
+    /// </summary>
+    public const int SafeNeighbourhood = 4;
+
+    /// <summary>Positions known to hold generated terrain, packed as cz&lt;&lt;32 | cx.</summary>
+    readonly HashSet<long> exists = new();
+
+    public static long Key(int cx, int cz) => ((long)cz << 32) | (uint)cx;
+    public static int KeyCx(long key) => (int)(key & 0xFFFFFFFF);
+    public static int KeyCz(long key) => (int)(key >> 32);
+
+    /// <summary>
+    /// Index to offset on a square spiral centred on 0,0. Walks ring by ring, so any
+    /// prefix of the sequence is a filled square around the centre. That is the order
+    /// coverage is wanted in when a run is interrupted: a partial spiral is a usable
+    /// disc, and a partial raster is a band across the map.
+    /// </summary>
+    public static (int X, int Z) SpiralAt(int i)
+    {
+        if (i == 0) return (0, 0);
+
+        // Which ring: the k-th ring ends at index (2k+1)^2 - 1.
+        int ring = (int)Math.Ceiling((Math.Sqrt(i + 1) - 1) / 2);
+        int ringStart = (2 * ring - 1) * (2 * ring - 1);
+        int offset = i - ringStart;
+        return RingCell(ring, offset);
+    }
+
+    /// <summary>Cells on ring r (r==0 is the centre alone).</summary>
+    public static int RingSize(int r) => r == 0 ? 1 : 8 * r;
+
+    /// <summary>One cell on ring r, same edge order as <see cref="SpiralAt"/>.</summary>
+    public static (int X, int Z) RingCell(int r, int offset)
+    {
+        if (r == 0) return (0, 0);
+        int side = 2 * r;
+        return (offset / side) switch
+        {
+            0 => (r, -r + 1 + offset % side),
+            1 => (r - 1 - offset % side, r),
+            2 => (-r, r - 1 - offset % side),
+            _ => (-r + 1 + offset % side, -r),
+        };
+    }
+
+    /// <summary>
+    /// Horizon-first column order for a square of the given radius: fill rings from
+    /// <paramref name="horizonStart"/> outward to the edge first (so LOD appears just past
+    /// live view distance within minutes), then back-fill inward to the centre.
+    /// Same cell count as a full spiral prefix of (2*radius+1)^2.
+    /// </summary>
+    public static (int X, int Z) HorizonFirstAt(int i, int radius, int horizonStart)
+    {
+        horizonStart = Math.Clamp(horizonStart, 0, Math.Max(0, radius));
+        int phase1 = 0;
+        for (int r = horizonStart; r <= radius; r++) phase1 += RingSize(r);
+
+        if (i < phase1)
+        {
+            int remaining = i;
+            for (int r = horizonStart; r <= radius; r++)
+            {
+                int n = RingSize(r);
+                if (remaining < n) return RingCell(r, remaining);
+                remaining -= n;
+            }
+        }
+        else
+        {
+            int remaining = i - phase1;
+            for (int r = horizonStart - 1; r >= 0; r--)
+            {
+                int n = RingSize(r);
+                if (remaining < n) return RingCell(r, remaining);
+                remaining -= n;
+            }
+        }
+        return (0, 0);
+    }
+
+    /// <summary>Chebyshev ring of a spiral/horizon offset from centre.</summary>
+    public static int RingOf(int dx, int dz) => Math.Max(Math.Abs(dx), Math.Abs(dz));
+
+    /// <summary>Positions recorded as holding terrain.</summary>
+    public int Count => exists.Count;
+
+    public bool Add(int cx, int cz) => exists.Add(Key(cx, cz));
+
+    public bool Contains(int cx, int cz) => exists.Contains(Key(cx, cz));
+
+    /// <summary>
+    /// True when every position within <see cref="SafeNeighbourhood"/> of this column
+    /// is on disk. Loading such a column cannot make the engine generate anything.
+    /// </summary>
+    public bool NeighbourhoodComplete(int cx, int cz)
+    {
+        for (int dz = -SafeNeighbourhood; dz <= SafeNeighbourhood; dz++)
+        {
+            for (int dx = -SafeNeighbourhood; dx <= SafeNeighbourhood; dx++)
+            {
+                if (!exists.Contains(Key(cx + dx, cz + dz))) return false;
+            }
+        }
+        return true;
+    }
+
+    /// <summary>
+    /// The whole safety decision, in one place. The asymmetry is the point. A column
+    /// that does not exist is always safe to PEEK, however bare its surroundings: a
+    /// peek reads the seed and touches neither the savegame nor the loaded chunk list.
+    /// A column that exists is safe to LOAD only with an intact neighbourhood, and it
+    /// must never be peeked - a peek regenerates from the seed, so it would describe
+    /// the terrain as it was before anyone built on it.
+    /// </summary>
+    public EnumColumnAction Classify(int cx, int cz) =>
+        !Contains(cx, cz)               ? EnumColumnAction.Peek
+        : NeighbourhoodComplete(cx, cz) ? EnumColumnAction.Load
+        :                                 EnumColumnAction.SkipFrontier;
+
+    /// <summary>
+    /// Up to <paramref name="max"/> positions inside the square that are NOT in the
+    /// map, sampled evenly across the spiral. These are the positions a bulk pass
+    /// promises to leave ungenerated. The caller re-probes them afterward, because the
+    /// promise gets measured, not trusted - a worldgen mod can do anything during a
+    /// load or a peek, and this is the only detector that runs on every server.
+    /// </summary>
+    /// <param name="eligible">
+    /// Optional filter. Positions that fail it are sampled only when too few eligible
+    /// ones exist. A run centred on a player used to sample entirely from inside that
+    /// player's own chunk-loading radius, where growth is ordinary play rather than a
+    /// broken promise - so the verifier discarded the whole sample and reported 0 of 0.
+    /// Filtering here instead of afterwards means the common case measures something.
+    /// </param>
+    public List<long> AbsentSample(int centreCx, int centreCz, int radiusChunks, int max,
+        Func<int, int, bool>? eligible = null)
+    {
+        int total = (2 * radiusChunks + 1) * (2 * radiusChunks + 1);
+        var preferred = new List<long>();
+        var fallback = new List<long>();
+
+        for (int i = 0; i < total; i++)
+        {
+            (int dx, int dz) = SpiralAt(i);
+            int cx = centreCx + dx, cz = centreCz + dz;
+            if (Contains(cx, cz)) continue;
+            (eligible == null || eligible(cx, cz) ? preferred : fallback).Add(Key(cx, cz));
+        }
+
+        var sample = new List<long>(Math.Min(max, preferred.Count + fallback.Count));
+        if (max <= 0) return sample;
+
+        Take(preferred, max, sample);
+        if (sample.Count < max) Take(fallback, max - sample.Count, sample);
+        return sample;
+    }
+
+    /// <summary>Spread the picks evenly across the source rather than taking a prefix.</summary>
+    static void Take(List<long> from, int want, List<long> into)
+    {
+        if (from.Count == 0 || want <= 0) return;
+        int stride = Math.Max(1, from.Count / want);
+        for (int i = 0; i < from.Count && want > 0; i += stride, want--) into.Add(from[i]);
+    }
+}

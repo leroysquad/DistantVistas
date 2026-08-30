@@ -4,7 +4,7 @@ using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Config;
 
-namespace VintageHorizonsBench;
+namespace DistantVistasBench;
 
 /// <summary>
 /// Drives a fixed route and records what each LOD mod does with it.
@@ -177,7 +177,7 @@ public class BenchModSystem : ModSystem, IRenderer
             measureSec, outDir);
 
         capi.Event.LevelFinalize += OnLevelFinalize;
-        capi.Event.RegisterRenderer(this, EnumRenderStage.Done, "vintagehorizonsbench");
+        capi.Event.RegisterRenderer(this, EnumRenderStage.Done, "distantvistasbench");
     }
 
     static double ReadDouble(string envName, double fallback)

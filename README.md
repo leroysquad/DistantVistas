@@ -1,4 +1,4 @@
-# Vintage Horizons
+# Distant Vistas
 
 Distant Horizons-style extended render distance for [Vintage Story](https://www.vintagestory.at/).
 It works on any server, and that server needs nothing installed.
@@ -9,8 +9,9 @@ client already receives as you play. It then draws that cache far past the norma
 distance. Coverage grows as you explore, and it persists across sessions.
 
 You can also install it on your server. Then it shares its own cache with players and an
-admin can build the horizon on request. Neither is necessary, and players without the mod
-are unaffected.
+admin can build the horizon on request. A server install makes the matching client mod
+required, so Vintage Story downloads it for joining players. A client-only install still
+works on servers that do not run the mod.
 
 ## What it does
 
@@ -71,8 +72,8 @@ privilege, which every singleplayer host has:
 | `/vhserver` | Server assist status: settings in force, cache size, transfer counters |
 | `/vhgen start [radius] [x z]` | Build the LOD cache around you (or around `x z`). It generates terrain that nobody visited yet. Also `stop` and `status`. See below. |
 
-Both settings persist in `VintagestoryData/ModConfig/vintagehorizons.json`.
-The per-world cache lives in `VintagestoryData/ModData/vintagehorizons/<savegame-id>.db`.
+Both settings persist in `VintagestoryData/ModConfig/distantvistas.json`.
+The per-world cache lives in `VintagestoryData/ModData/distantvistas/<savegame-id>.db`.
 When an update changes what the stored data means, the mod discards that cache. A stale
 cache can therefore never degrade a newer version.
 
@@ -84,10 +85,10 @@ load on anything older.
 
 ```sh
 export VINTAGE_STORY="$HOME/Games/vintagestory1.22.5"   # your game path
-dotnet build VintageHorizons
+dotnet build DistantVistas
 ```
 
-The build assembles a loadable mod folder at `VintageHorizons/bin/Debug/net10.0/Mods/vintagehorizons`.
+The build assembles a loadable mod folder at `DistantVistas/bin/Debug/net10.0/Mods/distantvistas`.
 `scripts/package.sh` produces a ModDB-ready zip in `dist/`.
 
 ```sh
@@ -104,7 +105,7 @@ you do not fly back over it.
 
 Sweeping is on by default, in singleplayer too. The settings are `SweepSavegame`,
 `SweepRadiusChunks` and `SweepColumnsPerSecond`, in
-`ModConfig/vintagehorizons-server.json`.
+`ModConfig/distantvistas-server.json`.
 
 The default is safe because the sweep **generates nothing**. The sweep skips a position
 that nobody visited. It also skips a border around the explored terrain, because a

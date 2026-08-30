@@ -1,4 +1,4 @@
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// When a section may be touched, and when the caller has to wait for it.
@@ -22,6 +22,7 @@ public static class ResidencyChecks
         FailedLoadIsRemembered(c);
         NoStorageThreadFallsBackToInline(c);
         LoadedSectionNeverClobbersALiveOne(c);
+        IncompleteLeavesDoNotReplaceParentCoverage(c);
     }
 
     /// <summary>
@@ -122,6 +123,44 @@ public static class ResidencyChecks
 
         c.True(ReferenceEquals(live, world.Sections[Key]),
             "the section that was already live survives the arriving copy");
+    }
+
+    static void IncompleteLeavesDoNotReplaceParentCoverage(Check c)
+    {
+        int full = LodSection.GridSize * LodSection.GridSize;
+
+        c.False(LodCoveragePolicy.ChildCanReplaceParent(
+                level: 0, hasData: false, capturedColumns: 0, hasMesh: false),
+            "a missing child does not unlock descent from its parent");
+        c.True(LodCoveragePolicy.ChildCanReplaceParent(
+                level: 0, hasData: true, capturedColumns: 0, hasMesh: false),
+            "a known empty child does not pin its parent forever");
+        c.False(LodCoveragePolicy.ChildCanReplaceParent(
+                level: 0, hasData: true, capturedColumns: full / 4, hasMesh: true),
+            "a one-chunk L0 fragment cannot replace broad parent coverage");
+        c.True(LodCoveragePolicy.ChildCanReplaceParent(
+                level: 0, hasData: true, capturedColumns: full, hasMesh: true),
+            "a complete meshed L0 child can replace its parent");
+        c.True(LodCoveragePolicy.ChildCanReplaceParent(
+                level: 1, hasData: true, capturedColumns: full / 4, hasMesh: true),
+            "the incomplete guard stays limited to L0 instead of hiding all far LOD levels");
+        c.True(LodCoveragePolicy.MustDescendForVisualCap(level: 6, maxVisualLevel: 2),
+            "a huge L6 section must descend when visible compression is capped at L2");
+        c.False(LodCoveragePolicy.MustDescendForVisualCap(level: 2, maxVisualLevel: 2),
+            "the cap permits its four-block target level");
+
+        var classified = new LodWorld();
+        var leaf = new LodSection();
+        leaf.SetColumn(0, Array.Empty<ulong>());
+        long leafKey = LodWorld.SectionKey(0, 8, 9);
+        classified.ClassifySparseL0(leafKey, leaf);
+        c.True(classified.IncompleteL0Keys.Contains(leafKey),
+            "a partially captured L0 is marked unsafe to draw by itself");
+
+        for (int col = 1; col < full; col++) leaf.SetColumn(col, Array.Empty<ulong>());
+        classified.ClassifySparseL0(leafKey, leaf);
+        c.False(classified.IncompleteL0Keys.Contains(leafKey),
+            "a fully captured L0 becomes safe without changing its distance");
     }
 
     // ---- helpers ----

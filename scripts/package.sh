@@ -5,14 +5,14 @@ set -euo pipefail
 REPO_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_DIR"
 
-VERSION=$(grep -oP '"version":\s*"\K[^"]+' VintageHorizons/modinfo.json)
+VERSION=$(grep -oP '"version":\s*"\K[^"]+' DistantVistas/modinfo.json)
 OUT="$REPO_DIR/dist"
-MOD_DIR="VintageHorizons/bin/Release/net10.0/Mods/vintagehorizons"
+MOD_DIR="DistantVistas/bin/Release/net10.0/Mods/distantvistas"
 
-dotnet build VintageHorizons -c Release
+dotnet build DistantVistas -c Release
 
 mkdir -p "$OUT"
-ZIP="$OUT/vintagehorizons_${VERSION}.zip"
+ZIP="$OUT/distantvistas_${VERSION}.zip"
 rm -f "$ZIP"
 
 # ModDB zips contain the mod files at the archive root (no wrapping folder),

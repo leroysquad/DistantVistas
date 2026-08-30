@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Sandboxed Vintage Story DEDICATED SERVER for VintageHorizons multiplayer testing.
+# Sandboxed Vintage Story DEDICATED SERVER for DistantVistas multiplayer testing.
 # Vanilla (no mods installed server-side) - that's the point: the mod must work
 # with a client-side-only install. Same isolation rules as test-client.sh.
 #

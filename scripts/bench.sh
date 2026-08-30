@@ -10,7 +10,7 @@ set -euo pipefail
 #
 # Examples:
 #   scripts/bench.sh vanilla                            # no LOD mod at all: the baseline
-#   scripts/bench.sh vintagehorizons --mods dist/vintagehorizons_0.1.0.zip
+#   scripts/bench.sh distantvistas --mods dist/distantvistas_0.1.0.zip
 #   scripts/bench.sh farseer --mods /path/farseer.zip --server-mods /path/farseer.zip
 #
 # The label names the configuration under test and appears in every output filename, so
@@ -24,7 +24,7 @@ set -euo pipefail
 # reason.
 #
 # Server-side mods: Farseer and ChunkLOD are 'Universal' and required on both sides, so
-# they need --server-mods as well as --mods. VintageHorizons never does.
+# they need --server-mods as well as --mods. DistantVistas never does.
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 source "$ROOT/scripts/test-lib.sh"
@@ -91,15 +91,15 @@ install_mods "$CLIENT_MODS" "$client_mods"
 install_mods "$SERVER_MODS" "$server_mods"
 
 # The harness itself is always present on the client, whatever is under test.
-BENCH_MOD="$ROOT/bench/VintageHorizonsBench/bin/Debug/net10.0/Mods/vintagehorizonsbench"
-[[ -d "$BENCH_MOD" ]] || { echo "bench.sh: build the harness first (dotnet build bench/VintageHorizonsBench)" >&2; exit 2; }
+BENCH_MOD="$ROOT/bench/DistantVistasBench/bin/Debug/net10.0/Mods/distantvistasbench"
+[[ -d "$BENCH_MOD" ]] || { echo "bench.sh: build the harness first (dotnet build bench/DistantVistasBench)" >&2; exit 2; }
 cp -r "$BENCH_MOD" "$CLIENT_MODS/"
 
 # Pre-seed the detail distance when benchmarking our own mod at a given setting.
 if [[ -n "$detail" ]]; then
     mkdir -p "$VH_SANDBOX/ModConfig"
     printf '{\n  "FarViewDistanceCap": 0,\n  "DetailDistance": %s\n}\n' "$detail" \
-        > "$VH_SANDBOX/ModConfig/vintagehorizons.json"
+        > "$VH_SANDBOX/ModConfig/distantvistas.json"
     echo "  detail distance pinned to $detail"
 fi
 

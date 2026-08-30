@@ -1,6 +1,6 @@
 using Vintagestory.API.Common;
 
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// An ILogger that records what it was told, so a check can assert on the message a player

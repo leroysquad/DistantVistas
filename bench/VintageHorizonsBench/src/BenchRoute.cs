@@ -1,6 +1,6 @@
 using System.Globalization;
 
-namespace VintageHorizonsBench;
+namespace DistantVistasBench;
 
 public class BenchWaypoint
 {

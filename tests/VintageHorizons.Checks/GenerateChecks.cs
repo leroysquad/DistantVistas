@@ -1,6 +1,6 @@
-using VintageHorizons.Net;
+using DistantVistas.Net;
 
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// The safety rule behind sweeping and generation: which columns a bulk pass can load,

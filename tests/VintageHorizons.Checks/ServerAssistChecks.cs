@@ -1,6 +1,6 @@
-using VintageHorizons.Net;
+using DistantVistas.Net;
 
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// The server assist: what gets pre-generated, what gets served, and what a client makes

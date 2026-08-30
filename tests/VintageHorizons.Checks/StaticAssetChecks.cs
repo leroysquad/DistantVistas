@@ -1,6 +1,6 @@
 using System.Text.RegularExpressions;
 
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// Invariants that live across file boundaries, where no compiler or runtime check can
@@ -27,7 +27,7 @@ public static class StaticAssetChecks
     /// </summary>
     static void AsciiOnly(Check c)
     {
-        string assets = Path.Combine(GameAssemblies.RepoRoot, "VintageHorizons", "assets");
+        string assets = Path.Combine(GameAssemblies.RepoRoot, "DistantVistas", "assets");
         c.True(Directory.Exists(assets), "asset directory exists");
 
         var offenders = new List<string>();
@@ -70,7 +70,7 @@ public static class StaticAssetChecks
     static void TintSlotAgreement(Check c)
     {
         string shaders = Path.Combine(
-            GameAssemblies.RepoRoot, "VintageHorizons", "assets", "vintagehorizons", "shaders");
+            GameAssemblies.RepoRoot, "DistantVistas", "assets", "distantvistas", "shaders");
 
         var found = new Dictionary<string, int>();
         foreach (string path in Directory.EnumerateFiles(shaders, "*.*sh"))
@@ -110,11 +110,11 @@ public static class StaticAssetChecks
     /// </summary>
     static void VersionAgreement(Check c)
     {
-        CheckPair(c, "VintageHorizons", Path.Combine("VintageHorizons", "VintageHorizons.csproj"),
-            Path.Combine("VintageHorizons", "modinfo.json"));
-        CheckPair(c, "VintageHorizonsBench",
-            Path.Combine("bench", "VintageHorizonsBench", "VintageHorizonsBench.csproj"),
-            Path.Combine("bench", "VintageHorizonsBench", "modinfo.json"));
+        CheckPair(c, "DistantVistas", Path.Combine("DistantVistas", "DistantVistas.csproj"),
+            Path.Combine("DistantVistas", "modinfo.json"));
+        CheckPair(c, "DistantVistasBench",
+            Path.Combine("bench", "DistantVistasBench", "DistantVistasBench.csproj"),
+            Path.Combine("bench", "DistantVistasBench", "modinfo.json"));
     }
 
     static void CheckPair(Check c, string label, string csprojRel, string modinfoRel)

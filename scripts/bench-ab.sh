@@ -15,7 +15,7 @@ set -euo pipefail
 #
 # The state that matters is exactly two directories:
 #   .testdata/server/Saves            the world the route walks through
-#   .testdata/ModData/vintagehorizons the client's LOD cache for that world
+#   .testdata/ModData/distantvistas the client's LOD cache for that world
 #
 # Both are restored wholesale, including -wal and -shm sidecars. A SQLite database
 # copied without its write-ahead log is a different database.
@@ -29,7 +29,7 @@ source "$ROOT/scripts/test-lib.sh"
 
 PRISTINE="$VH_SANDBOX/bench/pristine"
 BENCH_OUT="$VH_SANDBOX/bench"
-STATE_DIRS=("server/Saves" "ModData/vintagehorizons")
+STATE_DIRS=("server/Saves" "ModData/distantvistas")
 
 usage() {
     sed -n '4,12p' "$0" | sed 's/^# \{0,1\}//'

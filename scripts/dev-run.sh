@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Launch Vintage Story with the dev build of VintageHorizons loaded.
+# Launch Vintage Story with the dev build of DistantVistas loaded.
 # Usage: scripts/dev-run.sh [worldname] [playstyle]
 #   worldname defaults to "vhsurvival". playstyle (only used when the world is
 #   created fresh) must be a playstyle LANG code: the game default
@@ -13,8 +13,8 @@ GAME_DIR="${VINTAGE_STORY:-$HOME/Games/vintagestory1.22.5}"
 WORLD="${1:-vhsurvival}"
 PLAYSTYLE="${2:-preset-surviveandbuild}"
 
-MOD_PATH="$REPO_DIR/VintageHorizons/bin/Debug/net10.0/Mods"
-[ -d "$MOD_PATH/vintagehorizons" ] || { echo "No build output at $MOD_PATH - run: dotnet build VintageHorizons"; exit 1; }
+MOD_PATH="$REPO_DIR/DistantVistas/bin/Debug/net10.0/Mods"
+[ -d "$MOD_PATH/distantvistas" ] || { echo "No build output at $MOD_PATH - run: dotnet build DistantVistas"; exit 1; }
 
 # The desktop launcher's DOTNET_ROOT (~/.dotnet) is stale on this machine;
 # the system-wide SDK lives in /usr/share/dotnet.

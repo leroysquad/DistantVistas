@@ -1,6 +1,6 @@
 using System.Diagnostics;
 
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// The fast tier of scripts/check.sh: everything that can be proven without a game process.
@@ -19,6 +19,8 @@ public static class Program
         ("pure", "mip downsample", MipChecks.Run),
         ("pure", "residency", ResidencyChecks.Run),
         ("pure", "mesher", MesherChecks.Run),
+        ("pure", "top-soil tint", TopSoilColorChecks.Run),
+        ("pure", "snow overlay", SnowOverlayChecks.Run),
         ("pure", "server config", ConfigChecks.Run),
         ("pure", "lod mod deferral", DeferralChecks.Run),
         ("fixture", "blob format", StoreChecks.Run),
@@ -48,7 +50,7 @@ public static class Program
         }
 
         Console.WriteLine();
-        Console.WriteLine("  VintageHorizons fast checks");
+        Console.WriteLine("  DistantVistas fast checks");
         Console.WriteLine("  game: " + GameAssemblies.GamePath);
         Console.WriteLine();
 

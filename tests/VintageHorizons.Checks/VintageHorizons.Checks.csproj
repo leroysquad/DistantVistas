@@ -6,8 +6,8 @@
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
-    <RootNamespace>VintageHorizons.Checks</RootNamespace>
-    <AssemblyName>VintageHorizons.Checks</AssemblyName>
+    <RootNamespace>DistantVistas.Checks</RootNamespace>
+    <AssemblyName>DistantVistas.Checks</AssemblyName>
     <!-- Never shipped. This project exists only to be run from scripts/check.sh. -->
     <IsPackable>false</IsPackable>
   </PropertyGroup>
@@ -18,7 +18,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../../VintageHorizons/VintageHorizons.csproj" />
+    <ProjectReference Include="../../DistantVistas/DistantVistas.csproj" />
   </ItemGroup>
 
   <!--

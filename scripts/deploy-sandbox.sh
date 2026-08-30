@@ -22,10 +22,10 @@ case "$TARGET" in
     *) echo "usage: $(basename "$0") [client|server|both]" >&2; exit 2 ;;
 esac
 
-BUILT="$VH_ROOT/VintageHorizons/bin/Debug/net10.0/Mods/vintagehorizons"
+BUILT="$VH_ROOT/DistantVistas/bin/Debug/net10.0/Mods/distantvistas"
 
-echo "Building VintageHorizons..."
-(cd "$VH_ROOT" && dotnet build VintageHorizons -v quiet --nologo)
+echo "Building DistantVistas..."
+(cd "$VH_ROOT" && dotnet build DistantVistas -v quiet --nologo)
 
 if [[ ! -d "$BUILT" ]]; then
     echo "Build produced no mod folder at $BUILT" >&2
@@ -37,17 +37,17 @@ install_into() {
     mkdir -p "$dest"
     # Replace rather than merge: a file removed from the build must disappear here
     # too, or a stale asset outlives the change that deleted it.
-    rm -rf "${dest:?}/vintagehorizons"
+    rm -rf "${dest:?}/distantvistas"
     cp -r "$BUILT" "$dest/"
-    echo "  $label: $dest/vintagehorizons"
+    echo "  $label: $dest/distantvistas"
 }
 
 [[ "$TARGET" == "client" || "$TARGET" == "both" ]] && install_into "$VH_SANDBOX/Mods" "client"
 [[ "$TARGET" == "server" || "$TARGET" == "both" ]] && install_into "$VH_SANDBOX/server/Mods" "server"
 
-if [[ "$TARGET" == "client" && -d "$VH_SANDBOX/server/Mods/vintagehorizons" ]]; then
+if [[ "$TARGET" == "client" && -d "$VH_SANDBOX/server/Mods/distantvistas" ]]; then
     echo "  note: the sandbox SERVER still has the mod installed." >&2
-    echo "        rm -rf '$VH_SANDBOX/server/Mods/vintagehorizons' for a vanilla server." >&2
+    echo "        rm -rf '$VH_SANDBOX/server/Mods/distantvistas' for a vanilla server." >&2
 fi
 
-echo "Deployed $(grep -oP '"version":\s*"\K[^"]+' "$VH_ROOT/VintageHorizons/modinfo.json")"
+echo "Deployed $(grep -oP '"version":\s*"\K[^"]+' "$VH_ROOT/DistantVistas/modinfo.json")"

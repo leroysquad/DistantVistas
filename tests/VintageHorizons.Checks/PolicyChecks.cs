@@ -1,6 +1,6 @@
 using Vintagestory.API.Common;
 
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// How a block is classified for LOD. Shared by both sides deliberately: a section

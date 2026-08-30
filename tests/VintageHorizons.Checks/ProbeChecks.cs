@@ -1,6 +1,6 @@
 using Vintagestory.API.Common;
 
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// Runs first, and exists only to fail loudly and specifically when the game assemblies

@@ -1,4 +1,4 @@
-namespace VintageHorizons.Checks;
+namespace DistantVistas.Checks;
 
 /// <summary>
 /// Assertion tally for one suite. Deliberately tiny: this repo has no NuGet dependencies
