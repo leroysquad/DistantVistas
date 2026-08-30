@@ -1,9 +1,8 @@
 namespace DistantVistas;
 
 /// <summary>
-/// Decides whether a child is ready to replace the broader mesh of its parent.
-/// The L0 completeness guard is deliberately not applied to coarse levels: extending
-/// it through the whole tree previously hid the far landscape.
+/// When a child can replace its parent's mesh.
+/// Completeness check is L0-only; applying it to L1+ hid the far landscape.
 /// </summary>
 public static class LodCoveragePolicy
 {

@@ -3,13 +3,8 @@ using Vintagestory.API.MathTools;
 namespace DistantVistas;
 
 /// <summary>
-/// Whether the LOD shader may paint a height-based snow overlay.
-///
-/// Vanilla winter in the foreground is snow *layers* on grass, dirt and stone - not a
-/// white wash. The overlay used a freeze line from sea-level temperature; in winter that
-/// line falls through the valley and every LOD top became plastic white against mixed
-/// foreground snow. Overlay is alpine-only. Ground snow is captured snow blocks plus
-/// live seasonal grass tint.
+/// Alpine snow overlay only. A sea-level freeze line painted whole valleys plastic-white;
+/// ground snow is captured snow blocks + seasonal tint.
 /// </summary>
 public static class LodSnow
 {

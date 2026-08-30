@@ -3,16 +3,19 @@
 Far terrain for [Vintage Story](https://www.vintagestory.at/), past the normal view
 distance.
 
-This started as me trying to live with [Vintage Horizons](https://github.com/AliasFactory/Vintage-Horizons).
-I kept running into stuff that broke how I play: fog and colour seams, white cliffs,
-blocky far terrain, join/download headaches, winter looking wrong. I am not trying to
-replace Horizons or take credit for it. AliasFactory built that. I forked it under MIT
-so I could fix my own problems, and I am putting the result up in case it helps someone
-else.
+Honest version: I was using [Vintage Horizons](https://github.com/AliasFactory/Vintage-Horizons)
+and it kept biting me in my own worlds. Fog and colour seams, white cliffs, blocky far
+terrain when I backed up, join/download headaches, winter looking wrong. I forked it
+under MIT so I could fix those for myself. I am releasing this so other people can try
+the same fixes if they want. I am not trying to replace Horizons, and I am not taking
+credit for AliasFactory's work or anyone else's.
+
+Maybe this is reinventing the wheel. That is fine. I still do not want credit that is
+not mine. If Horizons, Farseer, ChunkLOD, TopoHorizon, or something else already does
+what you need, use that.
 
 **What works for me may not work for you.** Different worlds, hardware, and servers
-behave differently. If Horizons or another LOD mod already does what you need, use that.
-Distant Vistas is just my working copy with the fixes I needed.
+behave differently. Distant Vistas is my working copy with the fixes I needed.
 
 It still works on any server without a server install. It builds a persistent LOD cache
 from chunk data your client already gets as you explore. You can also install it on a
@@ -235,17 +238,17 @@ procedure.
 
 ## Credits / honesty
 
-I did not invent distant LODs for Vintage Story.
+I did not invent distant LODs for Vintage Story. I am not trying to.
 
-- **Vintage Horizons** (AliasFactory, MIT) is the codebase this fork started from. All
-  credit for that foundation stays with them.
-- **Farseer** (Badgerson, MIT) is where a lot of the VS rendering tricks came from.
-  Adapted bits are credited in the code where they live.
-- **Distant Horizons** and **Voxy** (Minecraft) are inspiration only. No code from them.
+- **Vintage Horizons** (AliasFactory, MIT): this fork starts there. Credit for that
+  foundation stays with them.
+- **Farseer** (Badgerson, MIT): a lot of the VS rendering tricks. Adapted bits are
+  credited in the code where they live.
+- **Distant Horizons** and **Voxy** (Minecraft): inspiration only. No code from them.
 
-I am IllLeroySquad / leroysquad. I maintain Distant Vistas because I needed those fixes
-in my own game. Sharing it is optional help for other players, not a claim on anyone
-else's work.
+I am IllLeroySquad / leroysquad. I only did this to fix problems I was hitting and to
+improve things enough that I could keep playing. Putting it on ModDB/GitHub is for other
+players who want to try it. Not a claim on anyone else's work.
 
 Source and releases: https://github.com/leroysquad/DistantVistas
 
