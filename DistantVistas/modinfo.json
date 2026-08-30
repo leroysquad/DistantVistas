@@ -6,7 +6,7 @@
     "side": "Universal",
     "requiredOnClient": true,
     "requiredOnServer": false,
-    "description": "Far terrain LODs for Vintage Story. Fork of Vintage Horizons because I kept hitting problems in my own worlds. I fixed what I needed for myself and am sharing it. Not taking credit for anyone else's work. What works for me may not work for you.",
+    "description": "Far terrain for Vintage Story. I forked Vintage Horizons to fix problems in my own worlds and I'm sharing it in case it helps. Not taking credit for anyone else's work. What works for me might not work for you.",
     "authors": [
         "IllLeroySquad"
     ],
