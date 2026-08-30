@@ -1,5 +1,11 @@
 # DistantVistas - Design
 
+Personal fork of Vintage Horizons for Vintage Story far LODs. I started from AliasFactory's
+MIT codebase because I was hitting issues in my own worlds. Distant Vistas is me fixing
+those for myself and sharing the result. Credit for the foundation stays with Horizons /
+Farseer where it belongs. This file is the engineering notes; the human story is in
+README.md.
+
 A Distant Horizons-style extended-render-distance LOD mod for Vintage Story that is
 **fully client-side**: it works on any server, vanilla or modded, because it builds its
 LODs exclusively from chunk data the client already receives.
