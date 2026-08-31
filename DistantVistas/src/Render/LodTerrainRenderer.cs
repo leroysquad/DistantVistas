@@ -336,16 +336,23 @@ public class LodTerrainRenderer : IRenderer
     {
         bool hasMesh = HasAnyMesh(key);
         int level = LodWorld.KeyLevel(key);
-        double nearDist = NearestDistanceTo(key);
+        double nearDistSq = NearestDistanceSqTo(key);
+        double nearDist = Math.Sqrt(nearDistSq);
 
         // Near-cull must not abort quadtree descent; only skip *drawing* sections
         // whose nearest edge is inside the vanilla bubble. Top-level L6 sections are
         // 4096 blocks — the player is inside them (nearDist=0), so returning early
         // without descending would draw zero LOD meshes past the bubble.
         float overdraw = GameMath.Clamp(OverdrawStart, 0.15f, 0.95f);
-        bool insideVanilla = nearDist < liveViewDistance * overdraw;
+        double vanillaCoverageRadius = liveViewDistance * overdraw;
+        bool insideVanilla = world.Sections.TryGetValue(key, out LodSection? coverageSection)
+            && coverageSection.HasSurfaceBounds
+                ? LodCoveragePolicy.InsideVanillaCoverage(
+                    nearDistSq, camPos.Y, coverageSection.SurfaceYMin,
+                    coverageSection.SurfaceYMax, vanillaCoverageRadius)
+                : nearDist < vanillaCoverageRadius;
 
-        int wanted = LodWorld.WantedLevelForSq(nearDist * nearDist);
+        int wanted = LodWorld.WantedLevelForSq(nearDistSq);
 
         // Relief-aware coarsen: far flats stay cheap; mountains keep sharper LODs.
         // FidelityStep 1: raise flatten thresholds and soften the +2 bump so ridges

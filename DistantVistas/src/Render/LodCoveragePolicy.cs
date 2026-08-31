@@ -9,6 +9,17 @@ public static class LodCoveragePolicy
     public static bool MustDescendForVisualCap(int level, int maxVisualLevel) =>
         level > Math.Clamp(maxVisualLevel, 0, LodWorld.MaxLevel);
 
+    public static bool InsideVanillaCoverage(
+        double horizontalDistanceSq, double cameraY, int surfaceYMin, int surfaceYMax, double radius)
+    {
+        double verticalDistance = cameraY > surfaceYMax
+            ? cameraY - surfaceYMax
+            : cameraY < surfaceYMin
+                ? surfaceYMin - cameraY
+                : 0;
+        return horizontalDistanceSq + verticalDistance * verticalDistance < radius * radius;
+    }
+
     public static bool ChildCanReplaceParent(
         int level, bool hasData, int capturedColumns, bool hasMesh)
     {

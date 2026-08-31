@@ -13,9 +13,25 @@ public static class KeyMathChecks
         Family(c);
         Footprint(c);
         Distance(c);
+        VanillaHandoffUsesSurfaceDistance(c);
         WantedLevelFromSquaredDistance(c);
         WantedLevelHonoursVisualCap(c);
         CaptureSamplePositionIsTheBlockItself(c);
+    }
+
+    static void VanillaHandoffUsesSurfaceDistance(Check c)
+    {
+        const double radius = 280;
+
+        c.True(LodCoveragePolicy.InsideVanillaCoverage(
+                horizontalDistanceSq: 0, cameraY: 180, surfaceYMin: 100, surfaceYMax: 120, radius),
+            "a camera near the surface leaves the inner section to vanilla");
+        c.False(LodCoveragePolicy.InsideVanillaCoverage(
+                horizontalDistanceSq: 0, cameraY: 500, surfaceYMin: 100, surfaceYMax: 120, radius),
+            "a camera high above the surface keeps LOD beneath it");
+        c.False(LodCoveragePolicy.InsideVanillaCoverage(
+                horizontalDistanceSq: 200 * 200, cameraY: 320, surfaceYMin: 100, surfaceYMax: 120, radius),
+            "horizontal and vertical separation combine at the vanilla boundary");
     }
 
     /// <summary>

@@ -1,3 +1,6 @@
+## 0.7.17
+- Fixes the clear square that followed the camera while flying high. Distant Vistas was deciding that vanilla owned nearby terrain from horizontal distance alone, even when the ground was far below the camera and vanilla was no longer drawing it. The handoff now includes the terrain's surface height, so LOD stays under high-altitude views until vanilla can actually cover it.
+
 ## 0.7.16
 - Stuff I was hitting after using Vintage Horizons for a while: far terrain staying detailed when you walk away instead of turning into giant slabs, half-loaded bits staying hidden instead of drawing weird shelves and skinny pillars, old brown grass not crawling toward you as you get closer. Still has the join download / white cliff fixes from 0.7.15, and the colour / winter / fog seam work from 0.7.12-0.7.14. Personal fork. Not taking credit for Horizons or anyone else. What works for me might not work for you.
 
