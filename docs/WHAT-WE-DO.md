@@ -1,33 +1,27 @@
-﻿# What Distant Vistas does that the others don't
+﻿# Why a fork, and what is different
 
-This is the code difference, not a slogan. Distant Vistas is a Vintage Horizons fork. Same family: a persistent LOD cache from chunks you already received. The fork is the draw and lighting path.
+I forked Vintage Horizons to fix problems in my own worlds. Not taking credit for Horizons or anyone else. I am open to working with them. Right now I am just doing my own thing. What works for me might not work for you.
 
-## Visited L0/L1 skip the frustum
+Same starting point: a persistent LOD cache from chunks the client already received. After that the draw path is different.
 
-`LodCoveragePolicy.ShouldKeepVisitedDraw` keeps captured near tiles in the draw set even when `LodFrustum.BoxInView` would reject them (behind or beside the camera). A wanted-level camera window plus frustum cull is how the trail turned into sky on fly-past. We do not drop that mesh because you turned.
+## Parent plates
 
-## No parent plate as coverage
+Horizons will mesh a coarse parent as coverage when children are not ready. From the air that is giant square plates with sheer walls. Distant Vistas does not use a parent box as a stand-in. Incomplete L0 stays off screen until it is real land. That is the 0.7.20 look lock.
 
-A missing child is not replaced by a coarse square parent mesh. That parent-as-stand-in is the Vintage Horizons cake-square look. Incomplete L0 stays off screen until it is real land. 0.7.20 meshing is the look lock.
+## Trail behind the camera
 
-## Vanilla-owns is 3D plus pitch
+A wanted-level camera window plus frustum cull drops captured near tiles once you fly past, so land you already generated turns into sky until you linger. Distant Vistas keeps captured L0/L1 in the draw set behind and beside the camera (`ShouldKeepVisitedDraw`). Fill is not allowed to stall those tiles just because the window moved.
 
-Handoff is not a horizontal disc. `InsideVanillaCoverage` uses surface height and look-down amount. Straight down from altitude still draws LOD where vanilla has no chunks.
+## Vanilla handoff
 
-## Live ambient, not disc color
+Vanilla-owns is 3D plus look-down, not a horizontal disc. Looking down from altitude still draws LOD where vanilla has no chunks.
 
-Stored noon albedo is multiplied by the same live ambient the chunk shaders use (`BlendedAmbientColor` / `rgbaAmbientIn`). `Calendar.SunColor * daylight` is the sun disc and stays orange after vanilla has gone dark. Fog still uses `BlendedFog*`. `DisableLodFog` only skips extra pastViewHaze.
+## Night color
 
-## Vanilla edge alpha is patched
+Stored albedo is multiplied by the same live ambient the chunk shaders use. `SunColor * daylight` is the sun disc and stays orange after vanilla has gone dark.
 
-Vanilla chunk shaders fade alpha at the live view-distance ring. Override those vertex shaders so LOD joins behind at full alpha instead of a white/fog slice.
+## Vanilla edge fade
 
-## What this is not
+Vanilla chunk shaders fade alpha at the view-distance ring. Those vertex shaders are overridden so LOD joins behind at full alpha instead of a fog slice.
 
-- Not Farseer: server-side silhouettes.
-- Not ChunkLOD: server-required Farseer fork / grid.
-- Not TopoHorizon: a prebuilt clipmap pyramid you download.
-- Not Vistas Beyond: that is worldgen, not LOD.
-- Not Horizons parent plates: we forked Horizons and then refused that coverage lie.
-
-Client cache first. Optional server assist shares cache. Fast fly is a stress test. Visited land stays.
+Farseer, ChunkLOD, and TopoHorizon are different designs (server silhouettes, a Farseer fork, a prebuilt pyramid). Vistas Beyond is worldgen, not LOD.
