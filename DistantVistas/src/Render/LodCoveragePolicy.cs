@@ -6,6 +6,18 @@ namespace DistantVistas;
 /// </summary>
 public static class LodCoveragePolicy
 {
+    /// <summary>
+    /// Captured L0/L1 must stay in the draw path even when the view frustum would
+    /// reject them (behind the camera, grazing side planes). Fast flight is a stress
+    /// test, not a reason to punch sky holes in terrain the player already generated.
+    /// </summary>
+    public const int VisitedKeepMaxLevel = 1;
+
+    public static bool IsVisitedKeepLevel(int level) => level <= VisitedKeepMaxLevel;
+
+    public static bool ShouldKeepVisitedDraw(int level, bool hasDataSet) =>
+        hasDataSet && IsVisitedKeepLevel(level);
+
     public static bool MustDescendForVisualCap(int level, int maxVisualLevel) =>
         level > Math.Clamp(maxVisualLevel, 0, LodWorld.MaxLevel);
 

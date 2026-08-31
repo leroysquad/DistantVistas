@@ -546,6 +546,11 @@ public class LodTerrainRenderer : IRenderer
         }
 
         world.RenderDirty.Add(key);
+
+        // Start reload / server-assist wanted-by-view now, not only when a mesh slot
+        // opens. Otherwise remote-only keys sit pending while the worker idles.
+        if (!world.Sections.ContainsKey(key))
+            world.TryGetForRender(key, out _);
     }
 
     void EvictStaleMeshes()
@@ -599,6 +604,10 @@ public class LodTerrainRenderer : IRenderer
         {
             if (!HasAnyMesh(key) && LodWorld.KeyLevel(key) < LodWorld.WantedLevelForSq(NearestDistanceSqTo(key)))
             {
+                // Visited near tiles may sit behind the camera or past the wanted rung
+                // while the player flies; dropping their mesh jobs leaves a trail of sky.
+                if (LodCoveragePolicy.ShouldKeepVisitedDraw(LodWorld.KeyLevel(key), world.HasDataSet.Contains(key)))
+                    continue;
                 dirtyPrune.Add(key);
             }
         }
@@ -629,6 +638,10 @@ public class LodTerrainRenderer : IRenderer
             if (meshJobInFlight.Contains(key) || world.LoadsInFlight.Contains(key)) continue;
 
             double distSq = NearestDistanceSqTo(key);
+            // Visited L0/L1 trail: mesh the near captured ring first so fly-ahead holes
+            // close before coarse parents swap in behind the player.
+            if (LodCoveragePolicy.ShouldKeepVisitedDraw(LodWorld.KeyLevel(key), world.HasDataSet.Contains(key)))
+                distSq = 0;
             if (count == capacity && distSq >= scheduleCandidateDistSq[count - 1]) continue;
 
             int at = count < capacity ? count++ : capacity - 1;
@@ -688,8 +701,13 @@ public class LodTerrainRenderer : IRenderer
                 }
                 else
                 {
-                    if (sectionMeshes.Remove(best, out MeshRef? gone)) gone.Dispose();
-                    if (waterMeshes.Remove(best, out MeshRef? goneWater)) goneWater.Dispose();
+                    // Keep the last good mesh for visited near tiles. Disposing here
+                    // punched sky holes until a reload finished or never started.
+                    if (!LodCoveragePolicy.ShouldKeepVisitedDraw(LodWorld.KeyLevel(best), world.HasDataSet.Contains(best)))
+                    {
+                        if (sectionMeshes.Remove(best, out MeshRef? gone)) gone.Dispose();
+                        if (waterMeshes.Remove(best, out MeshRef? goneWater)) goneWater.Dispose();
+                    }
                 }
                 continue;
             }
@@ -904,15 +922,29 @@ public class LodTerrainRenderer : IRenderer
         double dz = originZ + footprint / 2.0 - camPos.Z;
         if (dx * dx + dz * dz > cullDistSq) return false;
 
-        // Camera-relative box, matching the model matrix below. Y spans the whole
-        // world: sections don't track their vertical extent, and the wins that matter
-        // (sections behind or beside the camera) come from the side planes anyway.
         double relX = originX - camPos.X;
         double relZ = originZ - camPos.Z;
-        if (!frustum.BoxInView(relX, -camPos.Y, relZ, relX + footprint, worldHeight - camPos.Y, relZ + footprint))
+
+        int level = LodWorld.KeyLevel(key);
+        bool keepVisited = LodCoveragePolicy.ShouldKeepVisitedDraw(level, world.HasDataSet.Contains(key));
+        if (!keepVisited)
         {
-            culledThisFrame++;
-            return false;
+            // Tight Y when we know the surface band; a world-tall box false-rejects on
+            // the top/bottom planes while the player is flying high beside the tile.
+            double minY = -camPos.Y;
+            double maxY = worldHeight - camPos.Y;
+            if (world.Sections.TryGetValue(key, out LodSection? bounds) && bounds.HasSurfaceBounds)
+            {
+                const int pad = 48;
+                minY = bounds.SurfaceYMin - pad - camPos.Y;
+                maxY = bounds.SurfaceYMax + pad - camPos.Y;
+            }
+
+            if (!frustum.BoxInView(relX, minY, relZ, relX + footprint, maxY, relZ + footprint))
+            {
+                culledThisFrame++;
+                return false;
+            }
         }
 
         modelMat.Identity().Translate(relX, -camPos.Y, relZ);

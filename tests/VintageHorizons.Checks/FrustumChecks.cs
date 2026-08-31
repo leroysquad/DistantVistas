@@ -27,15 +27,19 @@ public static class FrustumChecks
     }
 
     /// <summary>Looking down -Z, the OpenGL convention, from a camera at the origin.</summary>
-    static float[] View() =>
+    public static float[] ViewForTests() =>
         Mat4f.LookAt(Mat4f.Create(),
             eye: new[] { 0f, 0f, 0f },
             center: new[] { 0f, 0f, -1f },
             up: new[] { 0f, 1f, 0f });
 
-    static float[] Projection() =>
+    public static float[] ProjectionForTests() =>
         Mat4f.Perspective(Mat4f.Create(), fovy: 1.05f /* ~60 degrees */, aspect: 16f / 9f,
             near: 0.1f, far: 1000f);
+
+    static float[] View() => ViewForTests();
+
+    static float[] Projection() => ProjectionForTests();
 
     static void Accepts(Check c, LodFrustum f)
     {
@@ -56,6 +60,8 @@ public static class FrustumChecks
         // behind the player is drawn, which is roughly half of them.
         c.False(Box(f, 0, 0, 100, 10), "a box behind the camera is rejected");
         c.False(Box(f, 0, 0, 500, 50), "a box far behind the camera is rejected");
+        c.True(LodCoveragePolicy.ShouldKeepVisitedDraw(0, hasDataSet: true),
+            "visited L0 is exempt from this reject at draw time, not in LodFrustum itself");
 
         c.False(Box(f, 2000, 0, -100, 10), "a box far to the right is rejected");
         c.False(Box(f, -2000, 0, -100, 10), "a box far to the left is rejected");

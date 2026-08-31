@@ -238,11 +238,17 @@ public class LodWorld
         LastSweepPinned = 0;
         LastSweepCold = 0;
 
-        foreach ((long key, LodSection _) in Sections)
+        foreach ((long key, LodSection section) in Sections)
         {
             LastSweepChecked++;
             int level = KeyLevel(key);
             if (level >= MaxLevel) continue;
+            // Captured near tiles stay resident so a fast turn does not wait on reload.
+            if (LodCoveragePolicy.IsVisitedKeepLevel(level) && section.CapturedColumns > 0)
+            {
+                LastSweepPinned++;
+                continue;
+            }
             // Unsaved or unpropagated data pins a section; a pending mesh rebuild does
             // NOT - the scheduler demand-reloads from disk when its turn comes.
             if (SaveDirty.Contains(key) || MipDirty.Contains(key)) { LastSweepPinned++; continue; }

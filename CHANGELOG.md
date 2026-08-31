@@ -1,3 +1,6 @@
+## 0.7.25
+- **Visited land trail.** Captured L0/L1 stays drawn when the camera turns or flies past: the view frustum no longer drops visited near tiles (behind-camera and grazing side planes), mesh jobs for them are not pruned just because the wanted rung moved ahead, and the scheduler prioritises their reload/mesh work so fill does not stall with the worker idle. Coarser levels still use a surface-tight frustum box so high flight does not false-reject tiles beside the view. RAM cold-sweep pins captured L0/L1; GPU keeps the last good mesh until a reload lands instead of disposing into sky.
+
 ## 0.7.17
 - Fixes the clear square that followed the camera while flying high. Distant Vistas was deciding that vanilla owned nearby terrain from horizontal distance alone, even when the ground was far below the camera and vanilla was no longer drawing it. The handoff now includes the terrain's surface height, so LOD stays under high-altitude views until vanilla can actually cover it.
 
