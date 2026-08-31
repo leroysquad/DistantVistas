@@ -28,6 +28,23 @@ if [[ "$(id -u)" -ne 0 ]]; then
     command -v sudo >/dev/null 2>&1 && SUDO="sudo"
 fi
 
+# --- 0. Headless graphics stack --------------------------------------------
+# The `smoke`/`matrix` check tiers launch the real graphical client, which needs
+# a virtual display (Xvfb) and Mesa's software GL driver (no GPU on the VM).
+# x11-utils provides xdpyinfo, which .cursor/run-smoke.sh probes for a display.
+GL_PKGS=(xvfb libgl1-mesa-dri x11-utils)
+missing=()
+for pkg in "${GL_PKGS[@]}"; do
+    dpkg -s "$pkg" >/dev/null 2>&1 || missing+=("$pkg")
+done
+if [[ ${#missing[@]} -gt 0 ]]; then
+    echo "install: installing headless-GL packages: ${missing[*]}"
+    $SUDO apt-get update -qq
+    $SUDO DEBIAN_FRONTEND=noninteractive apt-get install -y -qq "${missing[@]}"
+else
+    echo "install: headless-GL packages already present"
+fi
+
 # --- 1. .NET 10 SDK ---------------------------------------------------------
 if "$DOTNET_DIR/dotnet" --list-sdks 2>/dev/null | grep -q '^10\.'; then
     echo "install: .NET 10 SDK already present at $DOTNET_DIR"
