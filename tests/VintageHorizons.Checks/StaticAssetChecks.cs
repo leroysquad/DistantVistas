@@ -14,6 +14,7 @@ public static class StaticAssetChecks
         TintSlotAgreement(c);
         AlphaPacking(c);
         VersionAgreement(c);
+        LiveSeasonClock(c);
     }
 
     /// <summary>
@@ -139,5 +140,19 @@ public static class StaticAssetChecks
             c.Eq(fromCsproj.Groups[1].Value, fromModinfo.Groups[1].Value,
                 $"{label}: csproj Version matches modinfo.json version");
         }
+    }
+
+    /// <summary>
+    /// Far season is a live shader clock, like night ambient. If these tokens
+    /// disappear, backing out of vanilla range will snap autumn to grey-green again.
+    /// </summary>
+    static void LiveSeasonClock(Check c)
+    {
+        string vsh = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "assets", "distantvistas", "shaders", "lodterrain.vsh"));
+        c.True(vsh.Contains("uniform float seasonRel"), "lodterrain.vsh has live seasonRel");
+        c.True(vsh.Contains("seasonTints"), "lodterrain.vsh has seasonTints");
+        c.True(vsh.Contains("band != 1"), "lodterrain.vsh skips season on water");
+        c.True(vsh.Contains("seasonTempX"), "lodterrain.vsh has seasonTempX for vanilla seasonWeight");
     }
 }

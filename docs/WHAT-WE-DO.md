@@ -20,6 +20,10 @@ Vanilla-owns is 3D plus look-down, not a horizontal disc. Looking down from alti
 
 Stored albedo is multiplied by the same live ambient the chunk shaders use. SunColor times daylight is the sun disc and stays orange after vanilla has gone dark.
 
+## Season
+
+Climate tint is sampled into a slow table. Season is a live shader clock from the calendar (`seasonRel`), mixed only onto vegetation slots. Rock, snow, and water stay untinted by autumn. Backing out of vanilla range keeps the current season instead of snapping to grey-green.
+
 ## Vanilla edge fade
 
 Vanilla chunk shaders fade alpha at the view-distance ring. Those vertex shaders are overridden so LOD joins behind at full alpha instead of a fog slice.

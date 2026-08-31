@@ -1,3 +1,5 @@
+## 0.7.26
+- **Far land keeps the current season.** Stored LOD albedo has climate (or grey-green atlas) but not a live calendar clock, so walking out of vanilla range snapped autumn grass and trees to summer grey-green. 0.7.26 treats season the same way 0.7.24 treats night: climate stays in the slow tint table, and the shader mixes the season map from the current calendar every frame (`seasonRel`). Vegetation keeps autumn orange at distance; rock, snow, and water do not get fake autumn. Night lighting, visited L0/L1 trail, and no-parent-plate meshing stay. Isolated pending install; leave MAIN Mods on 0.7.25.
 ## 0.7.25
 - **Visited land stays on screen when you fly past.** Captured L0/L1 stays drawn behind the camera instead of dropping to sky, and fill no longer stalls when you fly past already-generated land. Night lighting unchanged from 0.7.24. Isolated pending install; leave the live 0.7.24 session alone.
 ## 0.7.24

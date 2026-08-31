@@ -83,8 +83,10 @@ public class LodTerrainRenderer : IRenderer
     /// <summary>Dev/testing: keep the game unpaused even without window focus.</summary>
     public bool AutoUnpause;
 
-    // Live seasonal state. Colour maps are sampled on a lattice (G47) one slot per
-    // frame so winter grass is the field mean, not one hashed row.
+    // Climate tints: sampled on a lattice one slot per frame so the field mean
+    // is not one hashed row. Season is NOT in this table - that is a live
+    // shader clock (seasonRel / seasonTints) uploaded every draw, same idea as
+    // rgbaAmbientIn for night.
     const long SeasonalRefreshIntervalMs = 30_000;
     float snowLineY = 99999;
     float pendingSnowLineY = 99999;
@@ -1018,6 +1020,27 @@ public class LodTerrainRenderer : IRenderer
         // Same ambient the chunk shaders use. SunColor is the disc color and stays
         // orange at dusk/night; this is the clock that actually darkens the ground.
         prog.Uniform("rgbaAmbientIn", capi.Ambient.BlendedAmbientColor);
+
+        // Live season, same class of clock: the calendar, every frame, not a recapture.
+        // Climate stays in tintsLow/High. Vegetation slots mix seasonTints in the shader.
+        climatePos.Set((int)camPos.X, capi.World.SeaLevel, (int)camPos.Z);
+        float seasonRel = 0.5f;
+        float seasonTempX = 128f;
+        try
+        {
+            seasonRel = capi.World.Calendar.GetSeasonRel(climatePos);
+            ClimateCondition? cl = capi.World.BlockAccessor.GetClimateAt(climatePos);
+            if (cl != null)
+                seasonTempX = LodTintRegistry.UnscaledTempByteFromCelsius(cl.WorldGenTemperature);
+            tints.RefreshSeason(capi.World, climatePos.X, climatePos.Z);
+        }
+        catch
+        {
+            // Keep temperate defaults; identity season is worse than a guess.
+        }
+        prog.Uniform("seasonRel", seasonRel);
+        prog.Uniform("seasonTempX", seasonTempX);
+        prog.Uniforms4("seasonTints", LodTintRegistry.MaxSlots, tints.SeasonTints);
 
         // Live ambient fog so the overdraw ring matches vanilla chunks in front.
         // DisableLodFog only skips extra pastViewHaze, not BlendedFog*.

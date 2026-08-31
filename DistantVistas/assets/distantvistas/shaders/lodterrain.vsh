@@ -38,6 +38,12 @@ uniform vec4 tintsLow[TINT_SLOTS];
 uniform vec4 tintsHigh[TINT_SLOTS];
 uniform float tintYLow;
 uniform float tintYHigh;
+// Live season from the calendar, same idea as rgbaAmbientIn for night.
+// tintsLow/High stay climate (slow). seasonTints is the season map at the
+// current seasonRel, uploaded every frame. A=0 means no season map.
+uniform vec4 seasonTints[TINT_SLOTS];
+uniform float seasonRel;
+uniform float seasonTempX;
 
 out vec3 tint;
 out vec4 worldPos;
@@ -75,6 +81,21 @@ void main()
             tintLum = (tint.r + tint.g + tint.b) * 0.333333;
         }
         if (tintLum > 0.78) tint *= 0.78 / max(tintLum, 0.001);
+    }
+
+    // Live season mix. Vanilla chunk shaders do mix(climate, seasonColor, seasonWeight)
+    // from uniform seasonRel. We keep climate in the slow table and mix the live
+    // season map here so backing out of vanilla range keeps autumn orange.
+    // band 1 is water: climate only, never fake autumn. Rock/snow are slot 0.
+    int band = slotRaw / TINT_SLOTS;
+    if (band != 1 && seasonTints[slot].a > 0.0) {
+        float x = seasonTempX + max(0.0, (yLevel - tintYLow) * 1.5);
+        float seasonWeight = clamp(0.5 - cos(x / 42.0) / 2.3 + max(0.0, 128.0 - x) / 512.0 - max(0.0, x - 130.0) / 200.0, 0.0, 1.0);
+        float amt = clamp(seasonTints[slot].a * seasonWeight, 0.0, 1.0);
+        // seasonRel is the clock the table was sampled at; keep it live so a
+        // driver cannot drop the uniform.
+        amt *= step(0.0, seasonRel + 1.0);
+        tint = mix(tint, seasonTints[slot].rgb, amt);
     }
 
     worldPos = modelMatrix * vec4(vertexPositionIn, 1.0);

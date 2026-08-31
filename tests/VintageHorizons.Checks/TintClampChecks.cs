@@ -16,6 +16,8 @@ public static class TintClampChecks
         RockLikeSkipsLiveTint(c);
         DullOliveGrassKeepsTint(c);
         ClampOnlyPullsBrightSamples(c);
+        LiveSeasonSkipsWaterAndRock(c);
+        SeasonWeightTemperateIsHigh(c);
     }
 
     static void SnowWhiteIsPulledDown(Check c)
@@ -103,5 +105,25 @@ public static class TintClampChecks
         c.Eq(or, r, "a 0.61-luma green-brown is not pulled toward grey");
         c.Eq(og, g, "green channel of a sub-0.78 tint is unchanged");
         c.Eq(ob, b, "blue channel of a sub-0.78 tint is unchanged");
+    }
+
+    static void LiveSeasonSkipsWaterAndRock(Check c)
+    {
+        c.Eq(0f, LodTintRegistry.LiveSeasonAmount(band: 1, seasonAlpha: 1f, seasonWeight: 1f),
+            "water band never takes live season");
+        c.Eq(0f, LodTintRegistry.LiveSeasonAmount(band: 0, seasonAlpha: 0f, seasonWeight: 1f),
+            "a slot with no season map does not mix season");
+        c.Near(0.85, LodTintRegistry.LiveSeasonAmount(band: 0, seasonAlpha: 1f, seasonWeight: 0.85f), 0.0001,
+            "opaque grass/trees mix live season");
+        c.Near(0.85, LodTintRegistry.LiveSeasonAmount(band: 2, seasonAlpha: 1f, seasonWeight: 0.85f), 0.0001,
+            "thin plants mix live season");
+    }
+
+    static void SeasonWeightTemperateIsHigh(Check c)
+    {
+        float temperate = LodTintRegistry.SeasonWeightFromTempByte(128f);
+        c.True(temperate > 0.75f, "temperate seasonWeight is high enough for autumn to show");
+        float byte128 = LodTintRegistry.UnscaledTempByteFromCelsius(12.5f);
+        c.Near(128.0, byte128, 0.2, "12.5 C at sea is unscaled 128");
     }
 }
