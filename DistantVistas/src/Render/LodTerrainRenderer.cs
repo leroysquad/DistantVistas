@@ -728,9 +728,10 @@ public class LodTerrainRenderer : IRenderer
                 if (LodCoveragePolicy.ShouldKeepVisitedDraw(
                         dirtyLevel, world.HasDataSet.Contains(key), pruneDist, liveViewDistance))
                     continue;
-                if (dirtyLevel == 0 && !world.IncompleteL0Keys.Contains(key)) continue;
+                if (dirtyLevel == 0 && world.IncompleteL0Keys.Contains(key)) continue;
                 if (handoffJob && dirtyLevel <= 1) continue;
-                if (dirtyLevel <= 1 && world.HasDataSet.Contains(key)) continue;
+                if (LodCoveragePolicy.IsNearVisitedTrail(pruneDist, liveViewDistance)
+                    && dirtyLevel <= 1 && world.HasDataSet.Contains(key)) continue;
                 dirtyPrune.Add(key);
             }
         }
