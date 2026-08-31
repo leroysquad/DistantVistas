@@ -16,6 +16,7 @@ public static class StoreChecks
         DeferredPalette(c);
         AFailedLookupIsNotRemembered(c);
         AColourlessCacheIsRepaired(c);
+        MissingTextureWhiteTakesNeighbour(c);
         AStaleStableColourIsRefreshed(c);
         DerivedMipUpgradeKeepsDetailedLeaves(c);
         DisposingTheOfferReaderReleasesItsFileHandle(c);
@@ -221,15 +222,39 @@ public static class StoreChecks
         c.Eq(unchecked((int)0xFF112233), section.Palette[0].Color, "a known block takes its real colour");
         c.Eq(unchecked((int)0xFF336699), section.Palette[1].Color, "an already-coloured entry is untouched");
 
-        // The provider answered 0 for the unknown block. Storing that would leave the
+        // The provider answered 0 for the unknown block. Take a neighbour rock/dirt
+        // sample from this section instead of white or black. Storing 0 would leave the
         // entry needing repair for ever, and repairing marks the section dirty, so the
         // cache would be rewritten on every single load.
-        c.Eq(LodPaletteRepair.UnknownBlockColor, section.Palette[2].Color,
-            "a block nothing can colour becomes grey rather than staying black");
+        c.Eq(unchecked((int)0xFF336699), section.Palette[2].Color,
+            "a block nothing can colour takes a neighbour earth tone, never white");
         c.False(LodPaletteRepair.NeedsColor(section.Palette[2].Color),
             "so the repair finishes instead of running again every load");
 
         c.Eq(0, LodPaletteRepair.Fill(section, _ => 0), "a repaired section needs no second pass");
+    }
+
+
+    static void MissingTextureWhiteTakesNeighbour(Check c)
+    {
+        c.True(LodPaletteRepair.NeedsColor(unchecked((int)0x00FCFCFC)),
+            "unknown.png near-white is treated as missing colour");
+        c.True(LodPaletteRepair.IsBrightCap(unchecked((int)0xFFFCFCFC)),
+            "opaque near-white is a bright cap");
+
+        var section = new LodSection();
+        int dirt = unchecked((int)0xFF406080); // R=0x80 G=0x60 B=0x40, mid-luma earth
+        section.FindOrAddPaletteEntry(blockId: 11, color: dirt, flags: 0);
+        section.FindOrAddPaletteEntry(blockId: 12, color: unchecked((int)0x00FCFCFC), flags: 0);
+
+        int repaired = LodPaletteRepair.Fill(section, id =>
+            id == 12 ? unchecked((int)0x00FCFCFC) : dirt);
+
+        c.Eq(1, repaired, "the missing-tex entry is repaired");
+        c.Eq(dirt, section.Palette[1].Color,
+            "missing-tex white takes the neighbour dirt, never stays white");
+        c.Eq(dirt, LodPaletteRepair.NeighborTerrainColor(section, skipIndex: 1),
+            "neighbour lookup prefers the earth-tone entry");
     }
 
     static void AStaleStableColourIsRefreshed(Check c)

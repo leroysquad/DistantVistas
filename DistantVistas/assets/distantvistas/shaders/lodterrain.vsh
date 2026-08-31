@@ -63,6 +63,19 @@ void main()
     int slot = clamp(slotRaw - (slotRaw / TINT_SLOTS) * TINT_SLOTS, 0, TINT_SLOTS - 1);
     float tintBlend = clamp((yLevel - tintYLow) / max(1.0, tintYHigh - tintYLow), 0.0, 1.0);
     tint = mix(tintsLow[slot].rgb, tintsHigh[slot].rgb, tintBlend);
+    // Slot 0 is identity. A snow-row high sample must not bleach captured grass
+    // or soil tops after vanilla unloads; copy the valley tint instead. Only
+    // clamp toward white (0.78, same as 0.7.18). 0.65 crushed greens to grey.
+    if (slot > 0) {
+        float tintLum = (tint.r + tint.g + tint.b) * 0.333333;
+        float tintMx = max(tint.r, max(tint.g, tint.b));
+        float tintMn = min(tint.r, min(tint.g, tint.b));
+        if ((tintMx - tintMn) < 0.12 && tintLum > 0.62) {
+            tint = tintsLow[slot].rgb;
+            tintLum = (tint.r + tint.g + tint.b) * 0.333333;
+        }
+        if (tintLum > 0.78) tint *= 0.78 / max(tintLum, 0.001);
+    }
 
     worldPos = modelMatrix * vec4(vertexPositionIn, 1.0);
     worldPos = applyGlobalWarping(worldPos);

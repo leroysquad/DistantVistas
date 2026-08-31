@@ -238,11 +238,17 @@ public class LodWorld
         LastSweepPinned = 0;
         LastSweepCold = 0;
 
-        foreach ((long key, LodSection _) in Sections)
+        foreach ((long key, LodSection section) in Sections)
         {
             LastSweepChecked++;
             int level = KeyLevel(key);
             if (level >= MaxLevel) continue;
+            // Captured near tiles stay resident so a fast turn does not wait on reload.
+            if (LodCoveragePolicy.IsVisitedKeepLevel(level) && section.CapturedColumns > 0)
+            {
+                LastSweepPinned++;
+                continue;
+            }
             // Unsaved or unpropagated data pins a section; a pending mesh rebuild does
             // NOT - the scheduler demand-reloads from disk when its turn comes.
             if (SaveDirty.Contains(key) || MipDirty.Contains(key)) { LastSweepPinned++; continue; }
@@ -254,6 +260,17 @@ public class LodWorld
             double dz = Math.Max(0, Math.Max(minZ - camZ, camZ - (minZ + footprint)));
             double dist = Math.Sqrt(dx * dx + dz * dz);
 
+            // Visible / just-left stay resident. Spill farther tiles to disk; GPU
+            // meshes are not disposed just because RAM dropped.
+            // 0.7.22 pinned L0/L1 inside view distance plus 16 tiles (~1k).
+            // That was the moving window. Tenfold so a long walk does not dump
+            // the trail from RAM before we can mesh it. Beyond that we still
+            // spill; the renderer pages the same-quality mesh back from disk.
+            if (level <= 1 && dist < ViewDistanceAnchor + LodSection.SectionBlocks * 160)
+            {
+                LastSweepPinned++;
+                continue;
+            }
             if (WantedLevelFor(dist) < level + 2) continue;
 
             LastSweepCold++;

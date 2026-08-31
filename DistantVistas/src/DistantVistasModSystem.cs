@@ -549,7 +549,9 @@ public class DistantVistasModSystem : ModSystem
             color = StableColorOf(block);
         }
 
-        return (LodPaletteRepair.Sanitize(color, terrainFallbackColor), (byte)TintSlotOf(block));
+        color = LodPaletteRepair.Sanitize(color, terrainFallbackColor);
+        byte slot = LodPaletteRepair.IsRockLikeAlbedo(color) ? (byte)LodTintRegistry.SlotNone : (byte)TintSlotOf(block);
+        return (color, slot);
     }
 
     /// <summary>

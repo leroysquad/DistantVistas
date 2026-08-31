@@ -34,9 +34,14 @@ public static class LodMesher
     const byte WaterBase = LodTintRegistry.MaxSlots;
     const byte ThinBase = LodTintRegistry.MaxSlots * 2;
 
-    static byte AlphaFor(byte paletteFlags, byte tintSlot)
+    static byte AlphaFor(byte paletteFlags, byte tintSlot, int color)
     {
         byte slot = tintSlot < LodTintRegistry.MaxSlots ? tintSlot : (byte)LodTintRegistry.SlotNone;
+        // Skip live tint only for stored colours that are already brown earth.
+        // Greyscale and dull-olive grass MUST keep the climate slot or far LOD
+        // stays the raw atlas grey. White caps are handled by not sampling the
+        // snow row, not by stripping tint off every mid-luma top.
+        if (LodPaletteRepair.IsRockLikeAlbedo(color)) slot = (byte)LodTintRegistry.SlotNone;
         if ((paletteFlags & LodPaletteEntry.FlagWater) != 0) return (byte)(WaterBase + slot);
         if ((paletteFlags & LodPaletteEntry.FlagThin) != 0) return (byte)(ThinBase + slot);
         return slot;
@@ -259,7 +264,7 @@ public static class LodMesher
 
             Buffers buf = first.Water ? water : opaque;
             int color = self.PaletteColors[first.Pid];
-            byte alpha = AlphaFor(self.PaletteFlags[first.Pid], self.PaletteTintSlots[first.Pid]);
+            byte alpha = AlphaFor(self.PaletteFlags[first.Pid], self.PaletteTintSlots[first.Pid], color);
 
             for (int i = start; i < end; i++)
             {
@@ -358,7 +363,7 @@ public static class LodMesher
 
             Buffers buf = seg.Water ? water : opaque;
             int color = self.PaletteColors[seg.Pid];
-            byte alpha = AlphaFor(self.PaletteFlags[seg.Pid], self.PaletteTintSlots[seg.Pid]);
+            byte alpha = AlphaFor(self.PaletteFlags[seg.Pid], self.PaletteTintSlots[seg.Pid], color);
 
             // W/E walls run along Z at fixed X; N/S walls run along X at fixed Z.
             bool xWall = seg.Dir is W or E;

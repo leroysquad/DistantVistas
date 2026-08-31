@@ -23,7 +23,7 @@ public class LodStore : SQLiteDBConnection
     /// Derived parents are disposable. Version changes preserve detailed L0 captures,
     /// remove only compressed parents, and queue L0 to rebuild the pyramid.
     /// </summary>
-    const string DerivedMipVersion = "3";
+    const string DerivedMipVersion = "6"; // v6: restore climate tint on grass; rock-like skip no longer eats greyscale tops
 
     public override string DBTypeCode => "distantvistas lod cache";
 

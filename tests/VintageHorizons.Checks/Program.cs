@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 
 namespace DistantVistas.Checks;
 
@@ -16,15 +16,18 @@ public static class Program
         ("pure", "key math", KeyMathChecks.Run),
         ("pure", "section runs", SectionChecks.Run),
         ("pure", "section properties", SectionPropertyChecks.Run),
+        ("pure", "parent coverage", CoverageChecks.Run),
         ("pure", "mip downsample", MipChecks.Run),
         ("pure", "residency", ResidencyChecks.Run),
         ("pure", "mesher", MesherChecks.Run),
         ("pure", "top-soil tint", TopSoilColorChecks.Run),
+        ("pure", "tint clamp", TintClampChecks.Run),
         ("pure", "snow overlay", SnowOverlayChecks.Run),
         ("pure", "server config", ConfigChecks.Run),
         ("pure", "lod mod deferral", DeferralChecks.Run),
         ("fixture", "blob format", StoreChecks.Run),
         ("fixture", "frustum", FrustumChecks.Run),
+        ("pure", "visited keep", VisitedKeepChecks.Run),
         ("fixture", "block policy", PolicyChecks.Run),
         ("pure", "remote keys", RemoteKeyChecks.Run),
         ("pure", "chunk generation", GenerateChecks.Run),
@@ -117,3 +120,4 @@ public static class Program
         return failed == 0 ? 0 : 1;
     }
 }
+

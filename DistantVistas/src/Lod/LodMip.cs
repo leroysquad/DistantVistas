@@ -49,7 +49,7 @@ public static class LodMip
                 }
                 if (captured == 0) continue;
 
-                ulong[] merged = MergeColumns(child.Runs, colStart, colEnd, captured);
+                ulong[] merged = MergeColumns(child, colStart, colEnd, captured);
 
                 // Remap child palette ids to the parent palette.
                 for (int i = 0; i < merged.Length; i++)
@@ -59,7 +59,14 @@ public static class LodMip
                     if (ppid < 0)
                     {
                         LodPaletteEntry e = child.Palette[cpid];
-                        ppid = parent.FindOrAddPaletteEntry(e.BlockId, e.Color, e.Flags, e.TintSlot);
+                        // Parent rebuild used to copy the child colour as-is. Fill()
+                        // neighbour-steal only runs on disk load, so a missing-tex L0
+                        // captured on MP before the atlas was ready promoted white
+                        // onto the parent that the walk-away handoff actually draws.
+                        int color = e.Color;
+                        if (LodPaletteRepair.NeedsColor(color))
+                            color = LodPaletteRepair.Sanitize(color, LodPaletteRepair.NeighborTerrainColor(child, cpid));
+                        ppid = parent.FindOrAddPaletteEntry(e.BlockId, color, e.Flags, e.TintSlot);
                         paletteMap[cpid] = ppid;
                     }
                     merged[i] = LodSection.PackRun(ppid, LodSection.RunYTop(merged[i]), LodSection.RunYBottom(merged[i]));
@@ -78,9 +85,15 @@ public static class LodMip
     /// The columns are given as ranges into the child section's own run array. That array
     /// is immutable once created (writes swap the whole array), which is the same property
     /// the worker snapshots rely on, so reading through it here needs no copy.
+    ///
+    /// Bright (missing-tex / snow-white) slices only become the parent surface when they
+    /// cover at least 3 of the 2x2. A lone snow or chalk column used to win Boyer-Moore
+    /// and paint a whole 64x64 mountain cap white; closer in, those blocks were rock.
+    /// Real snow fields still win: they cover 3 or 4 children.
     /// </summary>
-    static ulong[] MergeColumns(ulong[] runs, ReadOnlySpan<int> colStart, ReadOnlySpan<int> colEnd, int count)
+    static ulong[] MergeColumns(LodSection child, ReadOnlySpan<int> colStart, ReadOnlySpan<int> colEnd, int count)
     {
+        ulong[] runs = child.Runs;
         var bounds = boundaries ??= new List<int>(64);
         bounds.Clear();
 
@@ -113,6 +126,9 @@ public static class LodMip
         int solidMajority = count >= 2 ? 2 : 1;
         int canopyMajority = LodWorld.FidelityStep >= 0.5 ? 1 : solidMajority;
 
+        Span<int> pidList = stackalloc int[4];
+        Span<int> pidN = stackalloc int[4];
+
         for (int i = uniqueCount - 1; i > 0; i--)
         {
             int sliceTop = bounds[i];
@@ -120,10 +136,10 @@ public static class LodMip
             int mid = (sliceTop + sliceBottom) / 2;
             int sliceH = sliceTop - sliceBottom;
 
-            // Which columns cover this slice, and with what block?
             int covering = 0;
-            int bestPid = -1;
-            int bestPidCount = 0;
+            int nPids = 0;
+            pidList.Clear();
+            pidN.Clear();
             for (int c = 0; c < count; c++)
             {
                 foreach (ulong run in runs.AsSpan(colStart[c], colEnd[c] - colStart[c]))
@@ -132,10 +148,18 @@ public static class LodMip
                     {
                         covering++;
                         int pid = LodSection.RunPaletteId(run);
-                        // Cheap mode estimate over ≤4 values (Boyer–Moore style).
-                        if (bestPidCount == 0) { bestPid = pid; bestPidCount = 1; }
-                        else if (pid == bestPid) bestPidCount++;
-                        else bestPidCount--;
+                        int found = -1;
+                        for (int k = 0; k < nPids; k++)
+                        {
+                            if (pidList[k] == pid) { found = k; break; }
+                        }
+                        if (found < 0)
+                        {
+                            pidList[nPids] = pid;
+                            pidN[nPids] = 1;
+                            nPids++;
+                        }
+                        else pidN[found]++;
                         break;
                     }
                 }
@@ -143,6 +167,9 @@ public static class LodMip
 
             int need = sliceH <= 4 ? canopyMajority : solidMajority;
             if (covering < need) continue;
+
+            int bestPid = PickSlicePalette(child, pidList, pidN, nPids);
+            if (bestPid < 0) continue;
 
             // Merge with the previous run when contiguous and same block.
             if (result.Count > 0)
@@ -160,6 +187,44 @@ public static class LodMip
         // Anti-floater: drop runs that sit on air with a gap below (unsupported scraps).
         // Keep continuous stacks from the lowest solid down; orphan mid-air slices go.
         return DropUnsupportedFloaters(result);
+    }
+
+    /// <summary>
+    /// Most common covering block. Bright-white (snow / missing tex) may win only with
+    /// a true 3-of-4 majority; otherwise the rock/dirt neighbour in the same slice wins.
+    /// </summary>
+    static int PickSlicePalette(LodSection child, ReadOnlySpan<int> pidList, ReadOnlySpan<int> pidN, int nPids)
+    {
+        int bestPid = -1, bestN = -1;
+        int bestEarthPid = -1, bestEarthN = -1;
+        for (int k = 0; k < nPids; k++)
+        {
+            int pid = pidList[k];
+            int n = pidN[k];
+            if (n > bestN)
+            {
+                bestN = n;
+                bestPid = pid;
+            }
+            bool bright = pid >= 0 && pid < child.Palette.Count
+                && LodPaletteRepair.IsBrightCap(child.Palette[pid].Color);
+            if (!bright && n > bestEarthN)
+            {
+                bestEarthN = n;
+                bestEarthPid = pid;
+            }
+        }
+
+        if (bestPid < 0) return -1;
+        bool winnerBright = bestPid < child.Palette.Count
+            && LodPaletteRepair.IsBrightCap(child.Palette[bestPid].Color);
+        // 3-of-4 or unanimous bright is real snow (or a whole missing-tex plateau).
+        // A 1-of-4 or 2-of-4 bright cap is patchy snow or a missing tex; closer in those blocks are rock.
+        // Skip a bright slice that is not a 3-of-4 majority. Returning -1 drops a
+        // lone snow/missing-tex cap so the rock below becomes the parent surface.
+        if (winnerBright && bestN < 3)
+            return bestEarthPid;
+        return bestPid;
     }
 
     /// <summary>

@@ -190,10 +190,12 @@ public class LodTintRegistry
     {
         Array.Copy(tintsLow, pendingTintsLow, tintsLow.Length);
         Array.Copy(tintsHigh, pendingTintsHigh, tintsHigh.Length);
-        // Span the height range terrain actually occupies around the viewer, so the
-        // interpolation covers valley floor to peak rather than extrapolating.
+        // Valley floor plus a lapse-rate offset for colder mountain grass. 320 used to
+        // put the high sample in snow-climate white, so greyscale grass on high peaks
+        // multiplied to plastic white while rock sides (slot 0) stayed correct. 160
+        // still cools the tint; snow is captured snow blocks plus the alpine overlay.
         pendingSampleYLow = world.SeaLevel;
-        pendingSampleYHigh = world.SeaLevel + 320;
+        pendingSampleYHigh = world.SeaLevel + HighSampleOffsetBlocks;
     }
 
     /// <summary>Refresh one climate/season tint slot; safe to spread over render frames.</summary>
@@ -207,6 +209,7 @@ public class LodTintRegistry
             pendingTintsLow, slot, untintedShare[slot]);
         Sample(world, block, x, (int)pendingSampleYHigh, z,
             pendingTintsHigh, slot, untintedShare[slot]);
+        ProtectHighTintFromSnow(pendingTintsLow, pendingTintsHigh, slot);
     }
 
     /// <summary>Atomically publish the completely refreshed table to the renderer.</summary>
@@ -270,12 +273,72 @@ public class LodTintRegistry
 
         const float scale = SampleGridSide * SampleGridSide * 255f;
 
+        float rf = r / scale;
+        float gf = g / scale;
+        float bf = b / scale;
+        ClampTintAwayFromWhite(ref rf, ref gf, ref bf);
+
         // Dilute by the share the tint must not touch, so a slot registered from
         // grass-covered soil reproduces vanilla's top-soil shader: the bare dirt that
         // shows through the overlay stays the colour it already is.
-        into[slot * 4 + 0] = LodTopSoil.Dilute(share.R, r / scale);
-        into[slot * 4 + 1] = LodTopSoil.Dilute(share.G, g / scale);
-        into[slot * 4 + 2] = LodTopSoil.Dilute(share.B, b / scale);
+        into[slot * 4 + 0] = LodTopSoil.Dilute(share.R, rf);
+        into[slot * 4 + 1] = LodTopSoil.Dilute(share.G, gf);
+        into[slot * 4 + 2] = LodTopSoil.Dilute(share.B, bf);
         into[slot * 4 + 3] = 1f;
+    }
+
+    /// <summary>
+    /// High climate sample, in blocks above sea. Must stay below the snow band of the
+    /// colour maps: those maps are indexed by temperature, and temperature falls with
+    /// height, so a sample hundreds of blocks up returns snow-white even in summer.
+    /// </summary>
+    public const int HighSampleOffsetBlocks = 160;
+
+    /// <summary>
+    /// Only pull a climate sample down when it is brighter than this. 0.7.19 used
+    /// 0.65 and that crushed greens toward grey. 0.7.18 used 0.78. Never scale
+    /// toward grey; this only clamps high-luma (toward white) samples.
+    /// Slot 0 is identity and is never sampled. Real snow is a snow block plus overlay.
+    /// </summary>
+    public const float MaxTintLuminance = 0.78f;
+
+    public static void ClampTintAwayFromWhite(ref float r, ref float g, ref float b)
+    {
+        float lum = (r + g + b) / 3f;
+        if (lum <= MaxTintLuminance || lum <= 0f) return;
+        float k = MaxTintLuminance / lum;
+        r *= k;
+        g *= k;
+        b *= k;
+    }
+
+    /// <summary>
+    /// High climate sample in the snow band of the colour map (low chroma, high
+    /// luma). Do not live-tint HIGH grass toward snow white: copy the valley
+    /// climate colour instead, which must itself be a real green/brown sample,
+    /// not identity or the grey clamp leftover. Real snow is a snow block.
+    /// </summary>
+    public static bool IsSnowLikeTint(float r, float g, float b)
+    {
+        float mx = r > g ? r : g;
+        if (b > mx) mx = b;
+        float mn = r < g ? r : g;
+        if (b < mn) mn = b;
+        float lum = (r + g + b) / 3f;
+        return lum >= 0.62f && (mx - mn) <= 0.12f;
+    }
+
+    public static void ProtectHighTintFromSnow(float[] low, float[] high, int slot)
+    {
+        if (slot <= SlotNone) return;
+        int i = slot * 4;
+        if (i + 2 >= high.Length || i + 2 >= low.Length) return;
+        if (!IsSnowLikeTint(high[i], high[i + 1], high[i + 2])) return;
+        // Copying identity or another snow-grey would paint greyscale grass
+        // grey at every altitude. Valley has to be an actual climate colour.
+        if (IsSnowLikeTint(low[i], low[i + 1], low[i + 2])) return;
+        high[i] = low[i];
+        high[i + 1] = low[i + 1];
+        high[i + 2] = low[i + 2];
     }
 }

@@ -19,6 +19,9 @@ public static class MipChecks
         RunMerging(c);
         PaletteRemap(c);
         NothingToDo(c);
+        BrightMinorityDoesNotPaintTheCap(c);
+        NearWhiteMinorityDoesNotPaintTheCap(c);
+        BrightMajorityKeepsSnow(c);
     }
 
     /// <summary>A child section fills exactly one quadrant of its parent, and only that one.</summary>
@@ -196,6 +199,77 @@ public static class MipChecks
         var target = new LodSection();
         c.True(LodMip.DownsampleIntoParent(child, target, 0, 0), "the first downsample changes the parent");
         c.False(LodMip.DownsampleIntoParent(child, target, 0, 0), "an identical re-run changes nothing");
+    }
+
+    /// <summary>
+    /// One bright column on three rock columns must not become a white parent cap.
+    /// Boyer-Moore used to keep the snow pid after cancelling; closer in those blocks are rock.
+    /// </summary>
+    static void BrightMinorityDoesNotPaintTheCap(Check c)
+    {
+        var child = new LodSection();
+        child.FindOrAddPaletteEntry(blockId: 1, color: 0x00445566, flags: 0);
+        child.FindOrAddPaletteEntry(blockId: 2, color: unchecked((int)0x00FCFCFC), flags: 0);
+
+        child.SetColumn(LodSection.ColumnIndex(0, 0), new[] { LodSection.PackRun(1, 22, 20), LodSection.PackRun(0, 20, 0) });
+        child.SetColumn(LodSection.ColumnIndex(1, 0), new[] { LodSection.PackRun(0, 20, 0) });
+        child.SetColumn(LodSection.ColumnIndex(0, 1), new[] { LodSection.PackRun(0, 20, 0) });
+        child.SetColumn(LodSection.ColumnIndex(1, 1), new[] { LodSection.PackRun(0, 20, 0) });
+
+        var parent = new LodSection();
+        LodMip.DownsampleIntoParent(child, parent, 0, 0);
+        ulong[] merged = parent.ColumnRuns(LodSection.ColumnIndex(0, 0)).ToArray();
+        c.True(merged.Length >= 1, "mixed columns still produce a run");
+        int topPid = LodSection.RunPaletteId(merged[0]);
+        c.Eq(1, parent.Palette[topPid].BlockId, "a 1-of-4 bright cap does not become the parent surface");
+        c.Eq(20, LodSection.RunYTop(merged[0]), "parent height follows the rock majority");
+    }
+
+    /// <summary>
+    /// Atlas near-white that is not quite 0xFFFFFF (TrueScale / server samples around
+    /// luma 232) used to skip the 3-of-4 gate and paint the parent cap.
+    /// </summary>
+    static void NearWhiteMinorityDoesNotPaintTheCap(Check c)
+    {
+        var child = new LodSection();
+        child.FindOrAddPaletteEntry(blockId: 1, color: 0x00445566, flags: 0);
+        child.FindOrAddPaletteEntry(blockId: 2, color: unchecked((int)0x00E8E8E8), flags: 0);
+
+        child.SetColumn(LodSection.ColumnIndex(0, 0), new[] { LodSection.PackRun(1, 22, 20), LodSection.PackRun(0, 20, 0) });
+        child.SetColumn(LodSection.ColumnIndex(1, 0), new[] { LodSection.PackRun(0, 20, 0) });
+        child.SetColumn(LodSection.ColumnIndex(0, 1), new[] { LodSection.PackRun(0, 20, 0) });
+        child.SetColumn(LodSection.ColumnIndex(1, 1), new[] { LodSection.PackRun(0, 20, 0) });
+
+        var parent = new LodSection();
+        LodMip.DownsampleIntoParent(child, parent, 0, 0);
+        ulong[] merged = parent.ColumnRuns(LodSection.ColumnIndex(0, 0)).ToArray();
+        c.True(merged.Length >= 1, "mixed near-white columns still produce a run");
+        int topPid = LodSection.RunPaletteId(merged[0]);
+        c.Eq(1, parent.Palette[topPid].BlockId, "a 1-of-4 luma-232 cap does not become the parent surface");
+        c.True(LodPaletteRepair.IsBrightCap(unchecked((int)0x00E8E8E8)), "luma 232 is a bright cap");
+        c.False(LodPaletteRepair.IsMissingTextureWhite(unchecked((int)0x00E8E8E8)),
+            "luma 232 is not unknown.png, so Fill must not steal real snow");
+    }
+
+    /// <summary>Four snow-capped columns stay snow: that is a real snow field, not a missing tex.</summary>
+    static void BrightMajorityKeepsSnow(Check c)
+    {
+        var child = new LodSection();
+        child.FindOrAddPaletteEntry(blockId: 1, color: 0x00445566, flags: 0);
+        child.FindOrAddPaletteEntry(blockId: 2, color: unchecked((int)0x00FCFCFC), flags: 0);
+        ulong[] snowOverRock = { LodSection.PackRun(1, 22, 18), LodSection.PackRun(0, 18, 0) };
+        for (int dz = 0; dz < 2; dz++)
+        {
+            for (int dx = 0; dx < 2; dx++) child.SetColumn(LodSection.ColumnIndex(dx, dz), snowOverRock);
+        }
+
+        var parent = new LodSection();
+        LodMip.DownsampleIntoParent(child, parent, 0, 0);
+        ulong[] merged = parent.ColumnRuns(LodSection.ColumnIndex(0, 0)).ToArray();
+        c.True(merged.Length >= 1, "unanimous snow still produces a run");
+        int topPid = LodSection.RunPaletteId(merged[0]);
+        c.Eq(2, parent.Palette[topPid].BlockId, "a 4-of-4 snow field stays snow");
+        c.Eq(22, LodSection.RunYTop(merged[0]), "the snow cap keeps its height");
     }
 
     /// <summary>A fully captured child section, every column one run of palette id 0.</summary>

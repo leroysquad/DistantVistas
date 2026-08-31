@@ -22,6 +22,7 @@ uniform float disableLodFog;
 uniform vec3 sunPosition;
 uniform vec3 sunColor;
 uniform float dayLight;
+uniform vec3 rgbaAmbientIn;
 
 // Live tint table. The alpha byte carries a tint SLOT plus a blend band:
 //   0..63    opaque,     slot = alpha
@@ -104,9 +105,13 @@ void main()
     }
 
     vec4 terraColor = vec4(albedo, outAlpha);
-    terraColor.rgb *= shade * clamp(sunColor * clamp(dayLight, 0.0, 1.0), 0.02, 1.0);
 
-        // Clamp lit albedo so dusk sunColor cannot blow LOD into a saturated orange band.
+    // One clock for the whole horizon: vanilla's live ambient, the same rgbaAmbientIn
+    // chunk shaders feed applyLight. Captured albedo is daytime-bright; this is what
+    // actually goes purple/dark at night. Calendar.SunColor stays sunset orange after
+    // the near ground has already gone dark, which is why far sand was a glowing
+    // yellow band. DisableLodFog only skips extra pastViewHaze, not this.
+    terraColor.rgb *= shade * rgbaAmbientIn;
     terraColor.rgb = clamp(terraColor.rgb, 0.0, 1.0);
 
     // Same applyFog path as vanilla chunks. Skip applySpheresFog (height fog punches

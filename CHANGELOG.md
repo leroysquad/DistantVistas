@@ -1,3 +1,21 @@
+## 0.7.25
+- **Visited land stays on screen when you fly past.** Captured L0/L1 stays drawn behind the camera instead of dropping to sky, and fill no longer stalls when you fly past already-generated land. Night lighting unchanged from 0.7.24. Isolated pending install; leave the live 0.7.24 session alone.
+## 0.7.24
+- **Night far land matches the near ground.** 0.7.23 already fed live fog, but the LOD shader still lit captured albedo with Calendar.SunColor * daylight. That disc color stays sunset orange after vanilla chunks have gone dark purple, so far sand was a glowing yellow band at night. 0.7.24 multiplies the stored albedo by the same live ambient the chunk shaders use, one clock for the whole horizon. DisableLodFog still only skips extra pastViewHaze. Daytime 0.7.23 look stays; visited-keep and 0.7.20 meshing stay. Isolated pending install; leave the live 0.7.23 session alone.## 0.7.23
+- **Keep the trail. Wanted-level was a moving window.** 0.7.22 stopped dumping GPU meshes after 8000, but the walk still only meshed a ring around the camera (wanted-level plus a few tiles past view distance). Land you had already visited, including behind you, never got a mesh once that window moved, and the 1-minute unselected sweep cleaned up the rest. 0.7.23 draws every captured L0/L1 that is in view, same verts as when you were there. Just-left / RAM pin is tenfold. Recycle still spills far RAM to disk and pages the same-quality mesh back; it does not coarsen, and it does not punch sky in the trail. Look-down vanilla-owns and 0.7.20 meshing stay. Isolated pending install; leave the live 0.7.22 session alone.
+## 0.7.22
+- **No more Horizons cake squares, and no dumping land after a fill.** 0.7.21 kept parent tiles on screen until children meshed, and after about 8000 GPU meshes it started dropping the good L0/L1 onto those parents. From the air that looked like Vintage Horizons - giant flat plates with sheer walls. 0.7.22 goes back to 0.7.20 meshing: a missing child does not get a parent box as a stand-in, and there is no mesh-count cap that offloads visited land into sky. Looking straight down still uses 3D vanilla-owns plus pitch so already-meshed LOD does not vanish. Just-left ring still fills first. RAM can spill to disk; GPU meshes of land you can see, or just left, stay. 0.7.20 grass tint stays. Isolated and regular Mods.
+## 0.7.21
+- **Keep the visited picture, including look-down.** Two stacked failures: (1) vanilla-owns used a horizontal disc, so looking down from altitude hid already-meshed LOD (vanilla was not drawing that ground; pitching to the horizon filled it back in). (2) After a stretch of fill the walk stopped meshing and then dropped GPU meshes when RAM spilled to disk, so visited land unloaded into sky. 0.7.21 treats vanilla-owns as 3D plus pitch (straight down draws LOD; vanilla still occludes where it actually has chunks), draws parent/grandparent until children mesh, fills the just-left ring first, never disposes a mesh that is the only coverage, and under memory pressure coarsens the farthest fine tiles that already have a parent (spill stays on disk; LoadPersistedCache stays true). No hard tile cap that stops generation while the view has holes. 0.7.20 grass tint and 3-of-4 snow stay. Isolated and regular Mods.
+## 0.7.20
+- **SP far LOD grey.** 0.7.19 skipped live climate tint on any mid-luma top with chroma 24 or more, so TrueScale / vanilla grass (dull olive, not pure grey) drew as raw atlas grey. Walking into vanilla turned green; walking back went grey again. 0.7.20 keeps the climate slot on greyscale and olive grass, and only skips tint on stored colours that are already brown earth (red well ahead of green, chroma 48). The 0.65 luminance clamp that crushed greens toward grey is back to 0.7.18's 0.78, and only pulls bright (toward-white) samples. Snow-row high samples still copy the valley climate colour, but not if that valley sample is itself grey/identity. L0 hold at the vanilla ring and 3-of-4 bright-cap majority stay. Derived parents rebuild (mip v6). Isolated and regular Mods.
+
+## 0.7.19
+- **Walk-away white caps (visit then handoff).** On a remote server, walking the Wendell north mountains looked correct in vanilla, then those caps went white once vanilla unloaded and LOD took over. Single-player never did this. Two things stacked after the visit: WantedLevel coarsened onto a parent mesh (L0 was never meshed while vanilla covered it, and mesh jobs for that L0 were pruned), and live climate tint was still applied to captured grass/soil tops whose albedo was already rock or dirt. 0.7.18's 3-of-4 bright cap only treated unknown.png (0xF0 white), so TrueScale / atlas near-whites still elected a whole 64x64 cap, and sea+160 luminance clamp still left a snow-row multiplier on greyscale grass. 0.7.19 holds complete visited L0 one extra rung at the vanilla handoff, meshes that L0 in the outer vanilla ring, treats luma>=200 low-chroma as a bright cap (real 3-of-4 snow stays), copies the valley tint when the high sample is a snow row, and skips live tint on already-coloured rock/dirt tops. Neighbour-steal now runs when a parent is rebuilt from L0, not only on disk load. Derived parents rebuild from the existing L0 cache. Isolated and regular Mods.
+
+## 0.7.18
+- **Far white mountain caps on some map slices.** High peaks in one area went plastic white as soon as vanilla dropped them to LOD, while other hills at the same distance stayed green and brown. Two things stacked: the high climate tint was sampled 320 blocks above sea, where the colour maps go snow-white, so greyscale grass on those peaks multiplied to white (rock sides, which have no tint, stayed correct); and coarse mip could elect a lone snow or missing-tex column for a whole 64x64 cap. 0.7.18 samples the high tint lower, clamps a slot so it cannot bleach to white, lets a bright cap win mip only with a 3-of-4 majority, and paints unknown blocks with a neighbour rock/dirt/grass colour instead of white. Derived parent meshes rebuild from the existing L0 cache. Isolated and regular Mods.
+
 ## 0.7.17
 - Fixes the clear square that followed the camera while flying high. Distant Vistas was deciding that vanilla owned nearby terrain from horizontal distance alone, even when the ground was far below the camera and vanilla was no longer drawing it. The handoff now includes the terrain's surface height, so LOD stays under high-altitude views until vanilla can actually cover it.
 
@@ -14,10 +32,10 @@
 - **Foreground grass + winter snow.** Near LOD was tiling random grass pixels against vanilla, and in winter a freeze-line overlay painted every LOD top plastic white while the foreground kept real snow layers on mixed grass/dirt. Overlay is alpine-only now; valley snow is captured snow plus seasonal tint. Isolated 0.7.13; public listing stays 0.7.11.
 
 ## 0.7.12
-- **Winter / distant colour match.** Isolated 0.8.11–0.8.15 LOD-walk experiments are reverted; engine is 0.7.11 again. The ModDB report was far landscape not matching near terrain, especially in winter: seasonal maps are 2D and the engine picks the row from a hash of each block, so one sample painted every distant field with a single texel (green vs dead-grass brown). Grass overlay is colour-mapped in vanilla while the dirt showing through is not; multiplying the whole composite by the winter tint browned the dirt. 0.7.12 averages a lattice of colour-map samples per tint slot and dilutes the live tint by the untinted dirt share, same as vanilla `chunktopsoil`. Public listing stays 0.7.11 until this proves in-game.
+- **Winter / distant colour match.** Isolated 0.8.11â€“0.8.15 LOD-walk experiments are reverted; engine is 0.7.11 again. The ModDB report was far landscape not matching near terrain, especially in winter: seasonal maps are 2D and the engine picks the row from a hash of each block, so one sample painted every distant field with a single texel (green vs dead-grass brown). Grass overlay is colour-mapped in vanilla while the dirt showing through is not; multiplying the whole composite by the winter tint browned the dirt. 0.7.12 averages a lattice of colour-map samples per tint slot and dilutes the live tint by the untinted dirt share, same as vanilla `chunktopsoil`. Public listing stays 0.7.11 until this proves in-game.
 
 ## 0.8.15
-- *Reverted* with 0.8.11–0.8.14. Isolated LOD-walk experiments; 0.7.12 restored 0.7.11 and only changed seasonal tint.
+- *Reverted* with 0.8.11â€“0.8.14. Isolated LOD-walk experiments; 0.7.12 restored 0.7.11 and only changed seasonal tint.
 
 ## 0.8.14
 - **Restore parent coverage for open-side frontier.** 0.8.13 drew 0.8.12 surface-only tiles. In-game that was gray rectangular pillars after leaving an area (vanilla unloaded, pancake/stub LOD stayed) and sliced gray mountain faces; far walk also barely selected. 0.8.14 hides incomplete L0 and open-side sections behind parent/grandparent again. 0.8.12 mesher still does not build missing-neighbour cake walls. Isolated 0.8.14; public listing stays 0.7.11.
@@ -29,7 +47,7 @@
 - **Mesher: do not build cake walls.** If a neighbour section is not in RAM, CollectSide used to treat that edge as the end of the world and emit a full-height dirt face (green top + tan sides). 0.8.11 hid those meshes after the fact; 0.8.12 never builds them. Real cliffs against a loaded shorter neighbour still emit. Missing sides are tracked so a later neighbour load remeshes. Isolated 0.8.12; public listing stays 0.7.11.
 
 ## 0.8.11
-- **Fix live-travel cake boxes (NEW world / cold-join).** Gen trails the player; incomplete L0 and true missing-neighbour frontier sections were meshed/drawn as full-height green-top slabs with tan sides and stayed on screen after flying away. 0.8.11 never meshes or draws frontier (open HasDataSet side) or incomplete L0 — PreferParentCoverage keeps parent/grandparent silhouette until columns and the neighbour ring cover. CollectDrawNodes also hides AssumedCoveredSides meshes behind a parent until seam repair lands, so temporary cliffs cannot persist mid-far. IncompleteFillPerTick 24. Cold-join, crash-safe no PauseGame/ApplyZFar-before-matrices, and ASCII shaders unchanged.
+- **Fix live-travel cake boxes (NEW world / cold-join).** Gen trails the player; incomplete L0 and true missing-neighbour frontier sections were meshed/drawn as full-height green-top slabs with tan sides and stayed on screen after flying away. 0.8.11 never meshes or draws frontier (open HasDataSet side) or incomplete L0 â€” PreferParentCoverage keeps parent/grandparent silhouette until columns and the neighbour ring cover. CollectDrawNodes also hides AssumedCoveredSides meshes behind a parent until seam repair lands, so temporary cliffs cannot persist mid-far. IncompleteFillPerTick 24. Cold-join, crash-safe no PauseGame/ApplyZFar-before-matrices, and ASCII shaders unchanged.
 
 ## 0.8.10
 - **Fix load-screen crash (NullReferenceException in ChunkRenderer.GlLoadMatrix / Mat4d.Copy).** 0.8.9 PrefetchOnLoad called PauseGame(true) during LevelFinalize and ApplyZFar ran Reset3DProjection before ClientMain projection/view matrices existed. Vanilla terrain still rendered on GuiScreenRunningGame and pushed a null matrix. Fix: never PauseGame; defer CPU-only prefetch until MatricesReady; skip ApplyZFar/draw until matrices non-null; remove LevelFinalize ApplyZFar. PrefetchOnLoad default **false** (cold-join only); safe deferred prefetch remains available in config. Cold-join (LoadPersistedCache false) and mountain depth unchanged. ASCII shaders retained.
@@ -52,7 +70,7 @@ Written when a version is released, not when a commit lands - see
 ## [Unreleased]
 
 ## [0.8.7] - 2026-08-23
-**Horizons G51 warm-join cake walls + matching fog + post-vanilla draw.** Ported DodenGruva/Horizons 0.3.23 seam repair: `AssumedCoveredSides` from `HasDataSet` (not RAM), water leaves assumed sides open, `SectionBecameResident` remeshes only neighbours that guessed (`meshedWithoutNeighbor`) â€” does not MarkChanged every InstallLoaded. Fixes quit+relog tall rectangular monoliths from warm SQLite cache. Fog: always upload live BlendedFogDensity/Min/cloud and always `getFogLevel`?`applyFog`/`applySpheresFog` so LOD matches vanilla haze in cloud; `DisableLodFog` only skips extra pastViewHaze. G50 flat-top light (`normal.y * 0.95`). Default opaque render order 0.38 after vanilla (toggle `PostVanillaDepthCulling`). Empty `CapturedColumns` children no longer pin parent coarse. Ocean seabed seal and settings UI unchanged. Credits: DodenGruva / Horizons adaptations.
+**Horizons G51 warm-join cake walls + matching fog + post-vanilla draw.** Ported DodenGruva/Horizons 0.3.23 seam repair: `AssumedCoveredSides` from `HasDataSet` (not RAM), water leaves assumed sides open, `SectionBecameResident` remeshes only neighbours that guessed (`meshedWithoutNeighbor`) Ã¢â‚¬â€ does not MarkChanged every InstallLoaded. Fixes quit+relog tall rectangular monoliths from warm SQLite cache. Fog: always upload live BlendedFogDensity/Min/cloud and always `getFogLevel`?`applyFog`/`applySpheresFog` so LOD matches vanilla haze in cloud; `DisableLodFog` only skips extra pastViewHaze. G50 flat-top light (`normal.y * 0.95`). Default opaque render order 0.38 after vanilla (toggle `PostVanillaDepthCulling`). Empty `CapturedColumns` children no longer pin parent coarse. Ocean seabed seal and settings UI unchanged. Credits: DodenGruva / Horizons adaptations.
 
 ## [0.8.6] - 2026-08-23
 **Fixed: cake-slice gaps after backing away + dusty LOD hue pop.** Exploring up close looked correct (vanilla), then moving back opened vertical missing slices in mountains and a grey-lower / textured-upper break. Root cause: AllChildrenCovered skipped missing child slots, so a 3/4 L0 set unlocked descent and left holes once vanilla no longer covered them; ScheduleMeshJobs could still upload incomplete L0 thin1quad meshes. 0.8.6 requires all four child slots before descent, refuses/disposes incomplete L0 meshes (parent volume covers), pins complete near L0 against cold RAM eviction, and widens mid-band mesh demand + incomplete fill. Also: soft distance-based desaturate + fog/ambient hue wash on LOD albedo even when DisableLodFog kills density fog; when the camera is in thick fog/cloud, wash strengthens so ALL terrain ahead goes hazy (no crisp LOD popping through). Dusty mid/far greens match washed atmosphere instead of raw saturated atlas colors. Ocean seabed seal and settings UI unchanged.
@@ -62,7 +80,7 @@ Written when a version is released, not when a commit lands - see
 
 ## [0.8.4] - 2026-08-23
 
-**Fixed: far mountain cake-slice pillars / vertical cliffs.** Incomplete L0 sections (pre-0.7.7 thin1quad and partial capture fill) were meshed and drawn as isolated residual columns â€” missing slices left "towers" in the ridge. 0.8.4 refuses to mesh/draw incomplete L0 leaves, keeps the parent surface covering until columns fill, sweeps resident incomplete L0 for recapture when mapchunks are loaded, and reclassifies after capture. Softer mid/far WantedLevel ladder + stronger relief-aware mountain delay so ridges keep readable depth instead of Lego stairs. Far mesh demand widened so mid peaks are not a fog-only void. High-fidelity mip keeps minority height shelves on short solid slices. Ocean seabed seal and settings UI unchanged.
+**Fixed: far mountain cake-slice pillars / vertical cliffs.** Incomplete L0 sections (pre-0.7.7 thin1quad and partial capture fill) were meshed and drawn as isolated residual columns Ã¢â‚¬â€ missing slices left "towers" in the ridge. 0.8.4 refuses to mesh/draw incomplete L0 leaves, keeps the parent surface covering until columns fill, sweeps resident incomplete L0 for recapture when mapchunks are loaded, and reclassifies after capture. Softer mid/far WantedLevel ladder + stronger relief-aware mountain delay so ridges keep readable depth instead of Lego stairs. Far mesh demand widened so mid peaks are not a fog-only void. High-fidelity mip keeps minority height shelves on short solid slices. Ocean seabed seal and settings UI unchanged.
 ## [0.8.3] - 2026-08-23
 
 **Settings UI spacing (aggressive).** SliderRow 96: label at y, slider at y+40 height 28, >=20px before the next label. Extra gap after Preset before the first Quality slider. BodyHeight 480 / FooterGap 20 so hint + Cancel/Apply/OK never collide. Same AddLabeledSlider rhythm on Quality / Generation / Visuals.
@@ -82,7 +100,7 @@ Written when a version is released, not when a commit lands - see
 
 ## [0.7.11] - 2026-08-23
 
-**Fixed: ocean "cake slice" â€” cave ceilings/walls/floors visible through transparent water.** Root cause: `LodMesher` only culls solid faces by solid neighbours, so terrain (including hollows) stayed meshed under translucent ocean and read as cutaway seabed + caves, with mid-water overdraw amplifying it. 0.7.11 seals an underwater hull per column before face collect: detect the top contiguous `FlagWater` stack, take `waterBottom`, keep opaque meshing only for the contiguous solid seabed skin attached to that interface down to the first air gap, and drop opaque runs below that gap. Still emits water surfaces/walls, seabed tops under water, and walls that open into water (trenches/cliffs). Remesh-only â€” existing caches apply on the next mesh pass; no recapture required.
+**Fixed: ocean "cake slice" Ã¢â‚¬â€ cave ceilings/walls/floors visible through transparent water.** Root cause: `LodMesher` only culls solid faces by solid neighbours, so terrain (including hollows) stayed meshed under translucent ocean and read as cutaway seabed + caves, with mid-water overdraw amplifying it. 0.7.11 seals an underwater hull per column before face collect: detect the top contiguous `FlagWater` stack, take `waterBottom`, keep opaque meshing only for the contiguous solid seabed skin attached to that interface down to the first air gap, and drop opaque runs below that gap. Still emits water surfaces/walls, seabed tops under water, and walls that open into water (trenches/cliffs). Remesh-only Ã¢â‚¬â€ existing caches apply on the next mesh pass; no recapture required.
 
 **Note (later):** optional Capture hardening to avoid storing deep under-ocean hollows is still useful for cache size / overdraw, but is not required for this ship.
 ## [0.7.10] - 2026-08-23
@@ -114,7 +132,7 @@ Root cause was not CollectDrawNodes floater skip (0.7.6). LodPipeline.QueueColum
 "section key already in HasDataSet" as "this chunk is captured". An L0 section is 64 blocks
 (2x2 vanilla chunks); the first ChunkDirty for any quadrant added the section key, and the
 other three chunks of the same section were skipped forever. Live caches showed median
-CapturedColumns=1024 (one 32x32 quadrant) â€” meshed as filled rectangles with vertical
+CapturedColumns=1024 (one 32x32 quadrant) Ã¢â‚¬â€ meshed as filled rectangles with vertical
 cliffs into grey void in a regular grid. Isolated pregen used CaptureColumn (peek path),
 which never applied that skip, so it looked continuous. 0.7.7 skips only when **this**
 chunk's quadrant is already marked Captured on a resident section. Stats now log drawn L0
@@ -125,14 +143,14 @@ chunk's quadrant is already marked Captured on a resident section. Stats now log
 **Fixed: empty mid-band + striped / checkerboard L0 pillars past the vanilla cliff.** Two
 walk bugs stacked. (1) A meshed parent whose nearest edge was inside the vanilla bubble
 (`insideVanilla`) but whose children were incomplete (remote-only / not all meshed) did
-not descend â€” then hit `if (insideVanilla) return false` and drew nothing, so the ring
+not descend Ã¢â‚¬â€ then hit `if (insideVanilla) return false` and drew nothing, so the ring
 just past OverdrawStart stayed empty while scattered L0 floaters appeared further out.
 `CollectDrawNodes` now always descends into `HasDataSet` children when
 `insideVanilla && level > 0`, requests missing gate meshes via `AllChildrenCovered`,
 and never draws the inside-vanilla parent. (2) L0 floater suppression skipped leaves with
 `open >= 2` when a parent mesh existed. Incomplete coverage is often a regular stripe or
 checkerboard of missing neighbour keys; that skip removed the drawn neighbours too and
-read as vertical slabs / isolated pillars. 0.7.6 never skips drawing for open sides â€”
+read as vertical slabs / isolated pillars. 0.7.6 never skips drawing for open sides Ã¢â‚¬â€
 it only requests parent/neighbour fill-in. Mid-band meshing also marks transitional levels
 just past overdraw so the walk can fill continuously when data exists.
 ## [0.7.5] - 2026-08-23
@@ -143,7 +161,7 @@ chunk shaders fade terrain alpha to the sky at the live view-distance horizon
 bright fog band and severed mid-mountain silhouettes before Distant Vistas LOD could join
 behind. 0.7.5 ships patched copies under `assets/game/shaders/` that force full alpha
 (liquid keeps fresnel but drops the viewDistance clamp wrap). Config adds
-`PatchVanillaEdgeFade` (default true); for this release the override is always packaged Ã¢â‚¬â€
+`PatchVanillaEdgeFade` (default true); for this release the override is always packaged ÃƒÂ¢Ã¢â€šÂ¬Ã¢â‚¬Â
 unloading it still needs a restart / removing the mod. Does not touch fogandlight includes
 or ambient `getFogLevel`.
 ## [0.2.1] - 2026-08-15
@@ -368,3 +386,4 @@ slider. Real 3D terrain, not a heightmap: mountains, overhangs, cave mouths, for
 player builds all appear at distance. Translucent water over lake and sea floors. Live
 seasonal colour and a derived snow line. Persistent per-world cache that keeps growing as
 you play. Fully client-side, works on any server.
+

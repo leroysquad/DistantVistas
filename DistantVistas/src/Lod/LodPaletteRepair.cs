@@ -3,6 +3,8 @@ namespace DistantVistas;
 /// <summary>
 /// Fill palette colours stored as 0 (server has no atlas) or unknown.png white.
 /// Runs on load so old caches get fixed; new captures should already be coloured.
+/// Unknown or missing-texture entries take a rock/dirt/grass neighbour from the
+/// same section when one exists, never pure white.
 /// </summary>
 public static class LodPaletteRepair
 {
@@ -21,6 +23,60 @@ public static class LodPaletteRepair
     }
 
     /// <summary>
+    /// Unpack RGB (R in the low byte) and a 0-255 luma / chroma pair.
+    /// </summary>
+    public static void Channels(int color, out int r, out int g, out int b, out int luma, out int chroma)
+    {
+        r = color & 0xFF;
+        g = (color >> 8) & 0xFF;
+        b = (color >> 16) & 0xFF;
+        int mx = r > g ? r : g;
+        if (b > mx) mx = b;
+        int mn = r < g ? r : g;
+        if (b < mn) mn = b;
+        luma = (r + g + b) / 3;
+        chroma = mx - mn;
+    }
+
+    /// <summary>
+    /// Bright enough to read as a plastic-white LOD cap at coarse mip.
+    /// 0.7.18 only treated unknown.png (all channels >= 0xF0). TrueScale and
+    /// some server atlas samples sit around luma 200-239, so a lone light column
+    /// still won Boyer-Moore and painted the whole parent cap. Real snow fields
+    /// still pass when they cover 3 or 4 of the 2x2.
+    /// </summary>
+    public static bool IsBrightCap(int color)
+    {
+        Channels(color, out _, out _, out _, out int luma, out int chroma);
+        // Low chroma + high luma: snow, chalk, missing-tex, HD near-white rock.
+        return luma >= BrightCapLuma && chroma <= BrightCapChroma;
+    }
+
+    public const int BrightCapLuma = 200;
+    public const int BrightCapChroma = 48;
+
+    /// <summary>
+    /// Stored albedo is already chromatic brown earth, not grass waiting for a
+    /// climate map. 0.7.19 used chroma 24 and any mid luma, which ate TrueScale
+    /// grass: those textures are dull olive, not pure grey, and they NEED the
+    /// colour map. Skip only when red leads green by a clear margin and chroma
+    /// is strong. Grey, olive, and grass+dirt mixes keep their tint slot.
+    /// </summary>
+    public static bool IsRockLikeAlbedo(int color)
+    {
+        if (IsBrightCap(color)) return false;
+        Channels(color, out int r, out int g, out int b, out int luma, out int chroma);
+        if (chroma < RockLikeChroma) return false;
+        if (luma < 24 || luma > 170) return false;
+        // Grass waiting for a map is grey or dull olive: G is close to or
+        // ahead of R. Bare dirt/rock brown has red well ahead of green.
+        if (r < g + 16) return false;
+        return true;
+    }
+
+    public const int RockLikeChroma = 48;
+
+    /// <summary>
     /// Refresh stable (position-independent) colours. Null = keep stored colour (chisels etc.).
     /// </summary>
     public static int RefreshStable(LodSection section, System.Func<int, int?> colorOf)
@@ -33,7 +89,7 @@ public static class LodPaletteRepair
             int? provided = colorOf(entry.BlockId);
             if (!provided.HasValue) continue;
 
-            int color = Sanitize(provided.Value, UnknownBlockColor);
+            int color = Sanitize(provided.Value, NeighborTerrainColor(section, i));
             if (entry.Color == color) continue;
 
             entry.Color = color;
@@ -56,13 +112,47 @@ public static class LodPaletteRepair
 
             int color = colorOf(entry.BlockId);
 
-            // If colorOf also returns 0/white, fall back so we don't loop forever.
-            entry.Color = Sanitize(color, UnknownBlockColor);
+            // If colorOf also returns 0/white, take a neighbour rock/dirt/grass sample
+            // from this section. Never store pure white; that is the missing-tex wash.
+            entry.Color = Sanitize(color, NeighborTerrainColor(section, i));
             section.Palette[i] = entry;
             repaired++;
         }
 
         return repaired;
+    }
+
+    /// <summary>
+    /// A usable rock/dirt/grass colour already in this section. Unknown blocks on a
+    /// foreign server have no atlas entry; painting them white made whole mountain
+    /// subsections light up. A neighbour's earth tone is wrong-but-plausible.
+    /// </summary>
+    public static int NeighborTerrainColor(LodSection section, int skipIndex)
+    {
+        int best = 0;
+        int bestScore = -1;
+        for (int i = 0; i < section.Palette.Count; i++)
+        {
+            if (i == skipIndex) continue;
+            LodPaletteEntry e = section.Palette[i];
+            if (NeedsColor(e.Color)) continue;
+            if ((e.Flags & (LodPaletteEntry.FlagWater | LodPaletteEntry.FlagThin | LodPaletteEntry.FlagSkip)) != 0)
+                continue;
+
+            int r = e.Color & 0xFF;
+            int g = (e.Color >> 8) & 0xFF;
+            int b = (e.Color >> 16) & 0xFF;
+            int luma = (r + g + b) / 3;
+            // Skip near-black and near-white; prefer mid-luma earth (dirt ~90, grass ~70-110, rock ~80-140).
+            if (luma < 24 || luma > 200) continue;
+            int score = 255 - Math.Abs(luma - 96);
+            if (score > bestScore)
+            {
+                bestScore = score;
+                best = e.Color;
+            }
+        }
+        return best != 0 ? best : TerrainFallbackColor;
     }
 
     /// <summary>Unknown block: mid grey. Not black (old zero-colour bug) and not magenta.</summary>
