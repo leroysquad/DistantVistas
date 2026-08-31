@@ -10,14 +10,21 @@ namespace DistantVistas;
 public static class LodCoveragePolicy
 {
     /// <summary>
-    /// Captured L0/L1 stay in the draw path even when the frustum would reject
-    /// them (behind the camera, grazing side planes). Fast flight is a stress
-    /// test, not a reason to punch sky holes in land the player already generated.
+    /// Captured L0/L1 near the player trail may bypass frustum cull so fast flight
+    /// does not punch sky holes behind the camera. Horizon-wide L0 still culls.
     /// </summary>
     public const int VisitedKeepMaxLevel = 1;
     public static bool IsVisitedKeepLevel(int level) => level <= VisitedKeepMaxLevel;
-    public static bool ShouldKeepVisitedDraw(int level, bool hasDataSet) =>
-        hasDataSet && IsVisitedKeepLevel(level);
+
+    /// <summary>
+    /// Ring where visited L0/L1 keeps full detail, frustum bypass, and mesh priority.
+    /// Matches the renderer just-left pin so a long walk does not remesh from scratch.
+    /// </summary>
+    public static bool IsNearVisitedTrail(double distance, double viewDistanceAnchor) =>
+        distance < viewDistanceAnchor + LodSection.SectionBlocks * 80;
+
+    public static bool ShouldKeepVisitedDraw(int level, bool hasDataSet, double distance, double viewDistanceAnchor) =>
+        hasDataSet && IsVisitedKeepLevel(level) && IsNearVisitedTrail(distance, viewDistanceAnchor);
 
     public static bool MustDescendForVisualCap(int level, int maxVisualLevel) =>
         level > Math.Clamp(maxVisualLevel, 0, LodWorld.MaxLevel);
@@ -90,19 +97,22 @@ public static class LodCoveragePolicy
         hasData && level >= 0 && level <= 1;
 
     /// <summary>
-    /// Ask for the same-quality GPU mesh of visited L0/L1 even when the
-    /// camera has walked far enough that WantedLevel wants something coarser.
+    /// Ask for the same-quality GPU mesh of visited L0/L1 near the trail even when
+    /// WantedLevel wants something coarser. Far visited land meshes at wanted rung.
     /// Vanilla-owned columns stay the caller's problem.
     /// </summary>
     public static bool RequestVisitedKeepMesh(
-        int level, bool hasMesh, bool hasData, bool insideVanilla) =>
-        !hasMesh && !insideVanilla && KeepVisitedSurface(level, hasData);
+        int level, bool hasMesh, bool hasData, bool insideVanilla,
+        double distance, double viewDistanceAnchor) =>
+        !hasMesh && !insideVanilla && KeepVisitedSurface(level, hasData)
+        && IsNearVisitedTrail(distance, viewDistanceAnchor);
 
     /// <summary>
-    /// Walk into children that already hold captured land, even if this
-    /// node is coarser than WantedLevel. Stopping at the wanted parent was
-    /// how land behind the player turned into sky once the window moved.
+    /// Walk into children that already hold captured land near the trail, even if
+    /// this node is coarser than WantedLevel. Far visited land coarsens via the
+    /// parent mesh instead of drawing every L0 tile.
     /// </summary>
-    public static bool DescendForVisitedKeep(int level, bool childHasVisitedSurface) =>
-        level > 0 && childHasVisitedSurface;
+    public static bool DescendForVisitedKeep(
+        int level, bool childHasVisitedSurface, double distance, double viewDistanceAnchor) =>
+        level > 0 && childHasVisitedSurface && IsNearVisitedTrail(distance, viewDistanceAnchor);
 }

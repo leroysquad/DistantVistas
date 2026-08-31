@@ -277,9 +277,10 @@ public class LodTerrainRenderer : IRenderer
         }
 
         float far = (float)Math.Sqrt(maxDistSq) + LodSection.SectionBlocks * 1.5f;
-        if (FarViewDistanceCap > 0) far = Math.Min(far, FarViewDistanceCap);
-
-        EffectiveFarDistance = GameMath.Max(far, vanillaViewDistance + 16384);
+        if (FarViewDistanceCap > 0)
+            EffectiveFarDistance = Math.Min(far, FarViewDistanceCap);
+        else
+            EffectiveFarDistance = Math.Max(far, vanillaViewDistance + 16384);
     }
 
     // ---- Detail selection (quadtree walk) ----
@@ -301,6 +302,15 @@ public class LodTerrainRenderer : IRenderer
     /// level, and both work on the square, so neither needs the root.
     /// </summary>
     double NearestDistanceSqTo(long key) => LodWorld.NearestDistanceSqTo(key, camPos.X, camPos.Z);
+
+    /// <summary>
+    /// Far visited land stops descending below the wanted rung; the near trail still reaches L0/L1.
+    /// </summary>
+    bool ShouldVisitChildForDraw(long childKey, int parentWanted, bool parentNearTrail)
+    {
+        if (parentNearTrail) return true;
+        return LodWorld.KeyLevel(childKey) >= parentWanted;
+    }
 
     bool HasAnyMesh(long key) => sectionMeshes.ContainsKey(key) || waterMeshes.ContainsKey(key);
 
@@ -382,6 +392,12 @@ public class LodTerrainRenderer : IRenderer
         double nearDistSq = NearestDistanceSqTo(key);
         double nearDist = Math.Sqrt(nearDistSq);
 
+        // Hard cap trims draw selection CPU and GPU; unlimited cap still coarsens far L0.
+        if (FarViewDistanceCap > 0 && nearDist > FarViewDistanceCap + LodSection.SectionBlocks)
+            return false;
+
+        bool nearVisitedTrail = LodCoveragePolicy.IsNearVisitedTrail(nearDist, liveViewDistance);
+
         // Near-cull must not abort quadtree descent; only skip *drawing* sections
         // whose nearest edge is inside the vanilla bubble. Top-level L6 sections are
         // 4096 blocks - the player is inside them (nearDist=0), so returning early
@@ -426,7 +442,8 @@ public class LodTerrainRenderer : IRenderer
             if (handoff && level <= 1)
                 RequestMesh(key);
             else if (LodCoveragePolicy.RequestVisitedKeepMesh(
-                         level, hasMesh, world.HasDataSet.Contains(key), insideVanilla))
+                         level, hasMesh, world.HasDataSet.Contains(key), insideVanilla,
+                         nearDist, liveViewDistance))
                 RequestMesh(key);
             else if (!insideVanilla && (level == wanted || level == wanted + 1))
                 RequestMesh(key);
@@ -437,7 +454,7 @@ public class LodTerrainRenderer : IRenderer
                 RequestMesh(key);
         }
 
-        bool holdVisitedL0 = level == 1 && AllVisitedL0Children(key);
+        bool holdVisitedL0 = nearVisitedTrail && level == 1 && AllVisitedL0Children(key);
         if (holdVisitedL0)
         {
             if (handoff) wanted = 0;
@@ -455,6 +472,7 @@ public class LodTerrainRenderer : IRenderer
                 for (int qx = 0; qx < 2; qx++)
                 {
                     long ck = LodWorld.ChildKey(key, qx, qz);
+                    if (!ShouldVisitChildForDraw(ck, wanted, nearVisitedTrail)) continue;
                     if (world.HasDataSet.Contains(ck)) anyChildDrew |= CollectDrawNodes(ck);
                 }
             }
@@ -462,7 +480,8 @@ public class LodTerrainRenderer : IRenderer
         }
 
         bool forcedDetail = LodCoveragePolicy.MustDescendForVisualCap(level, LodWorld.MaxVisualLevel);
-        bool keepVisited = LodCoveragePolicy.DescendForVisitedKeep(level, ChildHasVisitedSurface(key));
+        bool keepVisited = LodCoveragePolicy.DescendForVisitedKeep(
+            level, ChildHasVisitedSurface(key), nearDist, liveViewDistance);
         if (level > 0 && (forcedDetail || (level > wanted && AllChildrenCovered(key)) || !hasMesh
             || (holdVisitedL0 && wanted == 0) || keepVisited))
         {
@@ -472,6 +491,7 @@ public class LodTerrainRenderer : IRenderer
                 for (int qx = 0; qx < 2; qx++)
                 {
                     long ck = LodWorld.ChildKey(key, qx, qz);
+                    if (!ShouldVisitChildForDraw(ck, wanted, nearVisitedTrail)) continue;
                     if (world.HasDataSet.Contains(ck)) anyChildDrew |= CollectDrawNodes(ck);
                 }
             }
@@ -489,6 +509,13 @@ public class LodTerrainRenderer : IRenderer
             // Keep the GPU mesh while vanilla owns this column so walking away
             // does not remesh from scratch. Do not draw it on top of chunks.
             if (insideVanilla && level == 0)
+            {
+                lastSelectedFrame[key] = frameCounter;
+                return false;
+            }
+
+            // Far visited land coarsens to the wanted rung; only the near trail keeps L0/L1.
+            if (level < wanted && !nearVisitedTrail)
             {
                 lastSelectedFrame[key] = frameCounter;
                 return false;
@@ -698,7 +725,8 @@ public class LodTerrainRenderer : IRenderer
             {
                 // Visited near tiles may sit behind the camera or past the wanted rung
                 // while the player flies; dropping their mesh jobs leaves a trail of sky.
-                if (LodCoveragePolicy.ShouldKeepVisitedDraw(dirtyLevel, world.HasDataSet.Contains(key)))
+                if (LodCoveragePolicy.ShouldKeepVisitedDraw(
+                        dirtyLevel, world.HasDataSet.Contains(key), pruneDist, liveViewDistance))
                     continue;
                 if (dirtyLevel == 0 && !world.IncompleteL0Keys.Contains(key)) continue;
                 if (handoffJob && dirtyLevel <= 1) continue;
@@ -744,7 +772,8 @@ public class LodTerrainRenderer : IRenderer
                 distSq *= 0.08;
             // Visited L0/L1 trail: mesh the near captured ring first so fly-ahead holes
             // close before coarse parents swap in behind the player.
-            if (LodCoveragePolicy.ShouldKeepVisitedDraw(candLevel, world.HasDataSet.Contains(key)))
+            if (LodCoveragePolicy.ShouldKeepVisitedDraw(
+                    candLevel, world.HasDataSet.Contains(key), candDist, liveViewDistance))
                 distSq = 0;
             if (count == capacity && distSq >= scheduleCandidateDistSq[count - 1]) continue;
 
@@ -783,6 +812,8 @@ public class LodTerrainRenderer : IRenderer
             if (HasAnyMesh(key)) continue;
 
             double distSq = NearestDistanceSqTo(key);
+            double dist = Math.Sqrt(distSq);
+            if (!LodCoveragePolicy.IsNearVisitedTrail(dist, liveViewDistance)) continue;
             if (n == take && distSq <= foundDist[n - 1]) continue;
             int at = n < take ? n++ : take - 1;
             while (at > 0 && foundDist[at - 1] < distSq)
@@ -1120,7 +1151,11 @@ public class LodTerrainRenderer : IRenderer
         double relZ = originZ - camPos.Z;
 
         int level = LodWorld.KeyLevel(key);
-        bool keepVisited = LodCoveragePolicy.ShouldKeepVisitedDraw(level, world.HasDataSet.Contains(key));
+        double drawDist = Math.Sqrt(
+            (originX + footprint / 2.0 - camPos.X) * (originX + footprint / 2.0 - camPos.X)
+            + (originZ + footprint / 2.0 - camPos.Z) * (originZ + footprint / 2.0 - camPos.Z));
+        bool keepVisited = LodCoveragePolicy.ShouldKeepVisitedDraw(
+            level, world.HasDataSet.Contains(key), drawDist, liveViewDistance);
         if (!keepVisited)
         {
             // Tight Y when we know the surface band; a world-tall box false-rejects on

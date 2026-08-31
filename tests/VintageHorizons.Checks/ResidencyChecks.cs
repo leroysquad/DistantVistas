@@ -148,9 +148,9 @@ public static class ResidencyChecks
             "a huge L6 section must descend when visible compression is capped at L2");
         c.False(LodCoveragePolicy.MustDescendForVisualCap(level: 2, maxVisualLevel: 2),
             "the cap permits its four-block target level");
-        c.True(LodCoveragePolicy.ShouldKeepVisitedDraw(level: 1, hasDataSet: true),
-            "captured L1 stays on the visited-keep draw path");
-        c.False(LodCoveragePolicy.ShouldKeepVisitedDraw(level: 3, hasDataSet: true),
+        c.True(LodCoveragePolicy.ShouldKeepVisitedDraw(level: 1, hasDataSet: true, 400, 512),
+            "captured L1 near the trail stays on the visited-keep draw path");
+        c.False(LodCoveragePolicy.ShouldKeepVisitedDraw(level: 3, hasDataSet: true, 400, 512),
             "coarse parents still honour frustum cull");
 
         var classified = new LodWorld();
