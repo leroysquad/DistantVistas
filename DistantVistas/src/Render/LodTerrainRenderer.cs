@@ -98,8 +98,8 @@ public class LodTerrainRenderer : IRenderer
     int seasonalRefreshZ;
     readonly BlockPos climatePos = new(0, 0, 0);
 
-    /// <summary>Optional hard cap in blocks; 0 = unlimited (render every cached section).</summary>
-    public int FarViewDistanceCap = 0;
+    /// <summary>Optional hard cap in blocks; 0 = unlimited draw coverage.</summary>
+    public int FarViewDistanceCap = 6144;
     public bool DisableLodFog = true;
     public float FogDensityScale = 1.0f;
     public float SkyFadeStart = 0.88f;
@@ -654,9 +654,7 @@ public class LodTerrainRenderer : IRenderer
     bool InJustLeftRing(long key)
     {
         double dist = Math.Sqrt(NearestDistanceSqTo(key));
-        // 0.7.22 was view distance plus eight L0 tiles (~1k). Tenfold so the
-        // trail behind the player is not the thing that gets paged first.
-        return dist < liveViewDistance + LodSection.SectionBlocks * 80;
+        return LodCoveragePolicy.IsNearVisitedTrail(dist, liveViewDistance);
     }
 
     void EvictStaleMeshes()
@@ -666,27 +664,18 @@ public class LodTerrainRenderer : IRenderer
         evictBatch.Clear();
         foreach ((long key, MeshRef _) in sectionMeshes)
         {
-            if (!lastSelectedFrame.TryGetValue(key, out long last) || frameCounter - last > EvictAfterFrames)
-            {
-                if (InJustLeftRing(key)) continue;
-                // Visited land stays on the GPU. The old unselected-timeout was a
-                // moving window: WantedLevel stopped picking far tiles, this sweep
-                // dumped them, and the trail behind the player turned into sky.
-                if (LodWorld.KeyLevel(key) <= 1) continue;
-                if (world.HasDataSet.Contains(key)) continue;
-                evictBatch.Add(key);
-            }
+            if (lastSelectedFrame.TryGetValue(key, out long last) && frameCounter - last <= EvictAfterFrames)
+                continue;
+            if (InJustLeftRing(key)) continue;
+            evictBatch.Add(key);
         }
         foreach ((long key, MeshRef _) in waterMeshes)
         {
-            if (!sectionMeshes.ContainsKey(key)
-                && (!lastSelectedFrame.TryGetValue(key, out long last) || frameCounter - last > EvictAfterFrames))
-            {
-                if (InJustLeftRing(key)) continue;
-                if (LodWorld.KeyLevel(key) <= 1) continue;
-                if (world.HasDataSet.Contains(key)) continue;
-                evictBatch.Add(key);
-            }
+            if (sectionMeshes.ContainsKey(key)) continue;
+            if (lastSelectedFrame.TryGetValue(key, out long last) && frameCounter - last <= EvictAfterFrames)
+                continue;
+            if (InJustLeftRing(key)) continue;
+            evictBatch.Add(key);
         }
 
         foreach (long key in evictBatch)

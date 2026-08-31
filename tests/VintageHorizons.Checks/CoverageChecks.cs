@@ -84,5 +84,5 @@ public static class CoverageChecks
 
     const double TrailAnchor = 512;
     const double NearTrail = 400;
-    const double FarTrail = TrailAnchor + LodSection.SectionBlocks * 80 + 1000;
+    const double FarTrail = TrailAnchor + LodSection.SectionBlocks * LodCoveragePolicy.VisitedTrailRingTiles + 1000;
 }

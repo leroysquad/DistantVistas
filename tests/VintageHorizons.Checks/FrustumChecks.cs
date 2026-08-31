@@ -65,6 +65,12 @@ public static class FrustumChecks
         c.False(LodCoveragePolicy.ShouldKeepVisitedDraw(0, hasDataSet: true, 7000, 512),
             "horizon L0 is not exempt from frustum reject");
 
+        double ringEdge = 512 + LodSection.SectionBlocks * LodCoveragePolicy.VisitedTrailRingTiles;
+        c.True(LodCoveragePolicy.IsNearVisitedTrail(ringEdge - 1, 512),
+            "one block inside the trail ring still counts as near");
+        c.False(LodCoveragePolicy.IsNearVisitedTrail(ringEdge + 1, 512),
+            "one block outside the trail ring is far visited land");
+
         c.False(Box(f, 2000, 0, -100, 10), "a box far to the right is rejected");
         c.False(Box(f, -2000, 0, -100, 10), "a box far to the left is rejected");
         c.False(Box(f, 0, 2000, -100, 10), "a box far above is rejected");

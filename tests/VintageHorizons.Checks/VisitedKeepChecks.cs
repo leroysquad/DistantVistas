@@ -3,17 +3,19 @@ namespace DistantVistas.Checks;
 /// <summary>
 /// Visited L0/L1 near the trail bypass frustum cull so fast flight does not punch sky
 /// holes behind the camera. Horizon-wide L0 still culls and coarsens with wanted level.
+/// Far visited tiles may lose GPU meshes and RAM while HasDataSet stays on disk.
 /// </summary>
 public static class VisitedKeepChecks
 {
     const double TrailAnchor = 512;
     const double NearTrail = 400;
-    const double FarTrail = TrailAnchor + LodSection.SectionBlocks * 80 + 1000;
+    const double FarTrail = TrailAnchor + LodSection.SectionBlocks * LodCoveragePolicy.VisitedTrailRingTiles + 1000;
 
     public static void Run(Check c)
     {
         Policy(c);
         FrustumStillRejectsBehindCamera(c);
+        RamSpill(c);
     }
 
     static void Policy(Check c)
@@ -44,6 +46,27 @@ public static class VisitedKeepChecks
             "renderer policy keeps near visited L0 off the frustum reject path");
         c.False(LodCoveragePolicy.ShouldKeepVisitedDraw(0, hasDataSet: true, FarTrail, TrailAnchor),
             "renderer policy does not exempt horizon L0 from frustum cull");
+    }
+
+    static void RamSpill(Check c)
+    {
+        LodWorld.ViewDistanceAnchor = TrailAnchor;
+        var world = new LodWorld();
+        long nearKey = LodWorld.SectionKey(0, 8, 8);
+        long farKey = LodWorld.SectionKey(0, 200, 200);
+
+        world.HasDataSet.Add(nearKey);
+        world.HasDataSet.Add(farKey);
+        world.Sections[nearKey] = new LodSection();
+        world.Sections[farKey] = new LodSection();
+
+        world.EvictColdSections(8 * LodSection.SectionBlocks, 8 * LodSection.SectionBlocks, 10);
+        c.True(world.Sections.ContainsKey(nearKey),
+            "visited L0 near the trail stays resident in RAM");
+        c.False(world.Sections.ContainsKey(farKey),
+            "visited L0 far from the trail may spill from RAM while HasDataSet remains");
+        c.True(world.HasDataSet.Contains(farKey),
+            "spilling RAM does not clear HasDataSet");
     }
 
     static bool Box(LodFrustum f, double x, double y, double z, double half) =>

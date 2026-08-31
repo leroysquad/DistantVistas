@@ -9,8 +9,8 @@ namespace DistantVistas;
 
 public class DistantVistasConfig
 {
-    /// <summary>0 = unlimited.</summary>
-    public int FarViewDistanceCap = 0;
+    /// <summary>0 = unlimited draw coverage; GPU meshes still page by distance.</summary>
+    public int FarViewDistanceCap = 6144;
 
     /// <summary>Distance at which detail starts halving; see LodWorld.DetailDistance.</summary>
     public int DetailDistance = 320;

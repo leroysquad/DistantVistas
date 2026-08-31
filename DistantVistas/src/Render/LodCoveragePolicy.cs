@@ -17,11 +17,18 @@ public static class LodCoveragePolicy
     public static bool IsVisitedKeepLevel(int level) => level <= VisitedKeepMaxLevel;
 
     /// <summary>
+    /// L0 tiles in this ring behind the player stay resident in RAM and on the GPU.
+    /// Farther visited land pages out; RequestMesh reloads the same mesh from disk.
+    /// </summary>
+    public const int VisitedTrailRingTiles = 24;
+
+    /// <summary>
     /// Ring where visited L0/L1 keeps full detail, frustum bypass, and mesh priority.
-    /// Matches the renderer just-left pin so a long walk does not remesh from scratch.
+    /// Matches the renderer just-left pin and RAM/GPU eviction so a fast turn does not
+    /// punch sky or remesh from scratch.
     /// </summary>
     public static bool IsNearVisitedTrail(double distance, double viewDistanceAnchor) =>
-        distance < viewDistanceAnchor + LodSection.SectionBlocks * 80;
+        distance < viewDistanceAnchor + LodSection.SectionBlocks * VisitedTrailRingTiles;
 
     public static bool ShouldKeepVisitedDraw(int level, bool hasDataSet, double distance, double viewDistanceAnchor) =>
         hasDataSet && IsVisitedKeepLevel(level) && IsNearVisitedTrail(distance, viewDistanceAnchor);
