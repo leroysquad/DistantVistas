@@ -39,6 +39,19 @@ import urllib.request
 AUTH_URL = "https://auth.vintagestory.at/v2/gamelogin"
 
 
+def envci(name: str, default: str = "") -> str:
+    """Read an env var case-insensitively (VS_EMAIL / vs_email both work).
+
+    Secret stores differ on whether they preserve the case of the name, and env
+    var names are case-sensitive on Linux, so match on the uppercased name.
+    """
+    want = name.upper()
+    for key, value in os.environ.items():
+        if key.upper() == want:
+            return value
+    return default
+
+
 def totp_now(secret_b32: str) -> str:
     """RFC 6238 TOTP, 6 digits, SHA1, 30s step -- what VS 2FA expects."""
     key = base64.b32decode(secret_b32.strip().replace(" ", "").upper())
@@ -59,13 +72,13 @@ def post(payload: dict) -> dict:
 
 
 def login() -> dict:
-    email = os.environ.get("VS_EMAIL", "").strip()
-    password = os.environ.get("VS_PASSWORD", "")
+    email = envci("VS_EMAIL").strip()
+    password = envci("VS_PASSWORD")
     if not email or not password:
         sys.exit("vs-login: VS_EMAIL and VS_PASSWORD are required for a credential login")
 
     body = {"email": email, "password": password}
-    totp_secret = os.environ.get("VS_TOTP_SECRET", "").strip()
+    totp_secret = envci("VS_TOTP_SECRET").strip()
     if totp_secret:
         body["totpCode"] = totp_now(totp_secret)
 
@@ -97,12 +110,12 @@ def login() -> dict:
 
 def from_env_session() -> dict:
     return {
-        "sessionkey": os.environ["VS_SESSIONKEY"],
-        "sessionsignature": os.environ["VS_SESSIONSIGNATURE"],
-        "entitlements": os.environ.get("VS_ENTITLEMENTS", ""),
-        "mptoken": os.environ.get("VS_MPTOKEN", ""),
-        "useremail": os.environ.get("VS_EMAIL", ""),
-        "_playername": os.environ.get("VS_PLAYERNAME", ""),
+        "sessionkey": envci("VS_SESSIONKEY"),
+        "sessionsignature": envci("VS_SESSIONSIGNATURE"),
+        "entitlements": envci("VS_ENTITLEMENTS"),
+        "mptoken": envci("VS_MPTOKEN"),
+        "useremail": envci("VS_EMAIL"),
+        "_playername": envci("VS_PLAYERNAME"),
     }
 
 
@@ -111,7 +124,7 @@ def main() -> None:
         sys.exit(__doc__)
     settings_path = sys.argv[1]
 
-    if os.environ.get("VS_SESSIONKEY") and os.environ.get("VS_SESSIONSIGNATURE"):
+    if envci("VS_SESSIONKEY") and envci("VS_SESSIONSIGNATURE"):
         session = from_env_session()
         source = "provided session token"
     else:
