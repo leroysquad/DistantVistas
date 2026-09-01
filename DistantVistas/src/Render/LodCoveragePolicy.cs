@@ -284,8 +284,8 @@ public static class LodCoveragePolicy
     /// horizon pitch (a land-like L2 is still a shelf from that camera).
     /// Looking down, L2+ and even a plains plate may cover so incomplete
     /// L0 does not punch sky. Never a plate inside the horizon lead cone.
-    /// cone a plate may stay as a cheap stand-in. L0 is not a coarse parent;
-    /// IncompleteL0 is a separate skip.
+    /// Behind the cone a plate may stay as a cheap stand-in. L0 is not a
+    /// coarse parent; IncompleteL0 is a separate skip.
     /// </summary>
     public static bool MayDrawCoarseParent(
         int level, bool insideVanilla, bool landLike, bool inLeadCone,
