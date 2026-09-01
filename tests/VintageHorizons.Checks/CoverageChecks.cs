@@ -195,6 +195,29 @@ public static class CoverageChecks
         c.False(LodCoveragePolicy.SkipDrawTooFine(1, 2, false, true, true, true),
             "L1 still draws in the lead cone; L2 parent cannot stand in");
 
+        c.False(LodCoveragePolicy.HorizonLeadCone(true, 1f),
+            "straight down is not the horizon shelf ban");
+        c.True(LodCoveragePolicy.HorizonLeadCone(true, 0f),
+            "horizon pitch still uses the lead-cone shelf ban");
+        c.False(LodCoveragePolicy.HorizonLeadCone(true, LodCoveragePolicy.LookDownCoarseFill),
+            "at the look-down fill pitch the shelf ban lets go");
+        c.True(LodCoveragePolicy.MayDrawCoarseParent(2, false, true, true, 1f),
+            "look-down L2 is coverage, not a sky square");
+        c.True(LodCoveragePolicy.MayDrawCoarseParent(2, false, false, true, 1f),
+            "look-down plains (a plate) still cover instead of punching sky");
+        c.False(LodCoveragePolicy.MayDrawCoarseParent(2, true, true, true, 1f),
+            "look-down still never draws LOD on vanilla-owned ground");
+        c.False(LodCoveragePolicy.MayDrawCoarseParent(2, false, true, true, 0f),
+            "horizon in-lead-cone L2 is still a shelf, not coverage");
+        c.True(LodCoveragePolicy.StopDescentAtAvailableRung(2, 2, false, true, true, true, 1f),
+            "look-down may stop on an L2 mesh instead of walking into incomplete L0");
+        c.False(LodCoveragePolicy.StopDescentAtAvailableRung(2, 2, false, true, true, true, 0f),
+            "horizon still does not stop on L2 in the lead cone");
+        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, true, 1f),
+            "look-down with an L2 mesh does not walk L0 just because the cone says so");
+        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(1, 2, false, true, true, true, 0f),
+            "horizon lead cone still walks to L1 so the skyline is not a shelf");
+
         c.Eq(LodWorld.MaxLevel, new DistantVistasConfig().MaxVisualLodLevel,
             "default coarsest visible is the full pyramid, not L0-only");
         LodCoveragePolicy.KeepCircleScale = savedScale;

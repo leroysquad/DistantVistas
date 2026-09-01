@@ -347,7 +347,7 @@ public class LodTerrainRenderer : IRenderer
     {
         return LodCoveragePolicy.ShouldVisitChildForDraw(
             LodWorld.KeyLevel(childKey), parentWanted, parentDrawFullDetail, parentHasMesh,
-            parentLandLike, inLeadCone);
+            parentLandLike, inLeadCone, lookDown01);
     }
 
     bool HasAnyMesh(long key) => sectionMeshes.ContainsKey(key) || waterMeshes.ContainsKey(key);
@@ -648,12 +648,12 @@ public class LodTerrainRenderer : IRenderer
         // the hills. Behind the lead cone L2+ (even a plate) may stop as a
         // cheap stand-in.
         bool stopAtThisRung = LodCoveragePolicy.StopDescentAtAvailableRung(
-            level, wanted, drawFullDetail, hasMesh, landLike, inLeadCone);
+            level, wanted, drawFullDetail, hasMesh, landLike, inLeadCone, lookDown01);
         if (stopAtThisRung && level < wanted)
             RequestCoarseFill(key, wanted);
 
         bool drawableCoarse = hasMesh && LodCoveragePolicy.MayDrawCoarseParent(
-            level, insideVanilla, landLike, inLeadCone);
+            level, insideVanilla, landLike, inLeadCone, lookDown01);
 
         if (!stopAtThisRung && level > 0 && (forcedDetail || (level > wanted && AllChildrenCovered(key)) || !drawableCoarse
             || (holdVisitedL0 && wanted == 0) || keepVisited || drawFullDetail))
@@ -693,7 +693,7 @@ public class LodTerrainRenderer : IRenderer
                 return false;
             }
 
-            if (!LodCoveragePolicy.MayDrawCoarseParent(level, insideVanilla, landLike, inLeadCone))
+            if (!LodCoveragePolicy.MayDrawCoarseParent(level, insideVanilla, landLike, inLeadCone, lookDown01))
             {
                 lastSelectedFrame[key] = frameCounter;
                 return false;
@@ -711,7 +711,7 @@ public class LodTerrainRenderer : IRenderer
                 world.Sections.TryGetValue(parentKey, out LodSection? parentSec);
                 bool parentLandLike = ComputeLandLike(LodWorld.KeyLevel(parentKey), parentSec, parentKey);
                 if (LodCoveragePolicy.SkipDrawTooFine(
-                        level, wanted, drawFullDetail, parentHasMesh, parentLandLike, inLeadCone))
+                        level, wanted, drawFullDetail, parentHasMesh, parentLandLike, inLeadCone, lookDown01))
                     return false;
                 if (level < LodWorld.MaxLevel)
                     RequestCoarseFill(key, wanted);

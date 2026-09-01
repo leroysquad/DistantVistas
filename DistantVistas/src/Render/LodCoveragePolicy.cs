@@ -192,6 +192,23 @@ public static class LodCoveragePolicy
     public const int LeadConeMaxDrawLevel = 1;
 
     /// <summary>
+    /// Pitch below the horizon (LookDownAmount) at which the lead cone is
+    /// the ground, not the skyline. Horizon bans L2+ so a 256-block shelf
+    /// does not sit on the hills; looking down that same ban left 64x64
+    /// sky squares wherever an L0 was incomplete or unmeshed. At or above
+    /// this pitch, a parent mesh is coverage.
+    /// </summary>
+    public const float LookDownCoarseFill = 0.55f;
+
+    /// <summary>
+    /// True when the lead-cone shelf ban still applies. Looking down is
+    /// not the horizon: inLeadCone is true for almost every tile, but L2
+    /// on the ground is land, not a cake plate against the sky.
+    /// </summary>
+    public static bool HorizonLeadCone(bool inLeadCone, float lookDown01 = 0) =>
+        inLeadCone && lookDown01 < LookDownCoarseFill;
+
+    /// <summary>
     /// Captured columns at or below this (one quadrant of a 64x64 grid) is a
     /// thin 1-of-4 slice, not a land-like coarse mesh.
     /// </summary>
@@ -229,15 +246,17 @@ public static class LodCoveragePolicy
     /// Draw walk: children only when they are coarse enough to reach wanted,
     /// or we are still inside the 1.0x ring. A missing parent mesh is one-rung
     /// hole-fill (draw L1 children of a missing L2), not a walk all the way to L0.
-    /// In the lead cone L2+ is never coverage, land-like or not: walk until
-    /// real L0/L1 land so the horizon is not a shelf.
+    /// In the lead cone at horizon pitch L2+ is never coverage: walk until
+    /// real L0/L1 land so the skyline is not a shelf. Looking down, the cone
+    /// is the ground; a parent mesh is coverage and this does not force L0.
     /// </summary>
     public static bool ShouldVisitChildForDraw(
         int childLevel, int wanted, bool drawFullDetail, bool parentHasMesh,
-        bool parentLandLike = true, bool inLeadCone = false)
+        bool parentLandLike = true, bool inLeadCone = false, float lookDown01 = 0)
     {
         if (drawFullDetail) return true;
-        if (inLeadCone && (!parentLandLike || childLevel >= LeadConeMaxDrawLevel)) return true;
+        if (HorizonLeadCone(inLeadCone, lookDown01)
+            && (!parentLandLike || childLevel >= LeadConeMaxDrawLevel)) return true;
         if (childLevel >= wanted) return true;
         // Hole-fill of one rung. Missing L2 visits L1; it does not visit L0.
         if (!parentHasMesh && childLevel >= Math.Max(0, wanted - 1)) return true;
@@ -254,26 +273,29 @@ public static class LodCoveragePolicy
     /// </summary>
     public static bool StopDescentAtAvailableRung(
         int level, int wanted, bool drawFullDetail, bool hasMesh,
-        bool landLike, bool inLeadCone) =>
+        bool landLike, bool inLeadCone, float lookDown01 = 0) =>
         hasMesh && !drawFullDetail && level >= 1 && level <= Math.Max(wanted, 1)
-        && !(inLeadCone && level > LeadConeMaxDrawLevel)
-        && (landLike || !inLeadCone);
+        && !(HorizonLeadCone(inLeadCone, lookDown01) && level > LeadConeMaxDrawLevel)
+        && (landLike || !HorizonLeadCone(inLeadCone, lookDown01));
 
     /// <summary>
     /// Whether CollectDrawNodes may add this L1+ mesh to the draw list.
-    /// Never over vanilla-owned ground. Never L2+ inside the lead cone (a
-    /// land-like L2 is still a shelf from this camera). Never a plate inside
-    /// the lead cone, including at the 1.0x coarsen ring. Behind the lead
+    /// Never over vanilla-owned ground. Never L2+ inside the lead cone at
+    /// horizon pitch (a land-like L2 is still a shelf from that camera).
+    /// Looking down, L2+ and even a plains plate may cover so incomplete
+    /// L0 does not punch sky. Never a plate inside the horizon lead cone.
     /// cone a plate may stay as a cheap stand-in. L0 is not a coarse parent;
     /// IncompleteL0 is a separate skip.
     /// </summary>
     public static bool MayDrawCoarseParent(
-        int level, bool insideVanilla, bool landLike, bool inLeadCone)
+        int level, bool insideVanilla, bool landLike, bool inLeadCone,
+        float lookDown01 = 0)
     {
         if (level < 1) return true;
         if (insideVanilla) return false;
-        if (inLeadCone && level > LeadConeMaxDrawLevel) return false;
-        if (!landLike && inLeadCone) return false;
+        if (HorizonLeadCone(inLeadCone, lookDown01) && level > LeadConeMaxDrawLevel)
+            return false;
+        if (!landLike && HorizonLeadCone(inLeadCone, lookDown01)) return false;
         return true;
     }
 
@@ -305,13 +327,14 @@ public static class LodCoveragePolicy
     /// </summary>
     public static bool SkipDrawTooFine(
         int level, int wanted, bool drawFullDetail, bool parentHasMesh,
-        bool parentLandLike = true, bool inLeadCone = false)
+        bool parentLandLike = true, bool inLeadCone = false, float lookDown01 = 0)
     {
         if (drawFullDetail || level >= wanted || !parentHasMesh) return false;
-        if (inLeadCone && !parentLandLike) return false;
+        if (HorizonLeadCone(inLeadCone, lookDown01) && !parentLandLike) return false;
         // Current L1+ means the parent is L2+. That parent cannot stand in
-        // inside the lead cone.
-        if (inLeadCone && level >= LeadConeMaxDrawLevel) return false;
+        // on the horizon. Looking down it can: the missing child is a sky square.
+        if (HorizonLeadCone(inLeadCone, lookDown01) && level >= LeadConeMaxDrawLevel)
+            return false;
         return true;
     }
 }
