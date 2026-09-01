@@ -48,6 +48,12 @@ public class LodTerrainRenderer : IRenderer
     /// scheduling never caught up with the start of a long walk.
     /// </summary>
     const int VisitedKeepSchedulesPerFrame = 4;
+    /// <summary>
+    /// Far wanted-level parent mesh/mip requests per frame. Enough to fill L2/L3
+    /// over a few seconds, small enough that the worker does not hitch.
+    /// </summary>
+    const int CoarseParentRequestsPerFrame = 4;
+    int coarseParentRequestsThisFrame;
 
     readonly ICoreClientAPI capi;
     readonly LodWorld world;
@@ -332,15 +338,122 @@ public class LodTerrainRenderer : IRenderer
     double NearestDistanceSqTo(long key) => LodWorld.NearestDistanceSqTo(key, camPos.X, camPos.Z);
 
     /// <summary>
-    /// Far visited land stops descending below the wanted rung; the near trail still reaches L0/L1.
+    /// Far land stops descending below the wanted rung. The 1.0x draw ring
+    /// still reaches L0/L1. The keep-circle is not part of this.
     /// </summary>
-    bool ShouldVisitChildForDraw(long childKey, int parentWanted, bool parentNearTrail)
+    bool ShouldVisitChildForDraw(
+        long childKey, int parentWanted, bool parentDrawFullDetail, bool parentHasMesh,
+        bool parentLandLike, bool inLeadCone)
     {
-        if (parentNearTrail) return true;
-        return LodWorld.KeyLevel(childKey) >= parentWanted;
+        return LodCoveragePolicy.ShouldVisitChildForDraw(
+            LodWorld.KeyLevel(childKey), parentWanted, parentDrawFullDetail, parentHasMesh,
+            parentLandLike, inLeadCone);
     }
 
     bool HasAnyMesh(long key) => sectionMeshes.ContainsKey(key) || waterMeshes.ContainsKey(key);
+
+    bool InLeadCone(long key)
+    {
+        int footprint = LodWorld.KeyFootprintBlocks(key);
+        double originX = LodWorld.KeySx(key) * (double)footprint;
+        double originZ = LodWorld.KeySz(key) * (double)footprint;
+        double relX = originX - camPos.X;
+        double relZ = originZ - camPos.Z;
+        double minY = -camPos.Y;
+        double maxY = worldHeight - camPos.Y;
+        if (world.Sections.TryGetValue(key, out LodSection? bounds) && bounds.HasSurfaceBounds)
+        {
+            const int pad = 48;
+            minY = bounds.SurfaceYMin - pad - camPos.Y;
+            maxY = bounds.SurfaceYMax + pad - camPos.Y;
+        }
+        return frustum.BoxInLeadCone(relX, minY, relZ, relX + footprint, maxY, relZ + footprint);
+    }
+
+    bool ChildSurfaceUnion(long key, out int yMin, out int yMax)
+    {
+        yMin = int.MaxValue;
+        yMax = int.MinValue;
+        if (LodWorld.KeyLevel(key) <= 0) return false;
+        bool any = false;
+        for (int qz = 0; qz < 2; qz++)
+        {
+            for (int qx = 0; qx < 2; qx++)
+            {
+                long ck = LodWorld.ChildKey(key, qx, qz);
+                if (!world.Sections.TryGetValue(ck, out LodSection? cs) || !cs.HasSurfaceBounds)
+                    continue;
+                any = true;
+                if (cs.SurfaceYMin < yMin) yMin = cs.SurfaceYMin;
+                if (cs.SurfaceYMax > yMax) yMax = cs.SurfaceYMax;
+            }
+        }
+        return any;
+    }
+
+    bool ComputeLandLike(int level, LodSection? section, long key)
+    {
+        if (level < 1) return true;
+        if (section == null) return false;
+        if (!LodCoveragePolicy.IsLandLikeCoarseMesh(
+                level, section.HasSurfaceBounds, section.SurfaceRelief, section.CapturedColumns))
+            return false;
+        if (!ChildSurfaceUnion(key, out int childYMin, out int childYMax))
+            return false;
+        return LodCoveragePolicy.ParentFollowsChildSurface(
+            section.HasSurfaceBounds, section.SurfaceYMin, section.SurfaceYMax,
+            true, childYMin, childYMax);
+    }
+
+    /// <summary>
+    /// Ask for the wanted-level (or coarser) parent of a far tile. If the parent
+    /// section is not in RAM and not on disk, queue child-to-parent mip so the
+    /// existing LodMip path can build it. Capped per frame.
+    /// </summary>
+    void RequestCoarseFill(long key, int wanted)
+    {
+        if (wanted < 2) return;
+        if (coarseParentRequestsThisFrame >= CoarseParentRequestsPerFrame) return;
+
+        long target = key;
+        while (LodWorld.KeyLevel(target) < wanted && LodWorld.KeyLevel(target) < LodWorld.MaxLevel)
+            target = LodWorld.ParentKey(target);
+
+        if (LodWorld.KeyLevel(target) < 2) return;
+        if (HasAnyMesh(target) || meshJobInFlight.Contains(target)) return;
+
+        if (world.Sections.TryGetValue(target, out LodSection? section))
+        {
+            if (section.CapturedColumns == 0) return;
+            coarseParentRequestsThisFrame++;
+            RequestMesh(target);
+            return;
+        }
+
+        if (world.HasDataSet.Contains(target) && !world.LoadFailed.Contains(target))
+        {
+            coarseParentRequestsThisFrame++;
+            RequestMesh(target);
+            return;
+        }
+
+        // Parent section missing: mip it from children. ProcessPropagation creates
+        // the parent via LodMip.DownsampleIntoParent; no invented cake plates.
+        bool queued = false;
+        for (int qz = 0; qz < 2; qz++)
+        {
+            for (int qx = 0; qx < 2; qx++)
+            {
+                long ck = LodWorld.ChildKey(target, qx, qz);
+                if (world.HasDataSet.Contains(ck))
+                {
+                    world.MipDirty.Add(ck);
+                    queued = true;
+                }
+            }
+        }
+        if (queued) coarseParentRequestsThisFrame++;
+    }
 
     bool InHandoffRing(double nearDist, double vanillaCoverageRadius)
     {
@@ -425,8 +538,6 @@ public class LodTerrainRenderer : IRenderer
         if (FarViewDistanceCap > 0 && nearDist > FarViewDistanceCap + LodSection.SectionBlocks)
             return false;
 
-        bool nearVisitedTrail = LodCoveragePolicy.IsNearVisitedTrail(nearDist, liveViewDistance);
-
         // Near-cull must not abort quadtree descent; only skip *drawing* sections
         // whose nearest edge is inside the vanilla bubble. Top-level L6 sections are
         // 4096 blocks - the player is inside them (nearDist=0), so returning early
@@ -441,6 +552,9 @@ public class LodTerrainRenderer : IRenderer
             && LodCoveragePolicy.InsideVanillaCoverage(
                 nearDistSq, camPos.Y, coverageSection.SurfaceYMin,
                 coverageSection.SurfaceYMax, vanillaCoverageRadius, lookDown01);
+
+        bool landLike = ComputeLandLike(level, coverageSection, key);
+        bool inLeadCone = InLeadCone(key);
 
         int wanted = LodWorld.WantedLevelForSq(nearDistSq);
 
@@ -460,15 +574,18 @@ public class LodTerrainRenderer : IRenderer
         }
 
         bool handoff = InHandoffRing(nearDist, vanillaCoverageRadius);
+        // Draw full L0/L1 only inside live view distance and the vanilla seam.
+        // The keep-circle is larger and only holds GPU meshes.
+        bool drawFullDetail = LodCoveragePolicy.IsDrawFullDetail(nearDist, liveViewDistance) || handoff;
 
-        // Keep filling the visible / just-left ring. Mesh the surface we will
-        // actually draw (L0/L1 at handoff, wanted-level further out). Do not
-        // request a parent just so we can paint a giant square over a hole.
-        // Visited L0/L1 is not a camera window: if we already captured it,
-        // request the same mesh even when WantedLevel has moved on.
+        // Mesh the surface we will actually draw. L0/L1 at the 1.0x ring and
+        // handoff; wanted-level further out, including mip parents of visited L0.
+        // Do not request a parent just so we can paint a giant square over a hole.
         if (!hasMesh)
         {
-            if (handoff && level <= 1)
+            if (inLeadCone && !insideVanilla)
+                RequestMesh(key);
+            else if (handoff && level <= 1)
                 RequestMesh(key);
             else if (LodCoveragePolicy.RequestVisitedKeepMesh(
                          level, hasMesh, world.HasDataSet.Contains(key), insideVanilla,
@@ -483,7 +600,7 @@ public class LodTerrainRenderer : IRenderer
                 RequestMesh(key);
         }
 
-        bool holdVisitedL0 = nearVisitedTrail && level == 1 && AllVisitedL0Children(key);
+        bool holdVisitedL0 = drawFullDetail && level == 1 && AllVisitedL0Children(key);
         if (holdVisitedL0)
         {
             if (handoff) wanted = 0;
@@ -501,7 +618,7 @@ public class LodTerrainRenderer : IRenderer
                 for (int qx = 0; qx < 2; qx++)
                 {
                     long ck = LodWorld.ChildKey(key, qx, qz);
-                    if (!ShouldVisitChildForDraw(ck, wanted, nearVisitedTrail)) continue;
+                    if (!ShouldVisitChildForDraw(ck, wanted, true, hasMesh, landLike, inLeadCone)) continue;
                     if (world.HasDataSet.Contains(ck)) anyChildDrew |= CollectDrawNodes(ck);
                 }
             }
@@ -511,8 +628,25 @@ public class LodTerrainRenderer : IRenderer
         bool forcedDetail = LodCoveragePolicy.MustDescendForVisualCap(level, LodWorld.MaxVisualLevel);
         bool keepVisited = LodCoveragePolicy.DescendForVisitedKeep(
             level, ChildHasVisitedSurface(key), nearDist, liveViewDistance);
-        if (level > 0 && (forcedDetail || (level > wanted && AllChildrenCovered(key)) || !hasMesh
-            || (holdVisitedL0 && wanted == 0) || keepVisited))
+
+        if (!insideVanilla && !drawFullDetail && wanted >= 2)
+            RequestCoarseFill(key, wanted);
+
+        // In the lead cone never stop or draw L2+: only L0 and land-like L1
+        // in front. A plate in the lead cone (including at the coarsen ring)
+        // also does not stop: walk children so real L0/L1 land still covers
+        // the hills. Behind the lead cone L2+ (even a plate) may stop as a
+        // cheap stand-in.
+        bool stopAtThisRung = LodCoveragePolicy.StopDescentAtAvailableRung(
+            level, wanted, drawFullDetail, hasMesh, landLike, inLeadCone);
+        if (stopAtThisRung && level < wanted)
+            RequestCoarseFill(key, wanted);
+
+        bool drawableCoarse = hasMesh && LodCoveragePolicy.MayDrawCoarseParent(
+            level, insideVanilla, landLike, inLeadCone);
+
+        if (!stopAtThisRung && level > 0 && (forcedDetail || (level > wanted && AllChildrenCovered(key)) || !drawableCoarse
+            || (holdVisitedL0 && wanted == 0) || keepVisited || drawFullDetail))
         {
             bool anyChildDrew = false;
             for (int qz = 0; qz < 2; qz++)
@@ -520,14 +654,20 @@ public class LodTerrainRenderer : IRenderer
                 for (int qx = 0; qx < 2; qx++)
                 {
                     long ck = LodWorld.ChildKey(key, qx, qz);
-                    if (!ShouldVisitChildForDraw(ck, wanted, nearVisitedTrail)) continue;
+                    if (!ShouldVisitChildForDraw(ck, wanted, drawFullDetail, hasMesh, landLike, inLeadCone)) continue;
                     if (world.HasDataSet.Contains(ck)) anyChildDrew |= CollectDrawNodes(ck);
                 }
             }
             // 0.7.20 rule: if any child drew, or MaxVisualLevel wants L0, do not
             // substitute this parent as a box. Missing children stay empty until
             // they mesh. Drawing the parent was the square-plate regression.
-            if (anyChildDrew || !hasMesh || forcedDetail || holdVisitedL0) return anyChildDrew;
+            // Stamp the parent when we refuse it (L2+ in the lead cone) so
+            // keep-circle eviction does not dump a mesh we still need as a gate.
+            if (anyChildDrew || !drawableCoarse || forcedDetail || holdVisitedL0)
+            {
+                if (hasMesh) lastSelectedFrame[key] = frameCounter;
+                return anyChildDrew;
+            }
         }
 
         if (hasMesh)
@@ -543,11 +683,28 @@ public class LodTerrainRenderer : IRenderer
                 return false;
             }
 
-            // Far visited land coarsens to the wanted rung; only the near trail keeps L0/L1.
-            if (level < wanted && !nearVisitedTrail)
+            if (!LodCoveragePolicy.MayDrawCoarseParent(level, insideVanilla, landLike, inLeadCone))
             {
                 lastSelectedFrame[key] = frameCounter;
                 return false;
+            }
+
+            // Coarsen by wanted level even inside the keep-circle. Stamp the
+            // finer mesh so eviction still treats it as live. If the parent
+            // has no real mesh yet, keep drawing this one and request the parent.
+            // A plate or L2+ parent in the lead cone must not hide children.
+            if (level < wanted && !drawFullDetail)
+            {
+                lastSelectedFrame[key] = frameCounter;
+                long parentKey = LodWorld.ParentKey(key);
+                bool parentHasMesh = level < LodWorld.MaxLevel && HasAnyMesh(parentKey);
+                world.Sections.TryGetValue(parentKey, out LodSection? parentSec);
+                bool parentLandLike = ComputeLandLike(LodWorld.KeyLevel(parentKey), parentSec, parentKey);
+                if (LodCoveragePolicy.SkipDrawTooFine(
+                        level, wanted, drawFullDetail, parentHasMesh, parentLandLike, inLeadCone))
+                    return false;
+                if (level < LodWorld.MaxLevel)
+                    RequestCoarseFill(key, wanted);
             }
 
             // Open sides still draw. Hiding them behind a parent mesh is what
@@ -903,6 +1060,8 @@ public class LodTerrainRenderer : IRenderer
             else if (LodCoveragePolicy.KeepVisitedSurface(candLevel, world.HasDataSet.Contains(key))
                      && !HasAnyMesh(key))
                 distSq *= 0.08;
+            else if (candLevel >= 2 && !HasAnyMesh(key))
+                distSq *= 0.25;
             // Visited L0/L1 trail: mesh the near captured ring first so fly-ahead holes
             // close before coarse parents swap in behind the player.
             if (LodCoveragePolicy.ShouldKeepVisitedDraw(
@@ -1176,8 +1335,12 @@ public class LodTerrainRenderer : IRenderer
         FarDistanceCost.Add(phaseStart);
         ApplyZFar();
 
+        worldHeight = capi.World.BlockAccessor.MapSizeY;
+        frustum.Update(rapi.CurrentProjectionMatrix, rapi.CameraMatrixOriginf);
+
         phaseStart = LodPhaseCost.Start();
         drawList.Clear();
+        coarseParentRequestsThisFrame = 0;
         foreach (long top in world.TopLevelKeys) CollectDrawNodes(top);
         WalkCost.Add(phaseStart);
         LastDrawCount = drawList.Count;

@@ -18,8 +18,11 @@ public class DistantVistasConfig
     /// <summary>0 = 0.7.9 ladder aggressiveness; 1 = one fidelity step up (default).</summary>
     public float FidelityStep = 1.0f;
 
-    /// <summary>Coarsest visible LOD. L0 keeps one terrain column per world block.</summary>
-    public int MaxVisualLodLevel = 0;
+    /// <summary>
+    /// Coarsest visible LOD. Default is the full pyramid so the horizon can
+    /// draw L1/L2/L3. 0 forces L0 everywhere (the 0.7.31 4621-L0 path).
+    /// </summary>
+    public int MaxVisualLodLevel = LodWorld.MaxLevel;
 
     /// <summary>
     /// Draw even when another LOD mod is installed and switched on. The escape hatch for

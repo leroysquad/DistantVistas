@@ -150,6 +150,30 @@ public static class KeyMathChecks
         {
             LodWorld.MaxVisualLevel = original;
         }
+
+        int origMax = LodWorld.MaxVisualLevel;
+        double origVd = LodWorld.ViewDistanceAnchor;
+        double origOver = LodWorld.OverdrawStart;
+        double origDetail = LodWorld.DetailDistance;
+        double origFid = LodWorld.FidelityStep;
+        try
+        {
+            LodWorld.MaxVisualLevel = LodWorld.MaxLevel;
+            LodWorld.ViewDistanceAnchor = 512;
+            LodWorld.OverdrawStart = 0.55;
+            LodWorld.DetailDistance = 320;
+            LodWorld.FidelityStep = 1.0;
+            c.True(LodWorld.WantedLevelFor(512 * 2) >= 1,
+                "2x view distance wants at least L1 so the walk can stop at L1 meshes");
+        }
+        finally
+        {
+            LodWorld.MaxVisualLevel = origMax;
+            LodWorld.ViewDistanceAnchor = origVd;
+            LodWorld.OverdrawStart = origOver;
+            LodWorld.DetailDistance = origDetail;
+            LodWorld.FidelityStep = origFid;
+        }
     }
 
     static void Packing(Check c)

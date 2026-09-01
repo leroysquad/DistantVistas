@@ -24,6 +24,7 @@ public static class FrustumChecks
         Rejects(c, frustum);
         NearAndFar(c, frustum);
         Conservative(c, frustum);
+        LeadCone(c, frustum);
     }
 
     /// <summary>Looking down -Z, the OpenGL convention, from a camera at the origin.</summary>
@@ -113,6 +114,21 @@ public static class FrustumChecks
     }
 
     /// <summary>An axis-aligned cube of the given half-extent, centred on the point.</summary>
+    static void LeadCone(Check c, LodFrustum f)
+    {
+        c.True(Lead(f, 0, 0, -100, 10), "a box straight ahead is in the lead cone");
+        c.False(Lead(f, 0, 0, 100, 10), "a box behind the camera is outside the lead cone");
+        // Tight frustum at z=-100 rejects y around 70 for a ~60 degree fovy;
+        // 15 degrees of lead still keeps that box.
+        c.False(Box(f, 0, 70, -100, 5), "a box just outside the tight vertical frustum is rejected for draw");
+        c.True(Lead(f, 0, 70, -100, 5), "the same box is inside the 15 degree lead cone for selection");
+        c.False(Lead(f, 0, 400, -100, 5), "a box far above the lead cone is still rejected");
+        c.True(Lead(f, 0, 0, 0, 50), "a box containing the camera is in the lead cone");
+    }
+
     static bool Box(LodFrustum f, double x, double y, double z, double half) =>
         f.BoxInView(x - half, y - half, z - half, x + half, y + half, z + half);
+
+    static bool Lead(LodFrustum f, double x, double y, double z, double half) =>
+        f.BoxInLeadCone(x - half, y - half, z - half, x + half, y + half, z + half);
 }
