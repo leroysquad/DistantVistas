@@ -9,7 +9,7 @@ namespace DistantVistas;
 
 public class DistantVistasConfig
 {
-    /// <summary>0 = unlimited.</summary>
+    /// <summary>0 = unlimited draw coverage (coarse far stays on screen). GPU L0/L1 still pages by keep-circle.</summary>
     public int FarViewDistanceCap = 0;
 
     /// <summary>Distance at which detail starts halving; see LodWorld.DetailDistance.</summary>

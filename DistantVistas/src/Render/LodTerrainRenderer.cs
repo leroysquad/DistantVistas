@@ -22,6 +22,15 @@ public class LodTerrainRenderer : IRenderer
 
     const int MeshSchedulesPerFrame = 12;
     const int MeshUploadsPerFrame = 8;
+    /// <summary>
+    /// Wall clock a single frame may spend handing finished meshes to the driver. Each
+    /// upload allocates a buffer and blocks until the driver takes it, so a full backlog
+    /// of eight in one frame is long enough to be felt. What does not fit keeps its place
+    /// in the queue and goes up next frame.
+    /// </summary>
+    const double MeshUploadBudgetMs = 2.0;
+    static readonly long MeshUploadBudgetTicks =
+        (long)(System.Diagnostics.Stopwatch.Frequency * MeshUploadBudgetMs / 1000.0);
     const int IncompleteFillPerTick = 16;
     /// <summary>
     /// Queue depth allowed at the mesh workers. Per thread, not absolute: a fixed 12 was
@@ -64,12 +73,31 @@ public class LodTerrainRenderer : IRenderer
     readonly Dictionary<long, MeshRef> waterMeshes = new();
     readonly HashSet<long> meshJobInFlight = new();
     readonly Dictionary<long, long> lastSelectedFrame = new();
+    readonly Dictionary<long, long> meshBornFrame = new();
     readonly List<long> evictBatch = new();
+    readonly List<long> evictBorn = new();
+    int evictCursor;
+    long lastEvictScanFrame;
+    bool evictBatchFull;
     long frameCounter;
 
-    /// <summary>Meshes unselected for this many frames (~1 min) get evicted; the quadtree re-requests on demand.</summary>
-    const int EvictAfterFrames = 3600;
-    const int EvictSweepInterval = 300;
+    /// <summary>
+    /// Outside the keep-circle, retire the oldest GPU meshes a couple at a time, every
+    /// frame. Disposing a MeshRef is a driver-side buffer delete, so the old once-a-second
+    /// sweep of 24 put a whole second of deletes into a single frame: the average frame
+    /// stayed fine while p95 spiked. Same meshes, same order, same work per second, spread
+    /// across the second instead of piled into one frame.
+    /// </summary>
+    const int EvictOldestPerFrame = 2;
+    const int EvictOldestPerFrameOverBudget = 4;
+
+    /// <summary>
+    /// Frames between rebuilds of the oldest-first candidate list. Choosing candidates
+    /// walks every resident mesh, so that part keeps its old cadence and only the
+    /// disposing is spread out. The list is capped at what the per-frame rate can retire
+    /// before the next rebuild.
+    /// </summary>
+    const int EvictScanInterval = 60;
 
     public int EvictedTotal { get; private set; }
     readonly Matrixf modelMat = new();
@@ -98,7 +126,7 @@ public class LodTerrainRenderer : IRenderer
     int seasonalRefreshZ;
     readonly BlockPos climatePos = new(0, 0, 0);
 
-    /// <summary>Optional hard cap in blocks; 0 = unlimited (render every cached section).</summary>
+    /// <summary>Optional hard cap in blocks; 0 = unlimited draw coverage.</summary>
     public int FarViewDistanceCap = 0;
     public bool DisableLodFog = true;
     public float FogDensityScale = 1.0f;
@@ -277,9 +305,10 @@ public class LodTerrainRenderer : IRenderer
         }
 
         float far = (float)Math.Sqrt(maxDistSq) + LodSection.SectionBlocks * 1.5f;
-        if (FarViewDistanceCap > 0) far = Math.Min(far, FarViewDistanceCap);
-
-        EffectiveFarDistance = GameMath.Max(far, vanillaViewDistance + 16384);
+        if (FarViewDistanceCap > 0)
+            EffectiveFarDistance = Math.Min(far, FarViewDistanceCap);
+        else
+            EffectiveFarDistance = Math.Max(far, vanillaViewDistance + 16384);
     }
 
     // ---- Detail selection (quadtree walk) ----
@@ -301,6 +330,15 @@ public class LodTerrainRenderer : IRenderer
     /// level, and both work on the square, so neither needs the root.
     /// </summary>
     double NearestDistanceSqTo(long key) => LodWorld.NearestDistanceSqTo(key, camPos.X, camPos.Z);
+
+    /// <summary>
+    /// Far visited land stops descending below the wanted rung; the near trail still reaches L0/L1.
+    /// </summary>
+    bool ShouldVisitChildForDraw(long childKey, int parentWanted, bool parentNearTrail)
+    {
+        if (parentNearTrail) return true;
+        return LodWorld.KeyLevel(childKey) >= parentWanted;
+    }
 
     bool HasAnyMesh(long key) => sectionMeshes.ContainsKey(key) || waterMeshes.ContainsKey(key);
 
@@ -382,6 +420,13 @@ public class LodTerrainRenderer : IRenderer
         double nearDistSq = NearestDistanceSqTo(key);
         double nearDist = Math.Sqrt(nearDistSq);
 
+        // Optional extra ceiling. 0 means keep drawing the whole visited landscape
+        // (cheap coarse rungs far out). GPU L0/L1 still pages outside the keep-circle.
+        if (FarViewDistanceCap > 0 && nearDist > FarViewDistanceCap + LodSection.SectionBlocks)
+            return false;
+
+        bool nearVisitedTrail = LodCoveragePolicy.IsNearVisitedTrail(nearDist, liveViewDistance);
+
         // Near-cull must not abort quadtree descent; only skip *drawing* sections
         // whose nearest edge is inside the vanilla bubble. Top-level L6 sections are
         // 4096 blocks - the player is inside them (nearDist=0), so returning early
@@ -426,7 +471,8 @@ public class LodTerrainRenderer : IRenderer
             if (handoff && level <= 1)
                 RequestMesh(key);
             else if (LodCoveragePolicy.RequestVisitedKeepMesh(
-                         level, hasMesh, world.HasDataSet.Contains(key), insideVanilla))
+                         level, hasMesh, world.HasDataSet.Contains(key), insideVanilla,
+                         nearDist, liveViewDistance))
                 RequestMesh(key);
             else if (!insideVanilla && (level == wanted || level == wanted + 1))
                 RequestMesh(key);
@@ -437,7 +483,7 @@ public class LodTerrainRenderer : IRenderer
                 RequestMesh(key);
         }
 
-        bool holdVisitedL0 = level == 1 && AllVisitedL0Children(key);
+        bool holdVisitedL0 = nearVisitedTrail && level == 1 && AllVisitedL0Children(key);
         if (holdVisitedL0)
         {
             if (handoff) wanted = 0;
@@ -455,6 +501,7 @@ public class LodTerrainRenderer : IRenderer
                 for (int qx = 0; qx < 2; qx++)
                 {
                     long ck = LodWorld.ChildKey(key, qx, qz);
+                    if (!ShouldVisitChildForDraw(ck, wanted, nearVisitedTrail)) continue;
                     if (world.HasDataSet.Contains(ck)) anyChildDrew |= CollectDrawNodes(ck);
                 }
             }
@@ -462,7 +509,8 @@ public class LodTerrainRenderer : IRenderer
         }
 
         bool forcedDetail = LodCoveragePolicy.MustDescendForVisualCap(level, LodWorld.MaxVisualLevel);
-        bool keepVisited = LodCoveragePolicy.DescendForVisitedKeep(level, ChildHasVisitedSurface(key));
+        bool keepVisited = LodCoveragePolicy.DescendForVisitedKeep(
+            level, ChildHasVisitedSurface(key), nearDist, liveViewDistance);
         if (level > 0 && (forcedDetail || (level > wanted && AllChildrenCovered(key)) || !hasMesh
             || (holdVisitedL0 && wanted == 0) || keepVisited))
         {
@@ -472,6 +520,7 @@ public class LodTerrainRenderer : IRenderer
                 for (int qx = 0; qx < 2; qx++)
                 {
                     long ck = LodWorld.ChildKey(key, qx, qz);
+                    if (!ShouldVisitChildForDraw(ck, wanted, nearVisitedTrail)) continue;
                     if (world.HasDataSet.Contains(ck)) anyChildDrew |= CollectDrawNodes(ck);
                 }
             }
@@ -489,6 +538,13 @@ public class LodTerrainRenderer : IRenderer
             // Keep the GPU mesh while vanilla owns this column so walking away
             // does not remesh from scratch. Do not draw it on top of chunks.
             if (insideVanilla && level == 0)
+            {
+                lastSelectedFrame[key] = frameCounter;
+                return false;
+            }
+
+            // Far visited land coarsens to the wanted rung; only the near trail keeps L0/L1.
+            if (level < wanted && !nearVisitedTrail)
             {
                 lastSelectedFrame[key] = frameCounter;
                 return false;
@@ -620,6 +676,29 @@ public class LodTerrainRenderer : IRenderer
     }
 
 
+    void UpdateKeepOrigin()
+    {
+        if (!keepOriginValid)
+        {
+            lastKeepOriginX = camPos.X;
+            lastKeepOriginZ = camPos.Z;
+            keepOriginValid = true;
+            windowMovedThisFrame = false;
+            return;
+        }
+
+        if (LodCoveragePolicy.OriginShifted(lastKeepOriginX, lastKeepOriginZ, camPos.X, camPos.Z))
+        {
+            lastKeepOriginX = camPos.X;
+            lastKeepOriginZ = camPos.Z;
+            windowMovedThisFrame = true;
+        }
+        else
+        {
+            windowMovedThisFrame = false;
+        }
+    }
+
     // No mesh-count cap. 0.7.21's 6000/8000 residency dump dropped visited L0
     // onto parent tiles the moment the map had filled enough, which is the
     // "it stops and land disappears" bug. RAM still spills to disk; GPU meshes
@@ -627,47 +706,113 @@ public class LodTerrainRenderer : IRenderer
     bool InJustLeftRing(long key)
     {
         double dist = Math.Sqrt(NearestDistanceSqTo(key));
-        // 0.7.22 was view distance plus eight L0 tiles (~1k). Tenfold so the
-        // trail behind the player is not the thing that gets paged first.
-        return dist < liveViewDistance + LodSection.SectionBlocks * 80;
+        return LodCoveragePolicy.IsNearVisitedTrail(dist, liveViewDistance);
     }
 
     void EvictStaleMeshes()
     {
-        if (frameCounter % EvictSweepInterval != 0) return;
+        bool drained = evictCursor >= evictBatch.Count;
+        if (frameCounter - lastEvictScanFrame >= EvictScanInterval || (drained && evictBatchFull))
+            ScanEvictionCandidates();
+
+        int budget = sectionMeshes.Count > LodMemoryBudget.MaxResidentMeshes
+            ? EvictOldestPerFrameOverBudget
+            : EvictOldestPerFrame;
+
+        while (budget > 0 && evictCursor < evictBatch.Count)
+        {
+            long key = evictBatch[evictCursor++];
+
+            // The list can be a whole scan old, so the keep-circle is checked again here:
+            // a key the player has turned back toward is inside it now and stays.
+            if (InJustLeftRing(key)) continue;
+
+            // No hole then pop: if this mesh was selected this frame and the coarser
+            // parent is not drawable yet, leave it. Tiles that have left the keep-circle
+            // and are no longer selected may go.
+            if (lastSelectedFrame.TryGetValue(key, out long selected) && selected == frameCounter)
+            {
+                long parent = LodWorld.ParentKey(key);
+                if (LodWorld.KeyLevel(key) < LodWorld.MaxLevel && !HasAnyMesh(parent))
+                    continue;
+            }
+
+            bool freed = false;
+            if (sectionMeshes.Remove(key, out MeshRef? mesh)) { mesh.Dispose(); freed = true; }
+            if (waterMeshes.Remove(key, out MeshRef? water)) { water.Dispose(); freed = true; }
+
+            // Nothing was holding GPU memory for this key any more, so it does not spend
+            // the frame's budget. Move on to the next candidate instead.
+            if (!freed) continue;
+
+            lastSelectedFrame.Remove(key);
+            meshBornFrame.Remove(key);
+            EvictedTotal++;
+            budget--;
+        }
+    }
+
+    /// <summary>
+    /// Rebuild the oldest-first eviction list. Selection is unchanged: L0/L1 only, never
+    /// inside the RAM-scaled keep-circle or the just-left ring, oldest mesh first.
+    /// </summary>
+    void ScanEvictionCandidates()
+    {
+        lastEvictScanFrame = frameCounter;
+        evictCursor = 0;
+
+        LodCoveragePolicy.KeepCircleScale = LodMemoryBudget.LiveKeepScale(sectionMeshes.Count);
+
+        int want = (sectionMeshes.Count > LodMemoryBudget.MaxResidentMeshes
+            ? EvictOldestPerFrameOverBudget
+            : EvictOldestPerFrame) * EvictScanInterval;
 
         evictBatch.Clear();
-        foreach ((long key, MeshRef _) in sectionMeshes)
+        evictBorn.Clear();
+        foreach (long key in sectionMeshes.Keys) ConsiderForEviction(key, want);
+        foreach (long key in waterMeshes.Keys)
         {
-            if (!lastSelectedFrame.TryGetValue(key, out long last) || frameCounter - last > EvictAfterFrames)
-            {
-                if (InJustLeftRing(key)) continue;
-                // Visited land stays on the GPU. The old unselected-timeout was a
-                // moving window: WantedLevel stopped picking far tiles, this sweep
-                // dumped them, and the trail behind the player turned into sky.
-                if (LodWorld.KeyLevel(key) <= 1) continue;
-                if (world.HasDataSet.Contains(key)) continue;
-                evictBatch.Add(key);
-            }
-        }
-        foreach ((long key, MeshRef _) in waterMeshes)
-        {
-            if (!sectionMeshes.ContainsKey(key)
-                && (!lastSelectedFrame.TryGetValue(key, out long last) || frameCounter - last > EvictAfterFrames))
-            {
-                if (InJustLeftRing(key)) continue;
-                if (LodWorld.KeyLevel(key) <= 1) continue;
-                if (world.HasDataSet.Contains(key)) continue;
-                evictBatch.Add(key);
-            }
+            if (sectionMeshes.ContainsKey(key)) continue;
+            ConsiderForEviction(key, want);
         }
 
-        foreach (long key in evictBatch)
+        // A list that filled up means there is more to retire than this window holds, so
+        // draining it early earns a fresh scan rather than an idle wait.
+        evictBatchFull = evictBatch.Count >= want;
+    }
+
+    /// <summary>
+    /// Place one candidate in the oldest-first list, keeping at most <paramref name="want"/>
+    /// of them. Coarse far meshes are the giant landscape, so only the expensive L0/L1
+    /// outside the keep-circle is eligible, same idea as DH's clipmap.
+    /// </summary>
+    void ConsiderForEviction(long key, int want)
+    {
+        if (LodWorld.KeyLevel(key) > 1) return;
+        if (InJustLeftRing(key)) return;
+
+        long born = meshBornFrame.TryGetValue(key, out long b) ? b : 0;
+
+        // Younger than everything already held, with no room left: it would fall off the
+        // end of the list anyway, so skip the insert.
+        if (evictBatch.Count >= want && born >= evictBorn[evictBorn.Count - 1]) return;
+
+        int at = evictBorn.Count;
+        evictBatch.Add(key);
+        evictBorn.Add(born);
+        while (at > 0 && evictBorn[at - 1] > born)
         {
-            if (sectionMeshes.Remove(key, out MeshRef? mesh)) mesh.Dispose();
-            if (waterMeshes.Remove(key, out MeshRef? water)) water.Dispose();
-            lastSelectedFrame.Remove(key);
-            EvictedTotal++;
+            evictBorn[at] = evictBorn[at - 1];
+            evictBatch[at] = evictBatch[at - 1];
+            at--;
+        }
+        evictBorn[at] = born;
+        evictBatch[at] = key;
+
+        if (evictBatch.Count > want)
+        {
+            evictBatch.RemoveAt(evictBatch.Count - 1);
+            evictBorn.RemoveAt(evictBorn.Count - 1);
         }
     }
 
@@ -698,11 +843,13 @@ public class LodTerrainRenderer : IRenderer
             {
                 // Visited near tiles may sit behind the camera or past the wanted rung
                 // while the player flies; dropping their mesh jobs leaves a trail of sky.
-                if (LodCoveragePolicy.ShouldKeepVisitedDraw(dirtyLevel, world.HasDataSet.Contains(key)))
+                if (LodCoveragePolicy.ShouldKeepVisitedDraw(
+                        dirtyLevel, world.HasDataSet.Contains(key), pruneDist, liveViewDistance))
                     continue;
-                if (dirtyLevel == 0 && !world.IncompleteL0Keys.Contains(key)) continue;
+                if (dirtyLevel == 0 && world.IncompleteL0Keys.Contains(key)) continue;
                 if (handoffJob && dirtyLevel <= 1) continue;
-                if (dirtyLevel <= 1 && world.HasDataSet.Contains(key)) continue;
+                if (LodCoveragePolicy.IsNearVisitedTrail(pruneDist, liveViewDistance)
+                    && dirtyLevel <= 1 && world.HasDataSet.Contains(key)) continue;
                 dirtyPrune.Add(key);
             }
         }
@@ -712,6 +859,17 @@ public class LodTerrainRenderer : IRenderer
     readonly long[] scheduleCandidates = new long[MeshSchedulesPerFrame + IncompleteFillPerTick + MeshLoadRequestsPerFrame];
     readonly double[] scheduleCandidateDistSq = new double[MeshSchedulesPerFrame + IncompleteFillPerTick + MeshLoadRequestsPerFrame];
     int lastKeepOverlayCount;
+    readonly long[] farthestKeepFound = new long[VisitedKeepSchedulesPerFrame];
+    readonly double[] farthestKeepDist = new double[VisitedKeepSchedulesPerFrame];
+
+    // QuadTreeMover-style window: origin only moves when XZ travels one L0 tile.
+    // Looking around is not a move. Standing still keeps every GPU mesh.
+    double lastKeepOriginX;
+    double lastKeepOriginZ;
+    bool keepOriginValid;
+    bool windowMovedThisFrame;
+
+    MeshData? uploadScratch;
 
     /// <summary>
     /// The nearest dirty keys that can start work now, nearest first, at most as many as
@@ -732,6 +890,9 @@ public class LodTerrainRenderer : IRenderer
             // Skip anything already being meshed or reloaded, so the per-frame budget
             // goes to sections that can actually start work now.
             if (meshJobInFlight.Contains(key) || world.LoadsInFlight.Contains(key)) continue;
+            // Idle: do not even consider already-meshed tiles. Capture-dirty remesh
+            // waits until the window actually moves.
+            if (!windowMovedThisFrame && HasAnyMesh(key)) continue;
 
             double distSq = NearestDistanceSqTo(key);
             int candLevel = LodWorld.KeyLevel(key);
@@ -744,7 +905,8 @@ public class LodTerrainRenderer : IRenderer
                 distSq *= 0.08;
             // Visited L0/L1 trail: mesh the near captured ring first so fly-ahead holes
             // close before coarse parents swap in behind the player.
-            if (LodCoveragePolicy.ShouldKeepVisitedDraw(candLevel, world.HasDataSet.Contains(key)))
+            if (LodCoveragePolicy.ShouldKeepVisitedDraw(
+                    candLevel, world.HasDataSet.Contains(key), candDist, liveViewDistance))
                 distSq = 0;
             if (count == capacity && distSq >= scheduleCandidateDistSq[count - 1]) continue;
 
@@ -771,8 +933,8 @@ public class LodTerrainRenderer : IRenderer
     int OverlayFarthestVisitedKeep(ref int count)
     {
         int take = VisitedKeepSchedulesPerFrame;
-        long[] found = new long[take];
-        double[] foundDist = new double[take];
+        long[] found = farthestKeepFound;
+        double[] foundDist = farthestKeepDist;
         int n = 0;
 
         foreach (long key in world.RenderDirty)
@@ -783,6 +945,8 @@ public class LodTerrainRenderer : IRenderer
             if (HasAnyMesh(key)) continue;
 
             double distSq = NearestDistanceSqTo(key);
+            double dist = Math.Sqrt(distSq);
+            if (!LodCoveragePolicy.IsNearVisitedTrail(dist, liveViewDistance)) continue;
             if (n == take && distSq <= foundDist[n - 1]) continue;
             int at = n < take ? n++ : take - 1;
             while (at > 0 && foundDist[at - 1] < distSq)
@@ -862,6 +1026,11 @@ public class LodTerrainRenderer : IRenderer
 
     bool TryStartMeshJob(long best, ref int meshBudget, ref int loadBudget)
     {
+        // Standing still: keep GPU meshes. Do not clone a snapshot or enqueue a job
+        // for land that is already on screen. Capture-dirty keys stay in RenderDirty
+        // until the origin actually moves.
+        if (!windowMovedThisFrame && HasAnyMesh(best)) return false;
+
         // It was dirty and not in flight a moment ago, and nothing below touches any
         // key but the one it is working on. Remove says so anyway for the price of
         // the probe the old code was making regardless.
@@ -887,7 +1056,8 @@ public class LodTerrainRenderer : IRenderer
             return false;
         }
 
-        var neighbors = new SectionSnapshot?[4];
+        MeshJob job = worker.RentMeshJob();
+        SectionSnapshot?[] neighbors = job.Neighbors;
         for (int d = 0; d < 4; d++)
         {
             long nk = LodWorld.NeighborKey(best, d == 0 ? -1 : d == 1 ? 1 : 0, d == 2 ? -1 : d == 3 ? 1 : 0);
@@ -896,18 +1066,17 @@ public class LodTerrainRenderer : IRenderer
 
         meshBudget--;
         meshJobInFlight.Add(best);
-        worker.EnqueueMesh(new MeshJob
-        {
-            Key = best,
-            Self = SectionSnapshot.Of(section),
-            Neighbors = neighbors,
-        });
+        job.Key = best;
+        job.Self = SectionSnapshot.Of(section);
+        worker.EnqueueMesh(job);
         return true;
     }
 
     void UploadFinishedMeshes()
     {
         int budget = MeshUploadsPerFrame;
+        long uploadStart = LodPhaseCost.Start();
+
         while (budget-- > 0 && worker.MeshResults.TryDequeue(out MeshResult? result))
         {
             meshJobInFlight.Remove(result.Key);
@@ -919,6 +1088,8 @@ public class LodTerrainRenderer : IRenderer
             {
                 sectionMeshes[result.Key] = Upload(result.Xyz, result.Rgba, result.Indices,
                     result.VertexCount, result.IndexCount);
+                if (!meshBornFrame.ContainsKey(result.Key))
+                    meshBornFrame[result.Key] = frameCounter;
             }
 
             if (result.WaterIndexCount > 0 && result.WaterXyz != null)
@@ -927,26 +1098,43 @@ public class LodTerrainRenderer : IRenderer
                     result.WaterVertexCount, result.WaterIndexCount);
             }
 
+            result.ReturnPooledBuffers();
+
             // Fresh uploads get a grace stamp so they aren't evicted before first selection.
             lastSelectedFrame[result.Key] = frameCounter;
+
+            // Tested after an upload, never before, so every frame lands at least one and
+            // the queue can never stall. Past the slice the remaining results stay queued
+            // in order for the next frame; none are dropped.
+            if (System.Diagnostics.Stopwatch.GetTimestamp() - uploadStart >= MeshUploadBudgetTicks) break;
         }
     }
 
     MeshRef Upload(float[] xyz, byte[] rgba, int[] indices, int vertCount, int indexCount)
     {
-        var mesh = new MeshData(false);
+        MeshData mesh = uploadScratch ??= new MeshData(false);
         mesh.SetVerticesCount(vertCount);
         mesh.SetIndicesCount(indexCount);
         mesh.xyz = xyz;
         mesh.Rgba = rgba;
         mesh.Indices = indices;
-        return capi.Render.UploadMesh(mesh);
+        MeshRef uploaded = capi.Render.UploadMesh(mesh);
+        mesh.xyz = null!;
+        mesh.Rgba = null!;
+        mesh.Indices = null!;
+        return uploaded;
     }
 
     // ---- Frame ----
 
     public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
     {
+        if (frameCounter == 0)
+        {
+            LodMemoryBudget.Probe();
+            LodCoveragePolicy.KeepCircleScale = LodMemoryBudget.KeepScale;
+        }
+
         if (AutoUnpause && capi.IsGamePaused) capi.PauseGame(false);
 
         if (prog == null || !shaderOk || prog.LoadError) return;
@@ -957,6 +1145,7 @@ public class LodTerrainRenderer : IRenderer
         camPos = capi.World.Player.Entity.CameraPos;
         Vec3f look = capi.World.Player.Entity.Pos.GetViewVector();
         lookDown01 = LodCoveragePolicy.LookDownAmount(look.Y);
+        UpdateKeepOrigin();
         frameCounter++;
 
         // Timed apart, not together. Lumped into one counter they cannot be told apart,
@@ -998,7 +1187,10 @@ public class LodTerrainRenderer : IRenderer
         ScheduleCost.Add(phaseStart);
 
         UploadFinishedMeshes();
-        EvictStaleMeshes();
+        // Window does not move while idle, so nothing leaves the keep-circle and
+        // nothing is disposed. Same meshes stay on the GPU until XZ actually shifts.
+        if (windowMovedThisFrame)
+            EvictStaleMeshes();
         RefreshSeasonalState();
 
         if (drawList.Count == 0) return;
@@ -1120,7 +1312,11 @@ public class LodTerrainRenderer : IRenderer
         double relZ = originZ - camPos.Z;
 
         int level = LodWorld.KeyLevel(key);
-        bool keepVisited = LodCoveragePolicy.ShouldKeepVisitedDraw(level, world.HasDataSet.Contains(key));
+        double drawDist = Math.Sqrt(
+            (originX + footprint / 2.0 - camPos.X) * (originX + footprint / 2.0 - camPos.X)
+            + (originZ + footprint / 2.0 - camPos.Z) * (originZ + footprint / 2.0 - camPos.Z));
+        bool keepVisited = LodCoveragePolicy.ShouldKeepVisitedDraw(
+            level, world.HasDataSet.Contains(key), drawDist, liveViewDistance);
         if (!keepVisited)
         {
             // Tight Y when we know the surface band; a world-tall box false-rejects on
@@ -1174,6 +1370,8 @@ public class LodTerrainRenderer : IRenderer
         waterMeshes.Clear();
         meshJobInFlight.Clear();
         lastSelectedFrame.Clear();
+        keepOriginValid = false;
+        windowMovedThisFrame = false;
         snowLineY = pendingSnowLineY = 99999;
         seasonalRefreshActive = false;
         seasonalStateInitialized = false;

@@ -60,8 +60,16 @@ public static class FrustumChecks
         // behind the player is drawn, which is roughly half of them.
         c.False(Box(f, 0, 0, 100, 10), "a box behind the camera is rejected");
         c.False(Box(f, 0, 0, 500, 50), "a box far behind the camera is rejected");
-        c.True(LodCoveragePolicy.ShouldKeepVisitedDraw(0, hasDataSet: true),
-            "visited L0 is exempt from this reject at draw time, not in LodFrustum itself");
+        c.True(LodCoveragePolicy.ShouldKeepVisitedDraw(0, hasDataSet: true, 400, 512),
+            "visited L0 near the trail is exempt from this reject at draw time, not in LodFrustum itself");
+        c.False(LodCoveragePolicy.ShouldKeepVisitedDraw(0, hasDataSet: true, 7000, 512),
+            "horizon L0 is not exempt from frustum reject");
+
+        double ringEdge = 512 * LodMemoryBudget.DefaultKeepScale;
+        c.True(LodCoveragePolicy.IsNearVisitedTrail(ringEdge - 1, 512),
+            "one block inside the trail ring still counts as near");
+        c.False(LodCoveragePolicy.IsNearVisitedTrail(ringEdge + 1, 512),
+            "one block outside the trail ring is far visited land");
 
         c.False(Box(f, 2000, 0, -100, 10), "a box far to the right is rejected");
         c.False(Box(f, -2000, 0, -100, 10), "a box far to the left is rejected");

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using Vintagestory.API.Common;
 using Vintagestory.API.Config;
@@ -19,20 +20,15 @@ public class SectionSnapshot
 
     public static SectionSnapshot Of(LodSection s)
     {
-        var colors = new int[s.Palette.Count];
-        var flags = new byte[s.Palette.Count];
-        var slots = new byte[s.Palette.Count];
-        for (int i = 0; i < s.Palette.Count; i++)
-        {
-            colors[i] = s.Palette[i].Color;
-            flags[i] = s.Palette[i].Flags;
-            slots[i] = s.Palette[i].TintSlot;
-        }
+        s.FillPaletteSnapshot(out int[] colors, out byte[] flags, out byte[] slots);
+        // Runs / ColumnStart are swapped as a whole when the section changes, never
+        // edited through a snapshot. Captured is a flag array the mesher only reads.
+        // Cloning it every job was 4 KB of gen0 per mesh for a copy nobody wrote.
         return new SectionSnapshot
         {
             Runs = s.Runs,
             ColumnStart = s.ColumnStart,
-            Captured = (bool[])s.Captured.Clone(),
+            Captured = s.Captured,
             PaletteColors = colors,
             PaletteFlags = flags,
             PaletteTintSlots = slots,
@@ -58,8 +54,8 @@ public class CaptureResult
 public class MeshJob
 {
     public long Key;
-    public required SectionSnapshot Self;
-    public required SectionSnapshot?[] Neighbors; // W, E, N, S
+    public SectionSnapshot Self = null!;
+    public SectionSnapshot?[] Neighbors = new SectionSnapshot?[4]; // W, E, N, S
 }
 
 public class MeshResult
@@ -77,6 +73,34 @@ public class MeshResult
     public int[]? WaterIndices;
     public int WaterVertexCount;
     public int WaterIndexCount;
+
+    /// <summary>
+    /// Vertex arrays came from ArrayPool. Hand them back after the GPU has copied
+    /// them so the next mesh can reuse the same blocks instead of leaving them for GC.
+    /// </summary>
+    public void ReturnPooledBuffers()
+    {
+        ReturnNonNull(ref Xyz);
+        ReturnNonNull(ref Rgba);
+        ReturnNonNull(ref Indices);
+        ReturnNullable(ref WaterXyz);
+        ReturnNullable(ref WaterRgba);
+        ReturnNullable(ref WaterIndices);
+    }
+
+    static void ReturnNonNull<T>(ref T[] a)
+    {
+        if (a.Length == 0) return;
+        ArrayPool<T>.Shared.Return(a);
+        a = Array.Empty<T>();
+    }
+
+    static void ReturnNullable<T>(ref T[]? a)
+    {
+        if (a == null || a.Length == 0) return;
+        ArrayPool<T>.Shared.Return(a);
+        a = null;
+    }
 }
 
 /// <summary>
@@ -91,6 +115,7 @@ public class LodWorker : IDisposable
 
     readonly ConcurrentQueue<CaptureJob> captureJobs = new();
     readonly ConcurrentQueue<MeshJob> meshJobs = new();
+    readonly ConcurrentBag<MeshJob> meshJobPool = new();
     public readonly ConcurrentQueue<CaptureResult> CaptureResults = new();
     public readonly ConcurrentQueue<MeshResult> MeshResults = new();
 
@@ -164,6 +189,31 @@ public class LodWorker : IDisposable
         meshSignal.Release();
     }
 
+    /// <summary>
+    /// MeshJob plus its length-4 neighbor slot. Reused so enqueue does not allocate
+    /// a fresh neighbor array for every section.
+    /// </summary>
+    public MeshJob RentMeshJob()
+    {
+        if (meshJobPool.TryTake(out MeshJob? job))
+        {
+            job.Key = 0;
+            job.Self = null!;
+            SectionSnapshot?[] n = job.Neighbors;
+            n[0] = n[1] = n[2] = n[3] = null;
+            return job;
+        }
+        return new MeshJob();
+    }
+
+    void ReturnMeshJob(MeshJob job)
+    {
+        job.Self = null!;
+        SectionSnapshot?[] n = job.Neighbors;
+        n[0] = n[1] = n[2] = n[3] = null;
+        meshJobPool.Add(job);
+    }
+
     // Separate loops, not one. The old shared loop drained EVERY queued capture before
     // taking a single mesh job, so exploring - which is exactly when new terrain most needs
     // drawing - starved meshing and left coarse parents on screen for minutes.
@@ -210,6 +260,10 @@ public class LodWorker : IDisposable
                 // Snapshot inconsistency; section will re-mesh on its next change.
                 Interlocked.Increment(ref MeshErrors);
                 Interlocked.CompareExchange(ref FirstMeshError, e.ToString(), null);
+            }
+            finally
+            {
+                ReturnMeshJob(job);
             }
         }
     }

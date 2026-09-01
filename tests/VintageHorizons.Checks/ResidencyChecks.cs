@@ -18,6 +18,7 @@ public static class ResidencyChecks
     {
         NothingToLoad(c);
         StoredButEvicted(c);
+        FarVisitedL0SpillsFromRam(c);
         AlreadyInFlight(c);
         FailedLoadIsRemembered(c);
         NoStorageThreadFallsBackToInline(c);
@@ -60,6 +61,25 @@ public static class ResidencyChecks
         world.InstallLoaded(Key, new LodSection());
         c.True(world.TryGetForRender(Key, out _), "the loaded section is renderable");
         c.True(world.EnsureResident(Key), "and the waiting caller may now proceed");
+    }
+
+    /// <summary>
+    /// Far captured L0 is not pinned in RAM forever; HasDataSet keeps the quadtree
+    /// semantics and TryGetForRender reloads from disk when the walk returns.
+    /// </summary>
+    static void FarVisitedL0SpillsFromRam(Check c)
+    {
+        LodWorld.ViewDistanceAnchor = 512;
+        var world = new LodWorld();
+        long farKey = LodWorld.SectionKey(0, 300, 300);
+        world.InstallStoredKey(0, 300, 300, applyToParent: false);
+        world.Sections[farKey] = new LodSection();
+
+        world.EvictColdSections(0, 0, 5);
+        c.False(world.Sections.ContainsKey(farKey),
+            "far visited L0 is eligible for RAM eviction");
+        c.True(world.HasDataSet.Contains(farKey),
+            "RAM eviction does not drop HasDataSet");
     }
 
     static void AlreadyInFlight(Check c)
@@ -148,9 +168,9 @@ public static class ResidencyChecks
             "a huge L6 section must descend when visible compression is capped at L2");
         c.False(LodCoveragePolicy.MustDescendForVisualCap(level: 2, maxVisualLevel: 2),
             "the cap permits its four-block target level");
-        c.True(LodCoveragePolicy.ShouldKeepVisitedDraw(level: 1, hasDataSet: true),
-            "captured L1 stays on the visited-keep draw path");
-        c.False(LodCoveragePolicy.ShouldKeepVisitedDraw(level: 3, hasDataSet: true),
+        c.True(LodCoveragePolicy.ShouldKeepVisitedDraw(level: 1, hasDataSet: true, 400, 512),
+            "captured L1 near the trail stays on the visited-keep draw path");
+        c.False(LodCoveragePolicy.ShouldKeepVisitedDraw(level: 3, hasDataSet: true, 400, 512),
             "coarse parents still honour frustum cull");
 
         var classified = new LodWorld();

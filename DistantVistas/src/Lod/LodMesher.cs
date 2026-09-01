@@ -1,3 +1,4 @@
+using System.Buffers;
 namespace DistantVistas;
 
 /// <summary>
@@ -188,17 +189,27 @@ public static class LodMesher
         return new MeshResult
         {
             Key = job.Key,
-            Xyz = opaque.Xyz.ToArray(),
-            Rgba = opaque.Rgba.ToArray(),
-            Indices = opaque.Indices.ToArray(),
+            Xyz = RentCopy(opaque.Xyz),
+            Rgba = RentCopy(opaque.Rgba),
+            Indices = RentCopy(opaque.Indices),
             VertexCount = opaque.Xyz.Count / 3,
             IndexCount = opaque.Indices.Count,
-            WaterXyz = water.Xyz.Count > 0 ? water.Xyz.ToArray() : null,
-            WaterRgba = water.Xyz.Count > 0 ? water.Rgba.ToArray() : null,
-            WaterIndices = water.Xyz.Count > 0 ? water.Indices.ToArray() : null,
+            WaterXyz = water.Xyz.Count > 0 ? RentCopy(water.Xyz) : null,
+            WaterRgba = water.Xyz.Count > 0 ? RentCopy(water.Rgba) : null,
+            WaterIndices = water.Xyz.Count > 0 ? RentCopy(water.Indices) : null,
             WaterVertexCount = water.Xyz.Count / 3,
             WaterIndexCount = water.Indices.Count,
         };
+    }
+
+    // Thread-static lists stay grown. The result arrays come from the pool so a
+    // finished mesh is not a second copy sitting next to the list until GC.
+    static T[] RentCopy<T>(List<T> src)
+    {
+        if (src.Count == 0) return Array.Empty<T>();
+        T[] rented = ArrayPool<T>.Shared.Rent(src.Count);
+        src.CopyTo(0, rented, 0, src.Count);
+        return rented;
     }
 
     // ---- Horizontal faces: per-plane 2D greedy rectangles ----

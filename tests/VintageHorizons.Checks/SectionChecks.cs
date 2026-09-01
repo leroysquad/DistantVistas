@@ -15,6 +15,7 @@ public static class SectionChecks
         ReplaceColumnsPaths(c);
         FlagRemoval(c);
         PaletteReuse(c);
+        SnapshotSharesSectionArrays(c);
     }
 
     static void RunPacking(Check c)
@@ -195,5 +196,28 @@ public static class SectionChecks
             if (starts[i] < starts[i - 1]) return false;
         }
         return true;
+    }
+
+    static void SnapshotSharesSectionArrays(Check c)
+    {
+        var s = new LodSection();
+        s.FindOrAddPaletteEntry(blockId: 1, color: 0x112233, flags: 0);
+        s.SetColumn(0, new[] { LodSection.PackRun(0, 8, 0) });
+
+        SectionSnapshot snap = SectionSnapshot.Of(s);
+        c.True(ReferenceEquals(snap.Runs, s.Runs), "snapshot shares Runs");
+        c.True(ReferenceEquals(snap.ColumnStart, s.ColumnStart), "snapshot shares ColumnStart");
+        c.True(ReferenceEquals(snap.Captured, s.Captured), "snapshot shares Captured instead of cloning it");
+        c.Eq(s.Palette[0].Color, snap.PaletteColors[0], "palette colour is copied into the shared cache");
+
+        SectionSnapshot again = SectionSnapshot.Of(s);
+        c.True(ReferenceEquals(again.PaletteColors, snap.PaletteColors),
+            "a second snapshot reuses the cached palette arrays");
+
+        s.FindOrAddPaletteEntry(blockId: 2, color: 0x445566, flags: 0);
+        SectionSnapshot grown = SectionSnapshot.Of(s);
+        c.False(ReferenceEquals(grown.PaletteColors, snap.PaletteColors),
+            "palette cache rebuilds when an entry is added");
+        c.Eq(2, grown.PaletteColors.Length, "rebuilt cache covers the new entry");
     }
 }

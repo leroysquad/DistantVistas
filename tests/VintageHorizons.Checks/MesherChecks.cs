@@ -49,8 +49,8 @@ public static class MesherChecks
         c.Eq(6, mesh.IndexCount, "one quad is six indices");
 
         // The merged top must actually span the section, not just claim to.
-        float[] xs = Every3rd(mesh.Xyz, 0);
-        float[] zs = Every3rd(mesh.Xyz, 2);
+        float[] xs = Every3rd(mesh.Xyz, mesh.VertexCount, 0);
+        float[] zs = Every3rd(mesh.Xyz, mesh.VertexCount, 2);
         c.Eq(0f, xs.Min(), "the merged surface starts at the section's near edge");
         c.Eq((float)Gs, xs.Max(), "the merged surface reaches the section's far edge");
         c.Eq(0f, zs.Min(), "the merged surface starts at the near z edge");
@@ -99,7 +99,7 @@ public static class MesherChecks
 
         // Counted on the surface plane alone: the walls and the floor under the deep half
         // are real geometry that has nothing to do with the claim being made here.
-        c.Eq(1, QuadsOnPlane(mesh.Xyz, axis: 1, value: 10f),
+        c.Eq(1, QuadsOnPlane(mesh.Xyz, mesh.VertexCount, axis: 1, value: 10f),
             "one flat surface over a stepped base merges into a single rectangle");
 
         // The general form, over bases with no pattern to them at all. One step could be
@@ -116,7 +116,8 @@ public static class MesherChecks
                 noisy.SetColumn(col, new[] { LodSection.PackRun(0, 10, rnd.Next(1, 9)) });
             }
 
-            c.Eq(1, QuadsOnPlane(LodMesher.BuildMesh(Fixtures.Job(noisy)).Xyz, axis: 1, value: 10f),
+            MeshResult noisyMesh = LodMesher.BuildMesh(Fixtures.Job(noisy));
+            c.Eq(1, QuadsOnPlane(noisyMesh.Xyz, noisyMesh.VertexCount, axis: 1, value: 10f),
                 $"a flat surface merges whatever the depths beneath it do (seed {seed})");
         }
     }
@@ -134,9 +135,9 @@ public static class MesherChecks
         MeshResult l2 = LodMesher.BuildMesh(Fixtures.Job(flat, LodWorld.SectionKey(2, 0, 0)));
 
         c.Eq(Quads(l0.VertexCount), Quads(l2.VertexCount), "level does not change the quad count");
-        c.Eq((float)Gs, Every3rd(l0.Xyz, 0).Max(), "L0 spans one block per column");
-        c.Eq((float)(Gs * 4), Every3rd(l2.Xyz, 0).Max(), "L2 spans four blocks per column");
-        c.Eq(10f, Every3rd(l2.Xyz, 1).Max(), "L2 keeps absolute block heights");
+        c.Eq((float)Gs, Every3rd(l0.Xyz, l0.VertexCount, 0).Max(), "L0 spans one block per column");
+        c.Eq((float)(Gs * 4), Every3rd(l2.Xyz, l2.VertexCount, 0).Max(), "L2 spans four blocks per column");
+        c.Eq(10f, Every3rd(l2.Xyz, l2.VertexCount, 1).Max(), "L2 keeps absolute block heights");
     }
 
     /// <summary>
@@ -192,15 +193,15 @@ public static class MesherChecks
 
         c.Eq(0, mesh.VertexCount, "thin cover draws nothing in the opaque pass");
         c.Eq(1, Quads(mesh.WaterVertexCount), "thin cover is a single quad: a top face and no walls");
-        c.Eq(4.25f, Every3rd(mesh.WaterXyz!, 1).Max(), "the mat sits a quarter block above its own base");
+        c.Eq(4.25f, Every3rd(mesh.WaterXyz!, mesh.WaterVertexCount, 1).Max(), "the mat sits a quarter block above its own base");
 
         // A tall run left by mip merging must still sit on the ground, not at its top.
         MeshResult tall = LodMesher.BuildMesh(Fixtures.Job(Column(LodPaletteEntry.FlagThin, yTop: 40, yBottom: 4)));
-        c.Eq(4.25f, Every3rd(tall.WaterXyz!, 1).Max(), "a mip-merged tall thin run still sits on its base");
+        c.Eq(4.25f, Every3rd(tall.WaterXyz!, tall.WaterVertexCount, 1).Max(), "a mip-merged tall thin run still sits on its base");
 
         // Clamped so the mat can never rise above the run it stands for.
         MeshResult flat = LodMesher.BuildMesh(Fixtures.Job(Column(LodPaletteEntry.FlagThin, yTop: 5, yBottom: 5)));
-        c.Eq(5f, Every3rd(flat.WaterXyz!, 1).Max(), "a zero-height thin run is clamped to its own top");
+        c.Eq(5f, Every3rd(flat.WaterXyz!, flat.WaterVertexCount, 1).Max(), "a zero-height thin run is clamped to its own top");
     }
 
     /// <summary>
@@ -281,7 +282,9 @@ public static class MesherChecks
         bool subjectIsTranslucent =
             (subjectFlags & (LodPaletteEntry.FlagWater | LodPaletteEntry.FlagThin)) != 0;
 
-        return QuadsOnPlane(subjectIsTranslucent ? mesh.WaterXyz : mesh.Xyz, axis: 0, value: 11f);
+        return subjectIsTranslucent
+            ? QuadsOnPlane(mesh.WaterXyz, mesh.WaterVertexCount, axis: 0, value: 11f)
+            : QuadsOnPlane(mesh.Xyz, mesh.VertexCount, axis: 0, value: 11f);
     }
 
     /// <summary>
@@ -289,11 +292,12 @@ public static class MesherChecks
     /// axis 1 for a horizontal surface. Counting on a plane keeps a claim about one face
     /// from being answered by the quad count of the whole section.
     /// </summary>
-    static int QuadsOnPlane(float[]? xyz, int axis, float value)
+    static int QuadsOnPlane(float[]? xyz, int vertexCount, int axis, float value)
     {
-        if (xyz == null) return 0;
+        if (xyz == null || vertexCount <= 0) return 0;
         int count = 0;
-        for (int v = 0; v + 12 <= xyz.Length; v += 12)
+        int floats = vertexCount * 3;
+        for (int v = 0; v + 12 <= floats; v += 12)
         {
             bool onPlane = true;
             for (int k = 0; k < 4; k++)
@@ -332,9 +336,9 @@ public static class MesherChecks
 
     static int Quads(int vertexCount) => vertexCount / 4;
 
-    static float[] Every3rd(float[] xyz, int offset)
+    static float[] Every3rd(float[] xyz, int vertexCount, int offset)
     {
-        var result = new float[xyz.Length / 3];
+        var result = new float[vertexCount];
         for (int i = 0; i < result.Length; i++) result[i] = xyz[i * 3 + offset];
         return result;
     }

@@ -62,19 +62,38 @@ public static class CoverageChecks
             "L2 is not the visited surface");
         c.False(LodCoveragePolicy.KeepVisitedSurface(0, false),
             "no data is not visited");
-        c.True(LodCoveragePolicy.RequestVisitedKeepMesh(0, false, true, false),
-            "unmeshed visited L0 still requests far from the camera");
-        c.False(LodCoveragePolicy.RequestVisitedKeepMesh(0, true, true, false),
+        c.True(LodCoveragePolicy.RequestVisitedKeepMesh(0, false, true, false, NearTrail, TrailAnchor),
+            "unmeshed visited L0 near the trail still requests mesh");
+        c.False(LodCoveragePolicy.RequestVisitedKeepMesh(0, false, true, false, FarTrail, TrailAnchor),
+            "unmeshed visited L0 far away meshes at wanted rung instead");
+        c.False(LodCoveragePolicy.RequestVisitedKeepMesh(0, true, true, false, NearTrail, TrailAnchor),
             "already-meshed L0 does not re-request");
-        c.False(LodCoveragePolicy.RequestVisitedKeepMesh(0, false, true, true),
+        c.False(LodCoveragePolicy.RequestVisitedKeepMesh(0, false, true, true, NearTrail, TrailAnchor),
             "vanilla-owned L0 is not this helper");
-        c.False(LodCoveragePolicy.RequestVisitedKeepMesh(3, false, true, false),
+        c.False(LodCoveragePolicy.RequestVisitedKeepMesh(3, false, true, false, NearTrail, TrailAnchor),
             "coarse wanted-level tiles are not keep-surface requests");
-        c.True(LodCoveragePolicy.DescendForVisitedKeep(2, true),
-            "parent descends into visited children even when coarser than wanted");
-        c.False(LodCoveragePolicy.DescendForVisitedKeep(0, true),
+        c.True(LodCoveragePolicy.DescendForVisitedKeep(2, true, NearTrail, TrailAnchor),
+            "parent descends into visited children near the trail");
+        c.False(LodCoveragePolicy.DescendForVisitedKeep(2, true, FarTrail, TrailAnchor),
+            "parent does not descend to every L0 far from the trail");
+        c.False(LodCoveragePolicy.DescendForVisitedKeep(0, true, NearTrail, TrailAnchor),
             "L0 has no children to keep");
-        c.False(LodCoveragePolicy.DescendForVisitedKeep(3, false),
+        c.False(LodCoveragePolicy.DescendForVisitedKeep(3, false, NearTrail, TrailAnchor),
             "empty children do not force descent");
+
+        c.Eq(LodSection.SectionBlocks, LodCoveragePolicy.IdleOriginTileBlocks,
+            "idle threshold is one L0 tile");
+        c.False(LodCoveragePolicy.OriginShifted(100, 200, 100, 200),
+            "standing still is not an origin shift");
+        c.False(LodCoveragePolicy.OriginShifted(100, 200, 100, 200 + 32),
+            "a half-tile step is still idle");
+        c.True(LodCoveragePolicy.OriginShifted(100, 200, 100 + LodSection.SectionBlocks, 200),
+            "one L0 tile of XZ travel moves the window");
+        c.False(LodCoveragePolicy.OriginShifted(0, 0, 0, 0),
+            "looking around (same XZ) is not movement");
     }
+
+    const double TrailAnchor = 512;
+    const double NearTrail = 400;
+    const double FarTrail = TrailAnchor * LodMemoryBudget.DefaultKeepScale + 1000;
 }

@@ -68,6 +68,13 @@ public class LodSection
 
     public readonly List<LodPaletteEntry> Palette = new();
 
+    // Snapshot copies of the palette, rebuilt when an entry is added. The mesher
+    // only reads these, so every SectionSnapshot can share the same arrays.
+    int[]? snapPaletteColors;
+    byte[]? snapPaletteFlags;
+    byte[]? snapPaletteTintSlots;
+    int snapPaletteCount = -1;
+
     /// <summary>Columns that have been captured at least once (empty column ≠ uncaptured column).</summary>
     public readonly bool[] Captured = new bool[GridSize * GridSize];
 
@@ -133,7 +140,38 @@ public class LodSection
             Flags = flags,
             TintSlot = tintSlot,
         });
+        snapPaletteCount = -1;
         return Palette.Count - 1;
+    }
+
+    /// <summary>
+    /// Palette arrays for a mesh snapshot. Rebuilt when the palette grows; shared
+    /// across snapshots until then. The mesher never writes these.
+    /// </summary>
+    public void FillPaletteSnapshot(out int[] colors, out byte[] flags, out byte[] slots)
+    {
+        if (snapPaletteCount == Palette.Count && snapPaletteColors != null)
+        {
+            colors = snapPaletteColors;
+            flags = snapPaletteFlags!;
+            slots = snapPaletteTintSlots!;
+            return;
+        }
+
+        int n = Palette.Count;
+        colors = new int[n];
+        flags = new byte[n];
+        slots = new byte[n];
+        for (int i = 0; i < n; i++)
+        {
+            colors[i] = Palette[i].Color;
+            flags[i] = Palette[i].Flags;
+            slots[i] = Palette[i].TintSlot;
+        }
+        snapPaletteColors = colors;
+        snapPaletteFlags = flags;
+        snapPaletteTintSlots = slots;
+        snapPaletteCount = n;
     }
 
     /// <summary>
