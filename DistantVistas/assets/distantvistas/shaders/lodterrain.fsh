@@ -67,7 +67,7 @@ layout(location = 3) out vec4 outGPosition;
 
 void main()
 {
-    if (dist < 0.0 || dist > 1.0) discard;
+    if (dist > 1.0) discard;
 
     // Flat-shaded facet normal from position derivatives - no normals in the mesh.
     vec3 normal = normalize(cross(dFdx(worldPos.xyz), dFdy(worldPos.xyz)));

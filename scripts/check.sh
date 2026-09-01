@@ -52,7 +52,7 @@ run_fast() {
     # No --nologo here: dotnet run forwards it to the program rather than consuming it,
     # where it would be read as a suite filter. Program.cs ignores dash-prefixed args for
     # exactly that reason, but not handing it one is better than relying on the catch.
-    dotnet run --project "$ROOT/tests/DistantVistas.Checks" -v quiet -- "$@"
+    dotnet run --project "$ROOT/tests/VintageHorizons.Checks" -v quiet -- "$@"
 }
 
 run_smoke()  { rule "smoke - one end-to-end sandbox run";        "$ROOT/scripts/check-smoke.sh" "$@"; }

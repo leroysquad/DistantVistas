@@ -15,6 +15,7 @@ public static class StaticAssetChecks
         AlphaPacking(c);
         VersionAgreement(c);
         LiveSeasonClock(c);
+        NoCameraLockedNearDiscard(c);
     }
 
     /// <summary>
@@ -154,5 +155,26 @@ public static class StaticAssetChecks
         c.True(vsh.Contains("seasonTints"), "lodterrain.vsh has seasonTints");
         c.True(vsh.Contains("band != 1"), "lodterrain.vsh skips season on water");
         c.True(vsh.Contains("seasonTempX"), "lodterrain.vsh has seasonTempX for vanilla seasonWeight");
+    }
+
+    /// <summary>
+    /// dist is camera-relative XZ. Discarding dist &lt; 0 cuts a circle that
+    /// moves with the player through hills (sky outline, chopped vanilla ring,
+    /// square seam in front). Near LOD must stay and sit under vanilla by
+    /// sinking, not by punching sky.
+    /// </summary>
+    static void NoCameraLockedNearDiscard(Check c)
+    {
+        string fsh = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "assets", "distantvistas", "shaders", "lodterrain.fsh"));
+        string vsh = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "assets", "distantvistas", "shaders", "lodterrain.vsh"));
+
+        c.False(Regex.IsMatch(fsh, @"dist\s*<\s*0"),
+            "lodterrain.fsh does not discard the camera skip disc");
+        c.True(vsh.Contains("lookDown"),
+            "lodterrain.vsh receives look-down so the near sink can let go");
+        c.True(Regex.IsMatch(vsh, @"max\s*\(\s*0\.0\s*,\s*dist\s*\)"),
+            "lodterrain.vsh floors dist at 0 (GLSL clamp(dist, 0, dist) is undefined when dist < 0)");
     }
 }

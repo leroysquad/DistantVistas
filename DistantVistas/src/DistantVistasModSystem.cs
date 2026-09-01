@@ -542,7 +542,7 @@ public class DistantVistasModSystem : ModSystem
             color = LodPaletteRepair.Sanitize(sampled, sampled);
             if (!IsUsableAtlasTexture(block.TextureSubIdForBlockColor)
                 || (unknownTextureColor != 0 && color == unknownTextureColor)
-                || LodPaletteRepair.IsMissingTextureWhite(color))
+                || LodPaletteRepair.NeedsColor(color))
             {
                 color = sampled;
             }
@@ -552,8 +552,11 @@ public class DistantVistasModSystem : ModSystem
             color = StableColorOf(block);
         }
 
-        color = LodPaletteRepair.Sanitize(color, terrainFallbackColor);
-        byte slot = LodPaletteRepair.IsRockLikeAlbedo(color) ? (byte)LodTintRegistry.SlotNone : (byte)TintSlotOf(block);
+        color = LodPaletteRepair.KeepCapturedColor(
+            color, terrainFallbackColor, LodBlockPolicy.IsClimateUntinted(block));
+        byte slot = LodPaletteRepair.IsRockLikeAlbedo(color) || LodPaletteRepair.IsSnowOrIceAlbedo(color)
+            ? (byte)LodTintRegistry.SlotNone
+            : (byte)TintSlotOf(block);
         return (color, slot);
     }
 
@@ -593,23 +596,31 @@ public class DistantVistasModSystem : ModSystem
 
         if (!IsUsableAtlasTexture(block.TextureSubIdForBlockColor)
             || (unknownTextureColor != 0 && color == unknownTextureColor)
-            || LodPaletteRepair.IsMissingTextureWhite(color)
+            || LodPaletteRepair.NeedsColor(color)
             || color < 0)
         {
-            color = ColorFromAnyTexture(block, terrainFallbackColor);
-            color = LodPaletteRepair.Sanitize(color, terrainFallbackColor);
-            LogMissingTextureFallback(block);
+            bool keepSnow = LodBlockPolicy.IsClimateUntinted(block) && color > 0
+                && !LodPaletteRepair.IsMissingTextureSky(color);
+            if (!keepSnow)
+            {
+                color = ColorFromAnyTexture(block, terrainFallbackColor);
+                color = LodPaletteRepair.Sanitize(color, terrainFallbackColor);
+                LogMissingTextureFallback(block);
+            }
         }
 
-        color = LodPaletteRepair.Sanitize(color, terrainFallbackColor);
+        color = LodPaletteRepair.KeepCapturedColor(
+            color, terrainFallbackColor, LodBlockPolicy.IsClimateUntinted(block));
         stableColorByBlockId[block.BlockId] = color;
         return color;
     }
 
     int TintSlotOf(Block block) =>
-        tints.SlotFor(block, TryTopSoilColor(block, out _, out LodUntintedShare share)
-            ? share
-            : LodUntintedShare.None);
+        LodBlockPolicy.IsClimateUntinted(block)
+            ? LodTintRegistry.SlotNone
+            : tints.SlotFor(block, TryTopSoilColor(block, out _, out LodUntintedShare share)
+                ? share
+                : LodUntintedShare.None);
 
     /// <summary>
     /// Vanilla chunktopsoil composites brown soil with a colour-mapped grass overlay.
@@ -747,11 +758,17 @@ public class DistantVistasModSystem : ModSystem
         if (LodPaletteRepair.NeedsColor(color)
             || (unknownTextureColor != 0 && color == unknownTextureColor))
         {
-            color = ColorFromAnyTexture(block, terrainFallbackColor);
-            color = LodPaletteRepair.Sanitize(color, terrainFallbackColor);
-            LogMissingTextureFallback(block);
+            if (!(LodBlockPolicy.IsClimateUntinted(block)
+                && color != 0
+                && !LodPaletteRepair.IsMissingTextureSky(color)))
+            {
+                color = ColorFromAnyTexture(block, terrainFallbackColor);
+                color = LodPaletteRepair.Sanitize(color, terrainFallbackColor);
+                LogMissingTextureFallback(block);
+            }
         }
-        return LodPaletteRepair.Sanitize(color, terrainFallbackColor);
+        return LodPaletteRepair.KeepCapturedColor(
+            color, terrainFallbackColor, LodBlockPolicy.IsClimateUntinted(block));
     }
 
     /// <summary>
@@ -816,7 +833,8 @@ public class DistantVistasModSystem : ModSystem
             }
         }
 
-        if (found != 0 && LodPaletteRepair.IsMissingTextureWhite(found)) found = 0;
+        if (found != 0 && LodPaletteRepair.NeedsColor(found)
+            && !LodBlockPolicy.IsClimateUntinted(block)) found = 0;
         missingTextureColorFallback[block.BlockId] = found;
         missingTextureBlocks++;
         if (!loggedMissingTexture)
@@ -828,7 +846,8 @@ public class DistantVistasModSystem : ModSystem
                 block.Code);
         }
         int pick = found != 0 ? found : fallback;
-        return LodPaletteRepair.Sanitize(pick, terrainFallbackColor);
+        return LodPaletteRepair.KeepCapturedColor(
+            pick, fallback, LodBlockPolicy.IsClimateUntinted(block));
     }
 
     void ResolveTerrainFallbackColor()

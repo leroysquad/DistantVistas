@@ -162,6 +162,7 @@ public class LodTintRegistry
     public int SlotFor(Block? block, LodUntintedShare share)
     {
         if (block == null) return SlotNone;
+        if (LodBlockPolicy.IsClimateUntinted(block)) return SlotNone;
 
         string? climate = block.ClimateColorMapResolved != null ? block.ClimateColorMap : null;
         string? season = block.SeasonColorMapResolved != null ? block.SeasonColorMap : null;

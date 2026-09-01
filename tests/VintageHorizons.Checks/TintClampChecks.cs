@@ -79,6 +79,8 @@ public static class TintClampChecks
             "greyscale grass waiting for a climate map is not rock-like");
         c.False(LodPaletteRepair.IsRockLikeAlbedo(unchecked((int)0x00FCFCFC)),
             "snow/missing-tex white is a bright cap, not rock-like");
+        c.True(LodPaletteRepair.IsSnowOrIceAlbedo(unchecked((int)0x00FCFCFC)),
+            "bright snow albedo skips live tint so valley grass cannot paint ice caps");
     }
 
     static void DullOliveGrassKeepsTint(Check c)

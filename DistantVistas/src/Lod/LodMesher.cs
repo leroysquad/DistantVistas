@@ -38,11 +38,13 @@ public static class LodMesher
     static byte AlphaFor(byte paletteFlags, byte tintSlot, int color)
     {
         byte slot = tintSlot < LodTintRegistry.MaxSlots ? tintSlot : (byte)LodTintRegistry.SlotNone;
-        // Skip live tint only for stored colours that are already brown earth.
-        // Greyscale and dull-olive grass MUST keep the climate slot or far LOD
-        // stays the raw atlas grey. White caps are handled by not sampling the
-        // snow row, not by stripping tint off every mid-luma top.
-        if (LodPaletteRepair.IsRockLikeAlbedo(color)) slot = (byte)LodTintRegistry.SlotNone;
+        // Skip live tint for stored colours that are already brown earth, or
+        // snow/ice that would turn green if a grass high-tint were multiplied
+        // on. Greyscale and dull-olive grass MUST keep the climate slot or far
+        // LOD stays the raw atlas grey. Remesh-only: old caches keep albedo
+        // and only drop the slot.
+        if (LodPaletteRepair.IsRockLikeAlbedo(color) || LodPaletteRepair.IsSnowOrIceAlbedo(color))
+            slot = (byte)LodTintRegistry.SlotNone;
         if ((paletteFlags & LodPaletteEntry.FlagWater) != 0) return (byte)(WaterBase + slot);
         if ((paletteFlags & LodPaletteEntry.FlagThin) != 0) return (byte)(ThinBase + slot);
         return slot;

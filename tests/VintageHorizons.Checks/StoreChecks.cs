@@ -239,6 +239,30 @@ public static class StoreChecks
     {
         c.True(LodPaletteRepair.NeedsColor(unchecked((int)0x00FCFCFC)),
             "unknown.png near-white is treated as missing colour");
+        // Isolated without TrueScale: unknown.png can sample as Farseer slate
+        // (0.26, 0.29, 0.45) or packed 0x001D3954, which is not near-white.
+        int farseerSlate = 66 | (74 << 8) | (115 << 16);
+        c.True(LodPaletteRepair.IsMissingTextureSky(farseerSlate),
+            "Farseer slate-blue is a missing-tex stand-in, not rock");
+        c.True(LodPaletteRepair.NeedsColor(farseerSlate),
+            "slate-blue missing tex is repaired like unknown.png white");
+        c.False(LodPaletteRepair.IsMissingTextureSky(unchecked((int)0xFF336699)),
+            "a real mid-chroma earth/water sample is not treated as sky");
+        int glacier = 170 | (200 << 8) | (220 << 16);
+        c.True(LodPaletteRepair.IsIceLikeAlbedo(glacier),
+            "pale cyan glacier ice is ice, not missing tex");
+        c.False(LodPaletteRepair.IsMissingTextureSky(glacier),
+            "glacier ice is not Farseer slate");
+        c.False(LodPaletteRepair.NeedsColor(glacier),
+            "glacier ice is not repaired into grass");
+        c.True(LodPaletteRepair.IsSnowOrIceAlbedo(unchecked((int)0x00E8E8E8)),
+            "luma-232 snow is a snow/ice albedo");
+        c.Eq(unchecked((int)0x00FCFCFC),
+            LodPaletteRepair.KeepCapturedColor(unchecked((int)0x00FCFCFC), LodPaletteRepair.TerrainFallbackColor, snowOrIceBlock: true),
+            "a known snow block keeps near-white instead of becoming grass");
+        c.Eq(LodPaletteRepair.TerrainFallbackColor,
+            LodPaletteRepair.KeepCapturedColor(farseerSlate, LodPaletteRepair.TerrainFallbackColor, snowOrIceBlock: true),
+            "Farseer slate on a snow-named block is still missing tex");
         c.True(LodPaletteRepair.IsBrightCap(unchecked((int)0xFFFCFCFC)),
             "opaque near-white is a bright cap");
 

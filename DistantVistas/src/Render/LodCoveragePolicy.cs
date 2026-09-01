@@ -105,6 +105,27 @@ public static class LodCoveragePolicy
         return horizontalDistanceSq < groundReachSq;
     }
 
+    /// <summary>
+    /// Vanilla owns this TILE only if the farthest XZ corner is still inside
+    /// the skip sphere. The nearest-point test hid a whole 64x64 as soon as
+    /// the circle touched it, which punched a camera-locked chopped ring.
+    /// </summary>
+    public static bool EntireAabbInsideVanilla(
+        double minX, double maxX, double minZ, double maxZ,
+        double camX, double camZ, double cameraY,
+        int surfaceYMin, int surfaceYMax,
+        double radius, double lookDown01 = 0)
+    {
+        double midX = (minX + maxX) * 0.5;
+        double midZ = (minZ + maxZ) * 0.5;
+        double farX = camX < midX ? maxX : minX;
+        double farZ = camZ < midZ ? maxZ : minZ;
+        double dx = farX - camX;
+        double dz = farZ - camZ;
+        return InsideVanillaCoverage(
+            dx * dx + dz * dz, cameraY, surfaceYMin, surfaceYMax, radius, lookDown01);
+    }
+
     public static bool ChildCanReplaceParent(
         int level, bool hasData, int capturedColumns, bool hasMesh)
     {

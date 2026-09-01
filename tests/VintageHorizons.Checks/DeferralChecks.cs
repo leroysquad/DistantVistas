@@ -72,6 +72,8 @@ public static class DeferralChecks
         // field. Every entry in this table must name a mod that actually RENDERS.
         c.False(ids.Contains("vistasbeyond"),
             "vistasbeyond does not draw, so it is not deferred to");
+        c.False(ids.Contains("komet"),
+            "komet is a vanilla render-loop patch, not an LOD renderer");
 
         // The file name is not cosmetic: it is what we hand to LoadModConfig, and a typo
         // reads as "file missing", which silently restores the 0.2.0 behaviour.

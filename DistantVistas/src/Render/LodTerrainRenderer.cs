@@ -461,6 +461,17 @@ public class LodTerrainRenderer : IRenderer
         return nearDist >= vanillaCoverageRadius * 0.45 && nearDist <= outer;
     }
 
+    bool SectionFullyInsideVanilla(long key, LodSection section, double radius)
+    {
+        int footprint = LodWorld.KeyFootprintBlocks(key);
+        double minX = LodWorld.KeySx(key) * (double)footprint;
+        double minZ = LodWorld.KeySz(key) * (double)footprint;
+        return LodCoveragePolicy.EntireAabbInsideVanilla(
+            minX, minX + footprint, minZ, minZ + footprint,
+            camPos.X, camPos.Z, camPos.Y,
+            section.SurfaceYMin, section.SurfaceYMax, radius, lookDown01);
+    }
+
     bool ChildHasVisitedSurface(long key)
     {
         if (LodWorld.KeyLevel(key) <= 0) return false;
@@ -545,13 +556,12 @@ public class LodTerrainRenderer : IRenderer
         float overdraw = GameMath.Clamp(OverdrawStart, 0.15f, 0.95f);
         double vanillaCoverageRadius = liveViewDistance * overdraw;
         // Never 2D-own. Missing bounds or a look-down / high camera means vanilla
-        // is not drawing this column, so LOD must. That is the 0.7.21 look-down
-        // fix. It does not need a parent box as a stand-in.
+        // is not drawing this column, so LOD must. A tile the skip circle only
+        // clips is also not owned: hiding the whole 64x64 from the nearest point
+        // was the camera-locked chopped ring.
         bool insideVanilla = world.Sections.TryGetValue(key, out LodSection? coverageSection)
             && coverageSection.HasSurfaceBounds
-            && LodCoveragePolicy.InsideVanillaCoverage(
-                nearDistSq, camPos.Y, coverageSection.SurfaceYMin,
-                coverageSection.SurfaceYMax, vanillaCoverageRadius, lookDown01);
+            && SectionFullyInsideVanilla(key, coverageSection, vanillaCoverageRadius);
 
         bool landLike = ComputeLandLike(level, coverageSection, key);
         bool inLeadCone = InLeadCone(key);
@@ -1406,6 +1416,7 @@ public class LodTerrainRenderer : IRenderer
 
         prog.Uniform("viewDistance", viewDistance);
         prog.Uniform("overdrawStart", GameMath.Clamp(OverdrawStart, 0.15f, 0.95f));
+        prog.Uniform("lookDown", lookDown01);
         prog.Uniform("farViewDistance", EffectiveFarDistance);
         prog.Uniform("skyFadeStart", SkyFadeStart);
         prog.Uniform("pastViewHaze", DisableLodFog ? 0f : PastViewHaze);

@@ -20,6 +20,7 @@ uniform float overdrawStart; // DH-style: LOD sink/band start as fraction of vie
 // viewDistance comes from fogandlight.vsh include - do not redeclare
 uniform float pastViewHaze;
 uniform float disableLodFog;
+uniform float lookDown;
 
 // Which of this section's four sides border on area we have NO captured data for
 // (-X, +X, -Z, +Z; 1 = open). Client-side-only means coverage is whatever the
@@ -101,10 +102,15 @@ void main()
     worldPos = modelMatrix * vec4(vertexPositionIn, 1.0);
     worldPos = applyGlobalWarping(worldPos);
 
-    // 0 at the start of the LOD band (inside vanilla terrain), 1 at the far edge
+    // 0 at the start of the LOD band (inside vanilla terrain), 1 at the far edge.
+    // Negative dist used to discard a camera-locked disc and cut a sky circle
+    // through hills. Clamp to 0 so near fragments still draw; vanilla depth
+    // plus the sink hides them on loaded chunks.
     float distStart = viewDistance * clamp(overdrawStart, 0.15, 0.95);
     float radial = length(worldPos.xz);
     dist = (radial - distStart) / (farViewDistance - distStart - 512.0);
+    // clamp(dist, 0.0, dist) is undefined when dist < 0 (min > max).
+    dist = max(0.0, dist);
 
     // Sink LOD terrain into the ground near the transition ring so the seam with real
     // chunks reads as terrain, not a floating shelf.
@@ -118,10 +124,15 @@ void main()
     // full height and leaves a visible crease right where it finishes. This eases out
     // to zero slope at both ends, so the sink is still there but the top of the bend
     // is not something the eye can catch.
+    //
+    // Inside the ring (intoBand < 0) keep the full sink so overlap with vanilla does
+    // not z-fight the floor. Looking down zeros the sink: vanilla is not covering
+    // that ground, so the mesh has to sit at the real surface.
     const float SINK_DEPTH = 5.0;
     const float SINK_FADE_BLOCKS = 110.0;
     float intoBand = radial - distStart;
-    worldPos.y -= SINK_DEPTH * (1.0 - smoothstep(0.0, SINK_FADE_BLOCKS, intoBand));
+    float sink = SINK_DEPTH * (1.0 - smoothstep(0.0, SINK_FADE_BLOCKS, max(intoBand, 0.0)));
+    worldPos.y -= sink * (1.0 - clamp(lookDown, 0.0, 1.0));
 
     // Distance into the section from each open side, as a 0..1 ramp over the outer
     // third. Vertex positions are section-local, so this is just the local x/z.

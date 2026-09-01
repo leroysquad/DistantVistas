@@ -71,6 +71,12 @@ changes until the next start.
 
 `.vhinfo` names the mod that this one defers to.
 
+**Komet** is not in that list on purpose. It is a client Harmony patch of vanilla's
+visibility sweep, occlusion, and chunk loading. It does not draw distant terrain, so
+this mod still draws when Komet is installed. It can help frame rate at high vanilla
+view distance and close vanilla chunk-border holes while chunks stream in. It does not
+fill Distant Vistas holes at the view-distance ring, and it does not paint snow.
+
 Two server commands exist as well (`/`, not `.`). They need the controlserver
 privilege, which every singleplayer host has:
 

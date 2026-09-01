@@ -43,6 +43,13 @@ public static class OtherLodMods
     /// still had it show up as "loaded", and this mod went idle over a conflict that
     /// cannot exist - reported from the field, and the exact pairing (dramatic terrain
     /// plus long views) that both mods' users want.
+    ///
+    /// Komet is the same kind of miss: a client Harmony patch of vanilla's visibility
+    /// sweep, occlusion, and chunk tesselation queue. It claims byte-identical triangles
+    /// to vanilla and replaces no shaders. It does not draw far terrain, so listing it
+    /// here would idle Distant Vistas for no conflict. It can help FPS at high vanilla
+    /// view distance and close vanilla chunk-border holes while they stream in; it does
+    /// not fill Distant Vistas skip-disc holes or paint snow.
     /// </summary>
     public static readonly (string ModId, string? SwitchFile)[] Known =
     {

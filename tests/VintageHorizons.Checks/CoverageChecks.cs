@@ -209,6 +209,40 @@ public static class CoverageChecks
             "one L0 tile of XZ travel moves the window");
         c.False(LodCoveragePolicy.OriginShifted(0, 0, 0, 0),
             "looking around (same XZ) is not movement");
+
+        SkipDiscOwnsWholeTileOnly(c);
+    }
+
+    /// <summary>
+    /// The camera-locked chopped circle: a skip test that used the NEAREST
+    /// point of a 64x64 tile hid the whole square as soon as the circle
+    /// touched it. Vanilla does not cover the far half, so that was a moving
+    /// sky hole. Only a tile whose farthest corner is still inside the skip
+    /// sphere may be treated as vanilla-owned.
+    /// </summary>
+    static void SkipDiscOwnsWholeTileOnly(Check c)
+    {
+        const double radius = 281;
+        const double camX = 0, camZ = 0, camY = 120;
+        int yMin = 100, yMax = 130;
+
+        // Tile underfoot: every corner is well inside the skip sphere.
+        c.True(LodCoveragePolicy.EntireAabbInsideVanilla(
+                -32, 32, -32, 32, camX, camZ, camY, yMin, yMax, radius, 0),
+            "the L0 tile underfoot is fully vanilla-owned");
+
+        // Circle clips the near edge of a tile whose far edge is outside.
+        // Nearest point at 250 is inside 281; farthest at 250+64=314 is not.
+        c.True(LodCoveragePolicy.InsideVanillaCoverage(250 * 250, camY, yMin, yMax, radius, 0),
+            "the near edge of a ring tile is inside the skip sphere");
+        c.False(LodCoveragePolicy.EntireAabbInsideVanilla(
+                250, 250 + 64, -32, 32, camX, camZ, camY, yMin, yMax, radius, 0),
+            "a tile the skip circle only clips is not fully vanilla-owned");
+
+        // Looking straight down shrinks the disc to nothing, even underfoot.
+        c.False(LodCoveragePolicy.EntireAabbInsideVanilla(
+                -32, 32, -32, 32, camX, camZ, camY, yMin, yMax, radius, 1),
+            "look-down does not skip the tile under the camera");
     }
 
     const double TrailAnchor = 512;

@@ -161,6 +161,16 @@ public static class MesherChecks
             "a slot at the limit falls back to no tint");
         c.Eq((byte)LodTintRegistry.SlotNone,
             AlphaOf(Column(flags: 0, tintSlot: 255)), "a wildly out-of-range slot falls back to no tint");
+
+        c.Eq((byte)LodTintRegistry.SlotNone,
+            AlphaOf(Column(flags: 0, tintSlot: 5, color: unchecked((int)0x00E8E8E8))),
+            "bright snow albedo drops a stored grass slot on remesh");
+        int glacier = 170 | (200 << 8) | (220 << 16);
+        c.Eq((byte)LodTintRegistry.SlotNone,
+            AlphaOf(Column(flags: 0, tintSlot: 5, color: glacier)),
+            "glacier-ice albedo drops a stored grass slot on remesh");
+        c.Eq((byte)5, AlphaOf(Column(flags: 0, tintSlot: 5)),
+            "ordinary grey-green tops keep the climate slot");
     }
 
     static void WaterIsASeparatePass(Check c)
@@ -317,10 +327,10 @@ public static class MesherChecks
     }
 
     /// <summary>A section with exactly one captured column.</summary>
-    static LodSection Column(byte flags = 0, byte tintSlot = 0, int yTop = 10, int yBottom = 0)
+    static LodSection Column(byte flags = 0, byte tintSlot = 0, int yTop = 10, int yBottom = 0, int color = 0x00A0B0C0)
     {
         var s = new LodSection();
-        s.FindOrAddPaletteEntry(blockId: 1, color: 0x00A0B0C0, flags: flags, tintSlot: tintSlot);
+        s.FindOrAddPaletteEntry(blockId: 1, color: color, flags: flags, tintSlot: tintSlot);
         s.SetColumn(LodSection.ColumnIndex(5, 5), new[] { LodSection.PackRun(0, yTop, yBottom) });
         return s;
     }
