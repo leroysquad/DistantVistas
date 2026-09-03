@@ -37,6 +37,20 @@ public static class CoverageChecks
             "looking up is not look-down");
         c.True(LodCoveragePolicy.LookDownAmount(-1) >= 0.99f,
             "straight down is full look-down");
+        c.Eq(0.92f, LodCoveragePolicy.LookDownCoarseFill,
+            "coarse fill waits until ~67 deg, not a skyline pan");
+        c.Eq(0f, LodCoveragePolicy.LookDownSteepAmount(0.55),
+            "0.55 still has skyline: skip-disc and sink do not steepen yet");
+        c.Eq(0f, LodCoveragePolicy.LookDownSteepAmount(0.82),
+            "0.82 still has sky in frame: do not steepen yet");
+        c.Eq(0f, LodCoveragePolicy.LookDownSteepAmount(LodCoveragePolicy.LookDownCoarseFill),
+            "at the coarse-fill pitch steep amount is still zero");
+        c.True(LodCoveragePolicy.LookDownSteepAmount(1) >= 0.99f,
+            "nadir is full steep look-down");
+        c.True(LodCoveragePolicy.HorizonLeadCone(true, 0.55f),
+            "0.55 look-down still has skyline; keep the shelf ban");
+        c.True(LodCoveragePolicy.HorizonLeadCone(true, 0.82f),
+            "0.82 look-down still has skyline; keep the shelf ban");
 
         const double radius = 281;
         // At the surface, horizontal 0 is inside vanilla.
@@ -74,8 +88,8 @@ public static class CoverageChecks
             "unmeshed visited L0 far away meshes at wanted rung instead");
         c.False(LodCoveragePolicy.RequestVisitedKeepMesh(0, true, true, false, NearTrail, TrailAnchor),
             "already-meshed L0 does not re-request");
-        c.False(LodCoveragePolicy.RequestVisitedKeepMesh(0, false, true, true, NearTrail, TrailAnchor),
-            "vanilla-owned L0 is not this helper");
+        c.True(LodCoveragePolicy.RequestVisitedKeepMesh(0, false, true, true, NearTrail, TrailAnchor),
+            "vanilla-owned L0 still requests a keep mesh so walk-away is not sky");
         c.False(LodCoveragePolicy.RequestVisitedKeepMesh(3, false, true, false, NearTrail, TrailAnchor),
             "coarse wanted-level tiles are not keep-surface requests");
         c.True(LodCoveragePolicy.DescendForVisitedKeep(2, true, NearTrail, TrailAnchor),
@@ -441,6 +455,10 @@ public static class CoverageChecks
             "loaded chunks outside the 3D sphere stay LOD (high camera / shrink VD)");
         c.True(LodCoveragePolicy.VanillaOwnsFootprint(true, true),
             "a loaded chunk whose whole tile sits inside view distance goes to vanilla");
+        c.False(LodCoveragePolicy.VanillaOwnsFootprint(true, true, false),
+            "map-chunks without world chunks are not vanilla (not-yet-drawn sky)");
+        c.True(LodCoveragePolicy.VanillaOwnsFootprint(true, true, true),
+            "map-chunks plus world chunks inside the 3D sphere go to vanilla");
 
         var have = new HashSet<long>();
         static long K(int cx, int cz) => ((long)cz << 32) | (uint)cx;
