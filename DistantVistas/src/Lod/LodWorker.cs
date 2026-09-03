@@ -41,6 +41,12 @@ public class CaptureJob
     public int Cx, Cz;
     public required IWorldChunk?[] Chunks; // indexed by chunkY
     public required ushort[] RainMap;      // copied on the main thread
+
+    /// <summary>
+    /// Peek / worldgen stopped at Terrain: trees and ponds are not in this column.
+    /// Apply marks the quadrant provisional so a later real load recaptures it.
+    /// </summary>
+    public bool Provisional;
 }
 
 /// <summary>Runs carry raw BLOCK ids (not palette ids); the main thread remaps on apply.</summary>
@@ -49,6 +55,7 @@ public class CaptureResult
     public long SectionKey;
     public int Cx, Cz;
     public required ulong[]?[] RunsByColumn; // GridSize² entries, only this chunk column's 16×16 filled
+    public bool Provisional;
 }
 
 public class MeshJob
@@ -341,6 +348,7 @@ public class LodWorker : IDisposable
             Cx = job.Cx,
             Cz = job.Cz,
             RunsByColumn = batch,
+            Provisional = job.Provisional,
         };
     }
 

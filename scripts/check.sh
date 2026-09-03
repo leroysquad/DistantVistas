@@ -47,7 +47,7 @@ run_fast() {
     # it, and the bench harness in particular is easy to break without noticing because
     # no normal workflow touches it.
     build "$ROOT/DistantVistas" "mod" || return 1
-    build "$ROOT/bench/DistantVistasBench" "bench" || return 1
+    build "$ROOT/bench/VintageHorizonsBench" "bench" || return 1
 
     # No --nologo here: dotnet run forwards it to the program rather than consuming it,
     # where it would be read as a suite filter. Program.cs ignores dash-prefixed args for

@@ -1,5 +1,6 @@
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
 using Vintagestory.Client.NoObf;
 
@@ -78,6 +79,14 @@ public class LodTerrainRenderer : IRenderer
     readonly Dictionary<long, MeshRef> sectionMeshes = new();
     readonly Dictionary<long, MeshRef> waterMeshes = new();
     readonly HashSet<long> meshJobInFlight = new();
+
+    /// <summary>
+    /// Sections whose last mesh job produced no geometry at all. Without this
+    /// they count as unmeshed, the walk asks again next frame, and the worker
+    /// rebuilds the same empty result forever. They are "meshed" for the walk
+    /// (nothing to draw is not a gap) and cleared when a new result arrives.
+    /// </summary>
+    readonly HashSet<long> emptyMeshKeys = new();
     readonly Dictionary<long, long> lastSelectedFrame = new();
     readonly Dictionary<long, long> meshBornFrame = new();
     readonly List<long> evictBatch = new();
@@ -122,9 +131,19 @@ public class LodTerrainRenderer : IRenderer
     // shader clock (seasonRel / seasonTints) uploaded every draw, same idea as
     // rgbaAmbientIn for night.
     const long SeasonalRefreshIntervalMs = 30_000;
+    /// <summary>
+    /// Climate tints are one table for the whole horizon. Resampling them at
+    /// the camera every 30s painted every far forest with whatever biome you
+    /// just walked into, so autumn snapped back to green. Only resample when
+    /// the keep origin has moved this far.
+    /// </summary>
+    const int ClimateResampleBlocks = 384;
     float snowLineY = 99999;
     float pendingSnowLineY = 99999;
     long lastSeasonRefreshMs;
+    int lastClimateSampleX;
+    int lastClimateSampleZ;
+    float lastSeasonTempX = 128f;
     bool seasonalStateInitialized;
     bool seasonalRefreshActive;
     int seasonalRefreshSlot;
@@ -148,6 +167,86 @@ public class LodTerrainRenderer : IRenderer
     /// <summary>Current far edge in blocks: the farthest loaded LOD data, independent of the vanilla view distance.</summary>
     public float EffectiveFarDistance { get; private set; } = 3000;
     float liveViewDistance = 512;
+    readonly HashSet<long> loadedMapChunks = new();
+
+    /// <summary>Vanilla view distance this frame, after the server's last-approved cap.</summary>
+    public float LiveViewDistance => liveViewDistance;
+
+    /// <summary>
+    /// Centre distance of the farthest GPU mesh this frame. Unlike
+    /// EffectiveFarDistance it is not padded to a ZFar floor, so a tile short
+    /// of it really does have land drawn past it.
+    /// </summary>
+    double farthestMeshedDistance;
+
+    /// <summary>
+    /// Far edge of the captured extent (farthest L2 footprint in HasDataSet),
+    /// rescanned every EvictScanInterval frames. Explored land that is not
+    /// on the GPU right now still counts as "land past this tile": evicting
+    /// interior meshes must pull neither the seal nor the shader far discard
+    /// inward.
+    /// </summary>
+    double farthestCapturedDistance;
+    long lastCapturedScanFrame = long.MinValue / 2;
+
+    double FarthestKnownDistance => Math.Max(farthestMeshedDistance, farthestCapturedDistance);
+
+    /// <summary>
+    /// Keys the selection walk asked for last frame. PruneRenderDirty runs
+    /// before the walk, so without this a lead-cone request finer than the
+    /// wanted rung was dropped every frame it failed to win a schedule slot.
+    /// </summary>
+    readonly HashSet<long> walkRequested = new();
+
+    /// <summary>Keys submitted to drawList this frame. Never evicted while drawn.</summary>
+    readonly HashSet<long> drawnThisFrame = new();
+
+    /// <summary>
+    /// Captured footprints nothing has drawn yet this frame, as the walk
+    /// unwinds. A node appends its uncovered children; the first ancestor up
+    /// the recursion with a resident mesh paints them clipped to their own
+    /// rectangle (gapDraws) and truncates back to where it started. Whatever
+    /// is still here after the root returns is a real hole: no mesh at any
+    /// rung. Scoped per node by start index, like tooFineDeferred.
+    /// </summary>
+    readonly List<long> gaps = new();
+
+    /// <summary>A resident mesh drawn only inside one uncovered child footprint.</summary>
+    readonly struct GapDraw
+    {
+        public readonly long Key;
+        public readonly float MinX, MinZ, MaxX, MaxZ; // section-local blocks
+        public GapDraw(long key, float minX, float minZ, float maxX, float maxZ)
+        {
+            Key = key; MinX = minX; MinZ = minZ; MaxX = maxX; MaxZ = maxZ;
+        }
+    }
+
+    readonly List<GapDraw> gapDraws = new();
+    static readonly float[] NoClip = { -1e9f, -1e9f, 1e9f, 1e9f };
+
+    /// <summary>Clipped parent draws this frame (coverage where a finer mesh is missing).</summary>
+    public int LastGapDrawCount { get; private set; }
+
+    /// <summary>Captured footprints left as sky this frame: no mesh at any rung above them.</summary>
+    public int LastUnfilledGaps { get; private set; }
+
+    readonly long[] unfilledSample = new long[4];
+    int unfilledSampleCount;
+    long lastUnfilledLogFrame = long.MinValue / 2;
+    const int UnfilledLogIntervalFrames = 600;
+    Action<string>? holeLog;
+
+    /// <summary>Where the throttled unfilled-gap report goes (the mod logger).</summary>
+    public void SetHoleLogger(Action<string> log) => holeLog = log;
+
+    /// <summary>
+    /// Children a parent's descent skipped as too fine for the camera window.
+    /// The skip assumed the parent would draw instead; when a sibling draws,
+    /// the parent does not, and every entry here is a hole unless submitted.
+    /// Scoped per parent by start index across the recursive walk.
+    /// </summary>
+    readonly List<long> tooFineDeferred = new();
 
     public int MeshCount => sectionMeshes.Count;
     public int LastDrawCount { get; private set; }
@@ -311,10 +410,41 @@ public class LodTerrainRenderer : IRenderer
         }
 
         float far = (float)Math.Sqrt(maxDistSq) + LodSection.SectionBlocks * 1.5f;
+        farthestMeshedDistance = maxDistSq > 0 ? far : 0;
+
+        if (frameCounter - lastCapturedScanFrame >= EvictScanInterval)
+        {
+            lastCapturedScanFrame = frameCounter;
+            farthestCapturedDistance = ScanFarthestCapturedDistance();
+        }
+        // The discard / sky fade at dist == 1 sits on the captured rim, never
+        // on visited interior whose far meshes happen to be evicted.
+        far = Math.Max(far, (float)farthestCapturedDistance);
+
         if (FarViewDistanceCap > 0)
             EffectiveFarDistance = Math.Min(far, FarViewDistanceCap);
         else
             EffectiveFarDistance = Math.Max(far, vanillaViewDistance + 16384);
+    }
+
+    /// <summary>
+    /// Farthest captured L2 (256-block) footprint from the camera, padded so
+    /// its far corner is inside. L2 keeps the scan at a few thousand keys.
+    /// </summary>
+    double ScanFarthestCapturedDistance()
+    {
+        const int scanLevel = 2;
+        int footprint = LodSection.SectionBlocks << scanLevel;
+        double maxDistSq = 0;
+        foreach (long key in world.HasDataSet)
+        {
+            if (LodWorld.KeyLevel(key) != scanLevel) continue;
+            double dx = LodWorld.KeySx(key) * (double)footprint + footprint / 2.0 - camPos.X;
+            double dz = LodWorld.KeySz(key) * (double)footprint + footprint / 2.0 - camPos.Z;
+            double distSq = dx * dx + dz * dz;
+            if (distSq > maxDistSq) maxDistSq = distSq;
+        }
+        return maxDistSq > 0 ? Math.Sqrt(maxDistSq) + footprint * 0.75 : 0;
     }
 
     // ---- Detail selection (quadtree walk) ----
@@ -345,12 +475,35 @@ public class LodTerrainRenderer : IRenderer
         long childKey, int parentWanted, bool parentDrawFullDetail, bool parentHasMesh,
         bool parentLandLike, bool inLeadCone)
     {
+        int childLevel = LodWorld.KeyLevel(childKey);
+        bool childHasData = world.HasDataSet.Contains(childKey);
+        // The child's own cone test: a parent that straddles the cone edge has
+        // children on both sides, and only the ones in front are intervening.
+        bool childFarther = childHasData && childLevel <= LodCoveragePolicy.VisitedKeepMaxLevel
+            && IsFartherLoaded(childKey);
+        bool childInCone = inLeadCone || (childFarther && InLeadCone(childKey));
         return LodCoveragePolicy.ShouldVisitChildForDraw(
-            LodWorld.KeyLevel(childKey), parentWanted, parentDrawFullDetail, parentHasMesh,
-            parentLandLike, inLeadCone, lookDown01);
+            childLevel, parentWanted, parentDrawFullDetail, parentHasMesh,
+            parentLandLike, childInCone, lookDown01, childHasData, childFarther);
     }
 
-    bool HasAnyMesh(long key) => sectionMeshes.ContainsKey(key) || waterMeshes.ContainsKey(key);
+    bool IsFartherLoaded(long key) =>
+        LodCoveragePolicy.IsFartherLoaded(
+            Math.Sqrt(NearestDistanceSqTo(key)), LodWorld.KeyFootprintBlocks(key), FarthestKnownDistance)
+        && CapturedBeyond(key);
+
+    void Submit(long key)
+    {
+        drawList.Add(key);
+        drawnThisFrame.Add(key);
+        lastSelectedFrame[key] = frameCounter;
+    }
+
+    bool HasAnyMesh(long key) =>
+        sectionMeshes.ContainsKey(key) || waterMeshes.ContainsKey(key) || emptyMeshKeys.Contains(key);
+
+    bool HasDrawableMesh(long key) =>
+        sectionMeshes.ContainsKey(key) || waterMeshes.ContainsKey(key);
 
     bool InLeadCone(long key)
     {
@@ -421,6 +574,14 @@ public class LodTerrainRenderer : IRenderer
 
         if (LodWorld.KeyLevel(target) < 2) return;
         if (HasAnyMesh(target) || meshJobInFlight.Contains(target)) return;
+        // Already queued: keep it alive past the prune, but do not charge the
+        // budget again. Re-charging for the same pending target every frame
+        // starved every other coarse target in the walk order behind it.
+        if (world.RenderDirty.Contains(target))
+        {
+            walkRequested.Add(target);
+            return;
+        }
 
         if (world.Sections.TryGetValue(target, out LodSection? section))
         {
@@ -439,12 +600,23 @@ public class LodTerrainRenderer : IRenderer
 
         // Parent section missing: mip it from children. ProcessPropagation creates
         // the parent via LodMip.DownsampleIntoParent; no invented cake plates.
+        if (QueueMipFromChildren(target)) coarseParentRequestsThisFrame++;
+    }
+
+    /// <summary>
+    /// Ask the mip pipeline to build <paramref name="parent"/> from whichever of
+    /// its children hold data. Idempotent: MipDirty is a set, and propagation
+    /// is budgeted per tick on the game thread. Returns whether anything was queued.
+    /// </summary>
+    bool QueueMipFromChildren(long parent)
+    {
+        if (LodWorld.KeyLevel(parent) < 1) return false;
         bool queued = false;
         for (int qz = 0; qz < 2; qz++)
         {
             for (int qx = 0; qx < 2; qx++)
             {
-                long ck = LodWorld.ChildKey(target, qx, qz);
+                long ck = LodWorld.ChildKey(parent, qx, qz);
                 if (world.HasDataSet.Contains(ck))
                 {
                     world.MipDirty.Add(ck);
@@ -452,7 +624,7 @@ public class LodTerrainRenderer : IRenderer
                 }
             }
         }
-        if (queued) coarseParentRequestsThisFrame++;
+        return queued;
     }
 
     bool InHandoffRing(double nearDist, double vanillaCoverageRadius)
@@ -470,6 +642,69 @@ public class LodTerrainRenderer : IRenderer
             minX, minX + footprint, minZ, minZ + footprint,
             camPos.X, camPos.Z, camPos.Y,
             section.SurfaceYMin, section.SurfaceYMax, radius, lookDown01);
+    }
+
+    static long MapChunkKey(int cx, int cz) => ((long)cz << 32) | (uint)cx;
+
+    void RefreshLoadedMapChunks()
+    {
+        loadedMapChunks.Clear();
+        int cs = GlobalConstants.ChunkSize;
+        if (cs <= 0) return;
+        int cx0 = (int)Math.Floor(camPos.X / cs);
+        int cz0 = (int)Math.Floor(camPos.Z / cs);
+        int rad = Math.Max(4, (int)Math.Ceiling(liveViewDistance / cs) + 2);
+        var ba = capi.World.BlockAccessor;
+        for (int dz = -rad; dz <= rad; dz++)
+        {
+            for (int dx = -rad; dx <= rad; dx++)
+            {
+                int cx = cx0 + dx;
+                int cz = cz0 + dz;
+                if (ba.GetMapChunk(cx, cz) != null)
+                    loadedMapChunks.Add(MapChunkKey(cx, cz));
+            }
+        }
+    }
+
+    bool AllMapChunksLoadedForKey(long key)
+    {
+        int footprint = LodWorld.KeyFootprintBlocks(key);
+        int minX = LodWorld.KeySx(key) * footprint;
+        int minZ = LodWorld.KeySz(key) * footprint;
+        return LodCoveragePolicy.AllMapChunksLoaded(
+            minX, minX + footprint, minZ, minZ + footprint,
+            GlobalConstants.ChunkSize,
+            (cx, cz) => loadedMapChunks.Contains(MapChunkKey(cx, cz)));
+    }
+
+    bool FarthestXzInsideViewDistance(long key, double radius)
+    {
+        int footprint = LodWorld.KeyFootprintBlocks(key);
+        double minX = LodWorld.KeySx(key) * (double)footprint;
+        double minZ = LodWorld.KeySz(key) * (double)footprint;
+        double maxX = minX + footprint;
+        double maxZ = minZ + footprint;
+        double midX = (minX + maxX) * 0.5;
+        double midZ = (minZ + maxZ) * 0.5;
+        double farX = camPos.X < midX ? maxX : minX;
+        double farZ = camPos.Z < midZ ? maxZ : minZ;
+        double dx = farX - camPos.X;
+        double dz = farZ - camPos.Z;
+        return dx * dx + dz * dz < radius * radius;
+    }
+
+    bool VanillaOwnsKey(long key, LodSection? bounds, double hideRadius)
+    {
+        // Farthest corner still inside view distance: vanilla should be drawing
+        // the whole tile. Nearest-point hide chopped a moving ring (0.7.38).
+        bool inside3d = bounds != null && bounds.HasSurfaceBounds
+            ? SectionFullyInsideVanilla(key, bounds, hideRadius)
+            : FarthestXzInsideViewDistance(key, hideRadius);
+        // Every map-chunk covering this tile must be present. One of four
+        // left plates on the loaded trees; zero of four is grow-VD / walk-away.
+        bool allLoaded = AllMapChunksLoadedForKey(key);
+        return LodCoveragePolicy.VanillaOwnsFootprint(inside3d, allLoaded);
     }
 
     bool ChildHasVisitedSurface(long key)
@@ -555,13 +790,10 @@ public class LodTerrainRenderer : IRenderer
         // without descending would draw zero LOD meshes past the bubble.
         float overdraw = GameMath.Clamp(OverdrawStart, 0.15f, 0.95f);
         double vanillaCoverageRadius = liveViewDistance * overdraw;
-        // Never 2D-own. Missing bounds or a look-down / high camera means vanilla
-        // is not drawing this column, so LOD must. A tile the skip circle only
-        // clips is also not owned: hiding the whole 64x64 from the nearest point
-        // was the camera-locked chopped ring.
-        bool insideVanilla = world.Sections.TryGetValue(key, out LodSection? coverageSection)
-            && coverageSection.HasSurfaceBounds
-            && SectionFullyInsideVanilla(key, coverageSection, vanillaCoverageRadius);
+        // Whole AABB inside view distance, and every map-chunk covering this
+        // tile is loaded. A circle alone punches sky when you raise VD.
+        world.Sections.TryGetValue(key, out LodSection? coverageSection);
+        bool insideVanilla = VanillaOwnsKey(key, coverageSection, liveViewDistance);
 
         bool landLike = ComputeLandLike(level, coverageSection, key);
         bool inLeadCone = InLeadCone(key);
@@ -588,6 +820,19 @@ public class LodTerrainRenderer : IRenderer
         // The keep-circle is larger and only holds GPU meshes.
         bool drawFullDetail = LodCoveragePolicy.IsDrawFullDetail(nearDist, liveViewDistance) || handoff;
 
+        // Intervening span: visited L0/L1 in front of the camera with land
+        // already drawn past it. Coarsening is fine when a parent mesh takes
+        // over the whole footprint; this flag is what stops a per-child skip
+        // or a pruned mesh job from turning one tile of that span into sky.
+        bool hasData = world.HasDataSet.Contains(key);
+        bool fartherLoaded = LodCoveragePolicy.IsFartherLoaded(
+                nearDist, LodWorld.KeyFootprintBlocks(key), FarthestKnownDistance)
+            && (!hasData || !inLeadCone || CapturedBeyond(key));
+        bool mustCover = !insideVanilla
+            && LodCoveragePolicy.MustCoverIntervening(level, hasData, inLeadCone, fartherLoaded);
+        // Gaps appended by this node's subtree start here; see gaps.
+        int gapStart = gaps.Count;
+
         // Mesh the surface we will actually draw. L0/L1 at the 1.0x ring and
         // handoff; wanted-level further out, including mip parents of visited L0.
         // Do not request a parent just so we can paint a giant square over a hole.
@@ -598,8 +843,8 @@ public class LodTerrainRenderer : IRenderer
             else if (handoff && level <= 1)
                 RequestMesh(key);
             else if (LodCoveragePolicy.RequestVisitedKeepMesh(
-                         level, hasMesh, world.HasDataSet.Contains(key), insideVanilla,
-                         nearDist, liveViewDistance))
+                         level, hasMesh, hasData, insideVanilla,
+                         nearDist, liveViewDistance, inLeadCone, fartherLoaded))
                 RequestMesh(key);
             else if (!insideVanilla && (level == wanted || level == wanted + 1))
                 RequestMesh(key);
@@ -632,12 +877,14 @@ public class LodTerrainRenderer : IRenderer
                     if (world.HasDataSet.Contains(ck)) anyChildDrew |= CollectDrawNodes(ck);
                 }
             }
+            // Whatever the children left uncovered is loaded chunks, not sky.
+            DiscardGaps(gapStart);
             return anyChildDrew;
         }
 
         bool forcedDetail = LodCoveragePolicy.MustDescendForVisualCap(level, LodWorld.MaxVisualLevel);
         bool keepVisited = LodCoveragePolicy.DescendForVisitedKeep(
-            level, ChildHasVisitedSurface(key), nearDist, liveViewDistance);
+            level, ChildHasVisitedSurface(key), nearDist, liveViewDistance, inLeadCone, fartherLoaded);
 
         if (!insideVanilla && !drawFullDetail && wanted >= 2)
             RequestCoarseFill(key, wanted);
@@ -655,36 +902,81 @@ public class LodTerrainRenderer : IRenderer
         bool drawableCoarse = hasMesh && LodCoveragePolicy.MayDrawCoarseParent(
             level, insideVanilla, landLike, inLeadCone, lookDown01);
 
-        if (!stopAtThisRung && level > 0 && (forcedDetail || (level > wanted && AllChildrenCovered(key)) || !drawableCoarse
+        // L1 used to stop here and hide the L0 the player already walked. That
+        // is the "I had data, it vanished when I backed up" hole.
+        bool walkCapturedL0 = level == 1;
+
+        if ((walkCapturedL0 || !stopAtThisRung) && level > 0 && (walkCapturedL0 || forcedDetail || (level > wanted && AllChildrenCovered(key)) || !drawableCoarse
             || (holdVisitedL0 && wanted == 0) || keepVisited || drawFullDetail))
         {
+            int deferredStart = tooFineDeferred.Count;
             bool anyChildDrew = false;
             for (int qz = 0; qz < 2; qz++)
             {
                 for (int qx = 0; qx < 2; qx++)
                 {
                     long ck = LodWorld.ChildKey(key, qx, qz);
-                    if (!ShouldVisitChildForDraw(ck, wanted, drawFullDetail, hasMesh, landLike, inLeadCone)) continue;
-                    if (world.HasDataSet.Contains(ck)) anyChildDrew |= CollectDrawNodes(ck);
+                    if (!world.HasDataSet.Contains(ck)) continue;
+                    if (walkCapturedL0 || ShouldVisitChildForDraw(ck, wanted, drawFullDetail, hasMesh, landLike, inLeadCone))
+                    {
+                        // A child that returns false has already listed its own
+                        // uncovered footprints (or parked itself in tooFineDeferred).
+                        if (CollectDrawNodes(ck)) anyChildDrew = true;
+                    }
+                    else
+                    {
+                        // Not walked at all this frame: nothing under it can draw.
+                        AddGap(ck);
+                    }
                 }
             }
+
             // 0.7.20 rule: if any child drew, or MaxVisualLevel wants L0, do not
-            // substitute this parent as a box. Missing children stay empty until
-            // they mesh. Drawing the parent was the square-plate regression.
-            // Stamp the parent when we refuse it (L2+ in the lead cone) so
-            // keep-circle eviction does not dump a mesh we still need as a gate.
-            if (anyChildDrew || !drawableCoarse || forcedDetail || holdVisitedL0)
+            // substitute this parent as a box over the whole footprint. But the
+            // footprints its subtree left uncovered are not "empty until they
+            // mesh" any more: this mip fills exactly those, clipped, and the
+            // siblings that drew stay as they are. A parent without a mesh
+            // leaves them for its own ancestor and asks for a mesh of its own.
+            // A footprint that reaches into the vanilla bubble never paints
+            // whole either: its children that returned false there did so for
+            // loaded chunks, and painting over them put L1 mip pillars beside
+            // the player in freshly captured land.
+            bool touchesVanilla = nearDist < vanillaCoverageRadius;
+            if (!LodCoveragePolicy.MayPaintWholeAfterDescent(
+                    anyChildDrew, drawableCoarse, forcedDetail, holdVisitedL0, touchesVanilla))
             {
                 if (hasMesh) lastSelectedFrame[key] = frameCounter;
+                // This parent is not drawing whole. Children that stepped aside
+                // for it (SkipDrawTooFine) are now uncovered land: submit them.
+                // Per-child wanted differs with relief, so a flat L0 beside a
+                // hilly sibling used to vanish right here as a sky rectangle.
+                anyChildDrew |= FlushDeferredTooFine(deferredStart);
+                if (gaps.Count > gapStart)
+                {
+                    if (LodCoveragePolicy.MayFillGapWithParent(level, hasMesh, insideVanilla,
+                            gapTouchesVanilla: false))
+                    {
+                        anyChildDrew |= FillGaps(key, gapStart, liveViewDistance);
+                    }
+                    else if (!hasMesh)
+                    {
+                        // Nothing here to fill with: hand the gaps up, as one
+                        // footprint when the whole subtree is missing, and get a
+                        // mesh of our own so next frames can fill closer in.
+                        CoalesceGaps(key, gapStart);
+                        EnsureCoverMesh(key);
+                    }
+                }
                 return anyChildDrew;
             }
+            // Parent draws itself below; the deferred children stay hidden and
+            // the gaps are inside the footprint it is about to paint whole.
+            DiscardDeferredTooFine(deferredStart);
+            DiscardGaps(gapStart);
         }
 
         if (hasMesh)
         {
-            if (level == 0 && world.IncompleteL0Keys.Contains(key))
-                return false;
-
             // Keep the GPU mesh while vanilla owns this column so walking away
             // does not remesh from scratch. Do not draw it on top of chunks.
             if (insideVanilla && level == 0)
@@ -693,9 +985,32 @@ public class LodTerrainRenderer : IRenderer
                 return false;
             }
 
+            if (level == 0 && world.IncompleteL0Keys.Contains(key))
+            {
+                // Its captured quadrants are the finest picture of them we hold;
+                // the parent mip has no more there. Draw them. The quadrants that
+                // were never captured are not a gap either: no rung has them.
+                if (LodCoveragePolicy.DrawIncompleteL0(hasMesh, insideVanilla))
+                {
+                    Submit(key);
+                    return true;
+                }
+                lastSelectedFrame[key] = frameCounter;
+                return false;
+            }
+
             if (!LodCoveragePolicy.MayDrawCoarseParent(level, insideVanilla, landLike, inLeadCone, lookDown01))
             {
+                // Refused as a whole plate (horizon rules) without having walked
+                // its children. Far away, a meshed L1 is still land. Next to the
+                // player it is the brown cubes over vanilla — do not Submit.
                 lastSelectedFrame[key] = frameCounter;
+                if (!insideVanilla && HasDrawableMesh(key) && nearDist >= liveViewDistance)
+                {
+                    Submit(key);
+                    return true;
+                }
+                if (!insideVanilla) AddGap(key);
                 return false;
             }
 
@@ -711,8 +1026,14 @@ public class LodTerrainRenderer : IRenderer
                 world.Sections.TryGetValue(parentKey, out LodSection? parentSec);
                 bool parentLandLike = ComputeLandLike(LodWorld.KeyLevel(parentKey), parentSec, parentKey);
                 if (LodCoveragePolicy.SkipDrawTooFine(
-                        level, wanted, drawFullDetail, parentHasMesh, parentLandLike, inLeadCone, lookDown01))
+                        level, wanted, drawFullDetail, parentHasMesh, parentLandLike, inLeadCone, lookDown01,
+                        mustCover))
+                {
+                    // Only valid if the parent really draws. The parent decides
+                    // after all its children, so park this one until then.
+                    tooFineDeferred.Add(key);
                     return false;
+                }
                 if (level < LodWorld.MaxLevel)
                     RequestCoarseFill(key, wanted);
             }
@@ -731,9 +1052,315 @@ public class LodTerrainRenderer : IRenderer
                 }
             }
 
-            drawList.Add(key);
-            lastSelectedFrame[key] = frameCounter;
+            Submit(key);
             return true;
+        }
+
+        // No mesh here (L0 that is unmeshed, evicted, still loading or being
+        // fetched). Not sky: the nearest ancestor with a mesh paints this footprint.
+        if (!insideVanilla && hasData) AddGap(key);
+        return false;
+    }
+
+    /// <summary>
+    /// Record a captured footprint that nothing has drawn this frame. The first
+    /// ancestor up the recursion that holds a mesh paints it (FillGaps).
+    /// </summary>
+    void AddGap(long key) => gaps.Add(key);
+
+    void DiscardGaps(int start)
+    {
+        if (gaps.Count > start) gaps.RemoveRange(start, gaps.Count - start);
+    }
+
+    /// <summary>
+    /// When every child of <paramref name="key"/> is a gap, replace the four
+    /// with the parent footprint so the ancestor that fills them spends one
+    /// clipped draw instead of four (or sixteen, a level further up).
+    /// </summary>
+    void CoalesceGaps(long key, int start)
+    {
+        if (gaps.Count - start != 4) return;
+        for (int i = start; i < gaps.Count; i++)
+        {
+            if (LodWorld.ParentKey(gaps[i]) != key) return;
+        }
+        gaps.RemoveRange(start, 4);
+        gaps.Add(key);
+    }
+
+    /// <summary>
+    /// Paint <paramref name="key"/>'s mesh over every gap its subtree left since
+    /// <paramref name="start"/>, each clipped to that gap's own rectangle in this
+    /// section's local blocks. Gaps that reach into the vanilla bubble are
+    /// loaded chunks and are dropped; when all four children are gaps the whole
+    /// footprint is one draw. Returns whether anything was submitted.
+    /// </summary>
+    bool FillGaps(long key, int start, double vanillaCoverageRadius)
+    {
+        int footprint = LodWorld.KeyFootprintBlocks(key);
+        double originX = LodWorld.KeySx(key) * (double)footprint;
+        double originZ = LodWorld.KeySz(key) * (double)footprint;
+        bool drew = false;
+
+        int count = gaps.Count - start;
+        bool wholeFootprint = false;
+        if (count == 4)
+        {
+            wholeFootprint = true;
+            for (int i = start; i < gaps.Count; i++)
+            {
+                if (LodWorld.ParentKey(gaps[i]) != key) { wholeFootprint = false; break; }
+            }
+        }
+
+        world.Sections.TryGetValue(key, out LodSection? fillerBounds);
+
+        if (wholeFootprint)
+        {
+            if (gapDraws.Count < LodCoveragePolicy.MaxGapDrawsPerFrame
+                && !GapInsideVanilla(key, fillerBounds, vanillaCoverageRadius))
+            {
+                gapDraws.Add(new GapDraw(key, 0, 0, footprint, footprint));
+                drew = true;
+            }
+        }
+        else
+        {
+            for (int i = start; i < gaps.Count; i++)
+            {
+                long gap = gaps[i];
+                if (GapInsideVanilla(gap, fillerBounds, vanillaCoverageRadius)) continue;
+                if (gapDraws.Count >= LodCoveragePolicy.MaxGapDrawsPerFrame) break;
+                int gapFootprint = LodWorld.KeyFootprintBlocks(gap);
+                double gx = LodWorld.KeySx(gap) * (double)gapFootprint - originX;
+                double gz = LodWorld.KeySz(gap) * (double)gapFootprint - originZ;
+                gapDraws.Add(new GapDraw(key,
+                    (float)gx, (float)gz, (float)(gx + gapFootprint), (float)(gz + gapFootprint)));
+                drew = true;
+            }
+        }
+
+        if (drew)
+        {
+            // Coverage in use: never evict this mesh while it is the only land here.
+            drawnThisFrame.Add(key);
+            lastSelectedFrame[key] = frameCounter;
+        }
+        gaps.RemoveRange(start, count);
+        return drew;
+    }
+
+    /// <summary>
+    /// Is this gap loaded chunks rather than sky? Same test as insideVanilla:
+    /// whole AABB inside live view distance AND every map-chunk present.
+    /// A geometric circle alone punches sky when you raise VD before the
+    /// columns arrive. Missing bounds: not vanilla, fill with LOD.
+    /// </summary>
+    bool GapInsideVanilla(long gap, LodSection? filler, double vanillaCoverageRadius)
+    {
+        LodSection? bounds = filler;
+        if (world.Sections.TryGetValue(gap, out LodSection? own) && own.HasSurfaceBounds) bounds = own;
+        if (bounds == null || !bounds.HasSurfaceBounds)
+            return false;
+        return VanillaOwnsKey(gap, bounds, vanillaCoverageRadius);
+    }
+
+    /// <summary>
+    /// A leftover gap that already has a GPU mesh is land, not sky. The walk
+    /// used to AddGap a meshed L1 and then fail to fill because the L2 above
+    /// it was load-failed after a remip wipe.
+    /// </summary>
+    void SubmitMeshedGaps()
+    {
+        for (int i = gaps.Count - 1; i >= 0; i--)
+        {
+            long key = gaps[i];
+            if (!HasDrawableMesh(key)) continue;
+            world.Sections.TryGetValue(key, out LodSection? gapSec);
+            if (VanillaOwnsKey(key, gapSec, liveViewDistance)) continue;
+            Submit(key);
+            gaps.RemoveAt(i);
+        }
+    }
+
+    /// <summary>
+    /// Gaps still listed after the roots return have no mesh at any rung: real
+    /// holes. Count them, keep a few for the report, and say so every few
+    /// hundred frames with each key's actual state so the cause is read off
+    /// the log rather than guessed.
+    /// </summary>
+    void ReportUnfilledGaps()
+    {
+        LastUnfilledGaps = gaps.Count;
+        if (gaps.Count == 0) return;
+
+        unfilledSampleCount = Math.Min(unfilledSample.Length, gaps.Count);
+        // Nearest first: the ones the player is most likely looking at.
+        for (int i = 0; i < unfilledSampleCount; i++) unfilledSample[i] = gaps[i];
+        for (int i = unfilledSampleCount; i < gaps.Count; i++)
+        {
+            long k = gaps[i];
+            double d = NearestDistanceSqTo(k);
+            int worst = -1;
+            double worstD = -1;
+            for (int j = 0; j < unfilledSampleCount; j++)
+            {
+                double dj = NearestDistanceSqTo(unfilledSample[j]);
+                if (dj > worstD) { worstD = dj; worst = j; }
+            }
+            if (worst >= 0 && d < worstD) unfilledSample[worst] = k;
+        }
+
+        if (holeLog == null || frameCounter - lastUnfilledLogFrame < UnfilledLogIntervalFrames) return;
+        lastUnfilledLogFrame = frameCounter;
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append("Unfilled gaps this frame: ").Append(gaps.Count)
+          .Append(" (no mesh at any rung above them). cam ")
+          .Append((int)camPos.X).Append(',').Append((int)camPos.Y).Append(',').Append((int)camPos.Z)
+          .Append(" lookDown ").Append(lookDown01.ToString("0.00"))
+          .Append(" renderDirty ").Append(world.RenderDirty.Count)
+          .Append(" meshJobs ").Append(meshJobInFlight.Count)
+          .Append(" loadsInFlight ").Append(world.LoadsInFlight.Count)
+          .Append(" loadFailed ").Append(world.LoadFailed.Count)
+          .Append(" mipDirty ").Append(world.MipDirty.Count)
+          .Append(" gapDraws ").Append(gapDraws.Count);
+        for (int i = 0; i < unfilledSampleCount; i++)
+        {
+            long k = unfilledSample[i];
+            sb.Append("\n  ").Append(DescribeKeyState(k));
+            for (long a = k; LodWorld.KeyLevel(a) < LodWorld.MaxLevel;)
+            {
+                a = LodWorld.ParentKey(a);
+                sb.Append(" <- ").Append(DescribeKeyState(a));
+                if (LodWorld.KeyLevel(a) >= 3) break;
+            }
+        }
+        holeLog(sb.ToString());
+    }
+
+    string DescribeKeyState(long key)
+    {
+        int level = LodWorld.KeyLevel(key);
+        int footprint = LodWorld.KeyFootprintBlocks(key);
+        string state;
+        if (!world.HasDataSet.Contains(key)) state = "no-data";
+        else if (world.Sections.TryGetValue(key, out LodSection? s))
+        {
+            state = s.CapturedColumns == 0 ? "resident-empty"
+                : HasAnyMesh(key) ? "meshed"
+                : meshJobInFlight.Contains(key) ? "meshing"
+                : world.RenderDirty.Contains(key) ? "queued"
+                : "resident-unrequested";
+            if (level == 0 && world.IncompleteL0Keys.Contains(key)) state += "-incomplete";
+        }
+        else
+        {
+            state = world.LoadsInFlight.Contains(key) ? "loading"
+                : world.LoadFailed.Contains(key) ? "load-failed"
+                : world.RenderDirty.Contains(key) ? "queued-not-resident"
+                : "not-resident";
+        }
+        return $"L{level}@{LodWorld.KeySx(key) * footprint},{LodWorld.KeySz(key) * footprint}"
+             + $" d{(int)Math.Sqrt(NearestDistanceSqTo(key))} {state}";
+    }
+
+    /// <summary>
+    /// Submit the children parked since <paramref name="start"/>: their parent
+    /// yielded to a sibling and will not draw, so each of them is otherwise a
+    /// hole. Entries were already screened for vanilla ownership and
+    /// completeness before they reached SkipDrawTooFine.
+    /// </summary>
+    bool FlushDeferredTooFine(int start)
+    {
+        bool drew = false;
+        for (int i = start; i < tooFineDeferred.Count; i++)
+        {
+            long key = tooFineDeferred[i];
+            if (!HasAnyMesh(key)) continue;
+            Submit(key);
+            drew = true;
+        }
+        tooFineDeferred.RemoveRange(start, tooFineDeferred.Count - start);
+        return drew;
+    }
+
+    void DiscardDeferredTooFine(int start)
+    {
+        if (tooFineDeferred.Count > start)
+            tooFineDeferred.RemoveRange(start, tooFineDeferred.Count - start);
+    }
+
+    /// <summary>
+    /// A parent whose children left gaps has no mesh of its own: get one so
+    /// the next frames can fill. Request it when its section has columns (or
+    /// is on disk); otherwise mip it from its captured children. Shares the
+    /// coarse-request budget with RequestCoarseFill; only a request that is
+    /// new this frame is charged, so a target that is already queued cannot
+    /// eat the budget every frame while the rest of the map waits.
+    /// </summary>
+    void EnsureCoverMesh(long key)
+    {
+        int level = LodWorld.KeyLevel(key);
+        if (level < 1) return;
+        if (HasAnyMesh(key) || meshJobInFlight.Contains(key)) return;
+        if (world.RenderDirty.Contains(key))
+        {
+            walkRequested.Add(key);
+            return;
+        }
+        if (coarseParentRequestsThisFrame >= CoarseParentRequestsPerFrame) return;
+
+        if (world.Sections.TryGetValue(key, out LodSection? section))
+        {
+            if (section.CapturedColumns > 0)
+            {
+                coarseParentRequestsThisFrame++;
+                RequestMesh(key);
+                return;
+            }
+        }
+        else if (world.HasDataSet.Contains(key) && !world.LoadFailed.Contains(key))
+        {
+            coarseParentRequestsThisFrame++;
+            RequestMesh(key);
+            return;
+        }
+
+        if (QueueMipFromChildren(key)) coarseParentRequestsThisFrame++;
+    }
+
+    /// <summary>
+    /// Captured land past this tile along the camera ray, probed at L3
+    /// (512-block) granularity one and two steps beyond its far edge. The
+    /// radial farthest-mesh test alone made a frontier tile on the west count
+    /// as interior because land was loaded far to the east - which is how a
+    /// plate would end up as a shelf on the unexplored edge.
+    /// </summary>
+    bool CapturedBeyond(long key)
+    {
+        int footprint = LodWorld.KeyFootprintBlocks(key);
+        double cx = LodWorld.KeySx(key) * (double)footprint + footprint / 2.0;
+        double cz = LodWorld.KeySz(key) * (double)footprint + footprint / 2.0;
+        double dx = cx - camPos.X;
+        double dz = cz - camPos.Z;
+        double len = Math.Sqrt(dx * dx + dz * dz);
+        if (len < 1) return false;
+        dx /= len;
+        dz /= len;
+
+        const int probeLevel = 3;
+        int probe = LodSection.SectionBlocks << probeLevel;
+        double start = footprint / 2.0;
+        for (int step = 1; step <= 2; step++)
+        {
+            double px = cx + dx * (start + probe * step);
+            double pz = cz + dz * (start + probe * step);
+            if (px < 0 || pz < 0) continue;
+            long pk = LodWorld.SectionKey(probeLevel,
+                (int)Math.Floor(px / probe), (int)Math.Floor(pz / probe));
+            if (world.HasDataSet.Contains(pk)) return true;
         }
         return false;
     }
@@ -774,13 +1401,20 @@ public class LodTerrainRenderer : IRenderer
         long now = Environment.TickCount64;
         if (!seasonalRefreshActive)
         {
+            int ox = (int)lastKeepOriginX;
+            int oz = (int)lastKeepOriginZ;
+            int dx = ox - lastClimateSampleX;
+            int dz = oz - lastClimateSampleZ;
+            bool originMoved = !seasonalStateInitialized
+                || dx * dx + dz * dz >= ClimateResampleBlocks * ClimateResampleBlocks;
             if (seasonalStateInitialized
+                && !originMoved
                 && now - lastSeasonRefreshMs < SeasonalRefreshIntervalMs) return;
 
             seasonalRefreshActive = true;
             seasonalRefreshSlot = 1;
-            seasonalRefreshX = (int)camPos.X;
-            seasonalRefreshZ = (int)camPos.Z;
+            seasonalRefreshX = ox;
+            seasonalRefreshZ = oz;
             tints.BeginRefresh(capi.World);
             pendingSnowLineY = CalculateSnowLine(seasonalRefreshX, seasonalRefreshZ);
         }
@@ -797,6 +1431,8 @@ public class LodTerrainRenderer : IRenderer
         seasonalRefreshActive = false;
         seasonalStateInitialized = true;
         lastSeasonRefreshMs = now;
+        lastClimateSampleX = seasonalRefreshX;
+        lastClimateSampleZ = seasonalRefreshZ;
     }
 
     float CalculateSnowLine(int px, int pz)
@@ -833,8 +1469,20 @@ public class LodTerrainRenderer : IRenderer
         {
             return;
         }
+        else if (world.LoadFailed.Contains(key))
+        {
+            // HasDataSet holds every ancestor of a captured tile, row or no row.
+            // A parent whose mip has not been built yet loads as "missing" and
+            // used to sit in RenderDirty anyway, where it won a nearest-first
+            // schedule slot every frame and failed it - dozens of those pushed
+            // the real work out of the candidate buffer. Ask the mip pipeline
+            // for the row instead; the walk asks again once it exists.
+            if (LodWorld.KeyLevel(key) >= 1) QueueMipFromChildren(key);
+            return;
+        }
 
         world.RenderDirty.Add(key);
+        walkRequested.Add(key);
 
         // Start reload / server-assist wanted-by-view now, not only when a mesh slot
         // opens. Otherwise remote-only keys sit pending while the worker idles.
@@ -893,6 +1541,10 @@ public class LodTerrainRenderer : IRenderer
             // The list can be a whole scan old, so the keep-circle is checked again here:
             // a key the player has turned back toward is inside it now and stays.
             if (InJustLeftRing(key)) continue;
+
+            // A mesh on screen this frame is not stale, whatever the keep-circle
+            // says: dropping it while a sibling still draws is next frame's hole.
+            if (drawnThisFrame.Contains(key)) continue;
 
             // No hole then pop: if this mesh was selected this frame and the coarser
             // parent is not drawable yet, leave it. Tiles that have left the keep-circle
@@ -997,7 +1649,11 @@ public class LodTerrainRenderer : IRenderer
     /// </summary>
     void PruneRenderDirty()
     {
-        if (world.RenderDirty.Count == 0) return;
+        if (world.RenderDirty.Count == 0)
+        {
+            walkRequested.Clear();
+            return;
+        }
 
         dirtyPrune.Clear();
         foreach (long key in world.RenderDirty)
@@ -1008,6 +1664,11 @@ public class LodTerrainRenderer : IRenderer
             bool handoffJob = InHandoffRing(pruneDist, liveViewDistance * overdrawP);
             if (!HasAnyMesh(key) && dirtyLevel < LodWorld.WantedLevelForSq(NearestDistanceSqTo(key)))
             {
+                // The walk asked for this last frame (lead cone, intervening
+                // span, handoff). It is a draw target regardless of the wanted
+                // rung; pruning it here was the frame-to-frame request churn
+                // that kept an in-view L0 from ever reaching the mesher.
+                if (walkRequested.Contains(key)) continue;
                 // Visited near tiles may sit behind the camera or past the wanted rung
                 // while the player flies; dropping their mesh jobs leaves a trail of sky.
                 if (LodCoveragePolicy.ShouldKeepVisitedDraw(
@@ -1021,6 +1682,7 @@ public class LodTerrainRenderer : IRenderer
             }
         }
         foreach (long key in dirtyPrune) world.RenderDirty.Remove(key);
+        walkRequested.Clear();
     }
 
     readonly long[] scheduleCandidates = new long[MeshSchedulesPerFrame + IncompleteFillPerTick + MeshLoadRequestsPerFrame];
@@ -1252,6 +1914,9 @@ public class LodTerrainRenderer : IRenderer
 
             if (sectionMeshes.Remove(result.Key, out MeshRef? old)) old.Dispose();
             if (waterMeshes.Remove(result.Key, out MeshRef? oldWater)) oldWater.Dispose();
+            emptyMeshKeys.Remove(result.Key);
+            if (result.IndexCount == 0 && result.WaterIndexCount == 0)
+                emptyMeshKeys.Add(result.Key);
 
             if (result.IndexCount > 0)
             {
@@ -1339,6 +2004,7 @@ public class LodTerrainRenderer : IRenderer
         liveViewDistance = Math.Max(64f, viewDistance);
         LodWorld.ViewDistanceAnchor = liveViewDistance;
         LodWorld.OverdrawStart = GameMath.Clamp(OverdrawStart, 0.15f, 0.95f);
+        RefreshLoadedMapChunks();
 
         phaseStart = LodPhaseCost.Start();
         UpdateEffectiveFarDistance(viewDistance);
@@ -1350,10 +2016,17 @@ public class LodTerrainRenderer : IRenderer
 
         phaseStart = LodPhaseCost.Start();
         drawList.Clear();
+        drawnThisFrame.Clear();
+        tooFineDeferred.Clear();
+        gaps.Clear();
+        gapDraws.Clear();
         coarseParentRequestsThisFrame = 0;
         foreach (long top in world.TopLevelKeys) CollectDrawNodes(top);
+        SubmitMeshedGaps();
+        ReportUnfilledGaps();
         WalkCost.Add(phaseStart);
         LastDrawCount = drawList.Count;
+        LastGapDrawCount = gapDraws.Count;
 
         phaseStart = LodPhaseCost.Start();
         ScheduleMeshJobs();
@@ -1388,21 +2061,23 @@ public class LodTerrainRenderer : IRenderer
 
         // Live season, same class of clock: the calendar, every frame, not a recapture.
         // Climate stays in tintsLow/High. Vegetation slots mix seasonTints in the shader.
-        climatePos.Set((int)camPos.X, capi.World.SeaLevel, (int)camPos.Z);
+        // Sample at the keep origin, not the camera: one warmer GetClimateAt under
+        // your feet used to zero seasonWeight on the entire far canopy.
+        climatePos.Set((int)lastKeepOriginX, capi.World.SeaLevel, (int)lastKeepOriginZ);
         float seasonRel = 0.5f;
-        float seasonTempX = 128f;
         try
         {
             seasonRel = capi.World.Calendar.GetSeasonRel(climatePos);
             ClimateCondition? cl = capi.World.BlockAccessor.GetClimateAt(climatePos);
             if (cl != null)
-                seasonTempX = LodTintRegistry.UnscaledTempByteFromCelsius(cl.WorldGenTemperature);
+                lastSeasonTempX = LodTintRegistry.UnscaledTempByteFromCelsius(cl.WorldGenTemperature);
             tints.RefreshSeason(capi.World, climatePos.X, climatePos.Z);
         }
         catch
         {
-            // Keep temperate defaults; identity season is worse than a guess.
+            // Keep the last good seasonTempX; identity season is worse than a guess.
         }
+        float seasonTempX = lastSeasonTempX;
         prog.Uniform("seasonRel", seasonRel);
         prog.Uniform("seasonTempX", seasonTempX);
         prog.Uniforms4("seasonTints", LodTintRegistry.MaxSlots, tints.SeasonTints);
@@ -1444,6 +2119,7 @@ public class LodTerrainRenderer : IRenderer
         phaseStart = LodPhaseCost.Start();
 
         // Pass 1: opaque terrain.
+        prog.Uniform("clipRect", NoClip[0], NoClip[1], NoClip[2], NoClip[3]);
         foreach (long key in drawList)
         {
             if (!sectionMeshes.TryGetValue(key, out MeshRef? mesh)) continue;
@@ -1453,14 +2129,21 @@ public class LodTerrainRenderer : IRenderer
 
         LastCulledCount = culledThisFrame; // opaque pass only: water covers a subset
 
+        // Pass 1b: gap fill. Each is a resident coarser mesh drawn only inside
+        // one footprint its subtree left uncovered (clipRect in section-local
+        // blocks); the fragment shader discards everything outside.
+        DrawGaps(sectionMeshes, cullDistSq);
+
         // Pass 2: water, alpha-blended over the terrain.
         rapi.GlToggleBlend(true);
+        prog.Uniform("clipRect", NoClip[0], NoClip[1], NoClip[2], NoClip[3]);
         foreach (long key in drawList)
         {
             if (!waterMeshes.TryGetValue(key, out MeshRef? mesh)) continue;
             if (!SetupSectionTransform(key, cullDistSq)) continue;
             capi.Render.RenderMesh(mesh);
         }
+        DrawGaps(waterMeshes, cullDistSq);
         rapi.GlToggleBlend(false);
 
         // Submission only. RenderMesh queues work for the GPU and returns, so this
@@ -1472,7 +2155,38 @@ public class LodTerrainRenderer : IRenderer
         prog.Stop();
     }
 
+    /// <summary>
+    /// The gap-fill pass for one mesh table (opaque or water): each entry is the
+    /// parent's mesh, frustum-tested and clipped to the uncovered footprint.
+    /// The clip is reset afterwards so the next pass draws whole sections.
+    /// </summary>
+    void DrawGaps(Dictionary<long, MeshRef> meshes, float cullDistSq)
+    {
+        if (gapDraws.Count == 0) return;
+        foreach (GapDraw gap in gapDraws)
+        {
+            if (!meshes.TryGetValue(gap.Key, out MeshRef? mesh)) continue;
+            if (!SetupSectionTransform(gap.Key, cullDistSq, gap.MinX, gap.MinZ, gap.MaxX, gap.MaxZ)) continue;
+            prog!.Uniform("clipRect", gap.MinX, gap.MinZ, gap.MaxX, gap.MaxZ);
+            capi.Render.RenderMesh(mesh);
+        }
+        prog!.Uniform("clipRect", NoClip[0], NoClip[1], NoClip[2], NoClip[3]);
+    }
+
     bool SetupSectionTransform(long key, float cullDistSq)
+    {
+        int footprint = LodWorld.KeyFootprintBlocks(key);
+        return SetupSectionTransform(key, cullDistSq, 0, 0, footprint, footprint);
+    }
+
+    /// <summary>
+    /// Model matrix, per-section uniforms and frustum test for one draw. The
+    /// rectangle (section-local blocks) is the part that will actually be
+    /// visible: the whole footprint for a normal draw, one child footprint for
+    /// a gap fill, so a gap behind the camera does not cost a draw call.
+    /// </summary>
+    bool SetupSectionTransform(long key, float cullDistSq,
+        float rectMinX, float rectMinZ, float rectMaxX, float rectMaxZ)
     {
         int footprint = LodWorld.KeyFootprintBlocks(key);
         double originX = LodWorld.KeySx(key) * (double)footprint;
@@ -1504,7 +2218,8 @@ public class LodTerrainRenderer : IRenderer
                 maxY = bounds.SurfaceYMax + pad - camPos.Y;
             }
 
-            if (!frustum.BoxInView(relX, minY, relZ, relX + footprint, maxY, relZ + footprint))
+            if (!frustum.BoxInView(relX + rectMinX, minY, relZ + rectMinZ,
+                    relX + rectMaxX, maxY, relZ + rectMaxZ))
             {
                 culledThisFrame++;
                 return false;
@@ -1542,6 +2257,7 @@ public class LodTerrainRenderer : IRenderer
         foreach (MeshRef meshRef in waterMeshes.Values) meshRef.Dispose();
         sectionMeshes.Clear();
         waterMeshes.Clear();
+        emptyMeshKeys.Clear();
         meshJobInFlight.Clear();
         lastSelectedFrame.Clear();
         keepOriginValid = false;

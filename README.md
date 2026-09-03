@@ -29,6 +29,8 @@ Story can download it for joining players.
 - **Live seasonal colour**. Grass and foliage follow the game's own climate and season
   maps. The mod derives a snow line from the local temperature lapse rate. So the far
   terrain changes with the seasons. It does not keep the colours it had at capture time.
+- **Visited land stays drawn.** Backing away does not punch sky rectangles through hills
+  you already walked, and new ground you generate is still there when you leave.
 - **Persistent per-world cache** that grows as you play. Join time and memory use do not
   depend on the size of the explored area.
 

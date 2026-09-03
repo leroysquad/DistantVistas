@@ -2,11 +2,11 @@
     "type": "code",
     "modid": "distantvistas",
     "name": "Distant Vistas",
-    "version": "0.7.38",
+    "version": "0.7.49",
     "side": "Universal",
     "requiredOnClient": true,
     "requiredOnServer": false,
-    "description": "Far terrain for Vintage Story. I forked Vintage Horizons to fix problems in my own worlds and I'm sharing it in case it helps. Not taking credit for anyone else's work. What works for me might not work for you.",
+    "description": "Far terrain for Vintage Story. Season colours match the ground under you. Land you already walked stays on screen when you leave. I forked Vintage Horizons to fix problems in my own worlds and I'm sharing it in case it helps. Not taking credit for anyone else's work. What works for me might not work for you.",
     "authors": [
         "IllLeroySquad"
     ],

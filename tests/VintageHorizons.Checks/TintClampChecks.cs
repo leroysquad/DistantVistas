@@ -127,5 +127,10 @@ public static class TintClampChecks
         c.True(temperate > 0.75f, "temperate seasonWeight is high enough for autumn to show");
         float byte128 = LodTintRegistry.UnscaledTempByteFromCelsius(12.5f);
         c.Near(128.0, byte128, 0.2, "12.5 C at sea is unscaled 128");
+        // Vanilla adds (y-sea)*1.5 onto an already-lapsed vertex temp. Doing
+        // that to worldgen 128 (a 50-block tree) walks into the hot kill zone.
+        float fakeCanopy = LodTintRegistry.SeasonWeightFromTempByte(128f + 75f);
+        c.True(fakeCanopy < temperate * 0.7f,
+            "adding canopy altitude to worldgen temp kills autumn (do not do this in the shader)");
     }
 }

@@ -114,9 +114,9 @@ public static class StaticAssetChecks
     {
         CheckPair(c, "DistantVistas", Path.Combine("DistantVistas", "DistantVistas.csproj"),
             Path.Combine("DistantVistas", "modinfo.json"));
-        CheckPair(c, "DistantVistasBench",
-            Path.Combine("bench", "DistantVistasBench", "DistantVistasBench.csproj"),
-            Path.Combine("bench", "DistantVistasBench", "modinfo.json"));
+        CheckPair(c, "VintageHorizonsBench",
+            Path.Combine("bench", "VintageHorizonsBench", "VintageHorizonsBench.csproj"),
+            Path.Combine("bench", "VintageHorizonsBench", "modinfo.json"));
     }
 
     static void CheckPair(Check c, string label, string csprojRel, string modinfoRel)
@@ -155,6 +155,8 @@ public static class StaticAssetChecks
         c.True(vsh.Contains("seasonTints"), "lodterrain.vsh has seasonTints");
         c.True(vsh.Contains("band != 1"), "lodterrain.vsh skips season on water");
         c.True(vsh.Contains("seasonTempX"), "lodterrain.vsh has seasonTempX for vanilla seasonWeight");
+        c.False(vsh.Contains("(yLevel - tintYLow) * 1.5"),
+            "lodterrain.vsh does not add canopy altitude onto worldgen seasonTempX");
     }
 
     /// <summary>
@@ -172,9 +174,26 @@ public static class StaticAssetChecks
 
         c.False(Regex.IsMatch(fsh, @"dist\s*<\s*0"),
             "lodterrain.fsh does not discard the camera skip disc");
+        c.False(fsh.Contains("skipR"),
+            "lodterrain.fsh does not punch a view-distance sphere (sky circle)");
+        c.True(fsh.Contains("band == 1") && fsh.Contains("0.18, 0.38, 0.50"),
+            "lodterrain.fsh recolors foam-white water to lake blue");
         c.True(vsh.Contains("lookDown"),
             "lodterrain.vsh receives look-down so the near sink can let go");
         c.True(Regex.IsMatch(vsh, @"max\s*\(\s*0\.0\s*,\s*dist\s*\)"),
             "lodterrain.vsh floors dist at 0 (GLSL clamp(dist, 0, dist) is undefined when dist < 0)");
+        c.False(Regex.IsMatch(vsh, @"farViewDistance\s*-\s*distStart\s*-\s*512"),
+            "lodterrain.vsh dist == 1 is the real far rim, not 512 blocks inside the land we hold");
+        c.True(fsh.Contains("if (dist > 1.0) discard;"),
+            "lodterrain.fsh keeps the far discard as the one true far clip");
+
+        // Gap fill: the renderer draws a parent mesh clipped to one child
+        // footprint. Both halves of that contract live in the shaders.
+        c.True(vsh.Contains("out vec2 localXZ") && vsh.Contains("localXZ = vertexPositionIn.xz"),
+            "lodterrain.vsh passes section-local XZ for the gap clip");
+        c.True(fsh.Contains("in vec2 localXZ") && fsh.Contains("uniform vec4 clipRect"),
+            "lodterrain.fsh receives localXZ and the clipRect uniform");
+        c.True(Regex.IsMatch(fsh, @"localXZ\.x\s*<\s*clipRect\.x") && Regex.IsMatch(fsh, @"localXZ\.y\s*>\s*clipRect\.w"),
+            "lodterrain.fsh discards outside the clip rectangle (minX, minZ, maxX, maxZ)");
     }
 }

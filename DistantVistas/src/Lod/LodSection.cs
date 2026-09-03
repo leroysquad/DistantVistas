@@ -80,6 +80,167 @@ public class LodSection
 
     public int CapturedColumns;
 
+    /// <summary>
+    /// Quadrants (one vanilla chunk column each, bit = qz*2+qx) whose columns did NOT
+    /// come from this side's own capture of a loaded chunk: a server peek (worldgen
+    /// stopped at the Terrain pass, so no trees, no ponds), a sweep, or another
+    /// player's cache. Real terrain observed here replaces them; until then the
+    /// quadrant counts as captured for drawing but not for QueueColumn's skip, or a
+    /// visited forest keeps drawing as the bare hills the peek produced. Persisted
+    /// with the row, because the visit usually comes a session after the peek.
+    /// Level 0 only; mips leave it 0.
+    /// </summary>
+    public byte ProvisionalQuadrants;
+
+    public const int QuadrantColumns = GridSize / 2;
+    public const int QuadrantCount = 4;
+
+    /// <summary>Quadrant of a section-local column coordinate.</summary>
+    public static int QuadrantOf(int colX, int colZ) =>
+        (colZ / QuadrantColumns) * 2 + colX / QuadrantColumns;
+
+    public bool IsProvisionalQuadrant(int quadrant) => (ProvisionalQuadrants & (1 << quadrant)) != 0;
+
+    public int QuadrantCapturedCount(int quadrant)
+    {
+        int x0 = (quadrant & 1) * QuadrantColumns;
+        int z0 = (quadrant >> 1) * QuadrantColumns;
+        int n = 0;
+        for (int z = z0; z < z0 + QuadrantColumns; z++)
+        {
+            int row = z * GridSize + x0;
+            for (int x = 0; x < QuadrantColumns; x++)
+            {
+                if (Captured[row + x]) n++;
+            }
+        }
+        return n;
+    }
+
+    public bool QuadrantFullyCaptured(int quadrant) =>
+        QuadrantCapturedCount(quadrant) == QuadrantColumns * QuadrantColumns;
+
+    /// <summary>
+    /// Copy neighbour columns into uncaptured holes that do not touch the section
+    /// edge. A capture that skipped the middle of a quadrant (chunk disposed mid-read,
+    /// rain map 0) left those columns undrawn: no top, and CollectSide emits no wall
+    /// toward uncaptured, so the mountain was a tunnel of sky and cave interiors.
+    /// Frontier / missing-quadrant uncaptured (touches the 64-edge) stays empty so we
+    /// do not invent a plateau past where we have actually looked. Real caves are
+    /// captured columns with air in the runs and are not touched.
+    /// </summary>
+    public bool SealInteriorHoles()
+    {
+        int total = GridSize * GridSize;
+        if (CapturedColumns == 0 || CapturedColumns == total) return false;
+
+        var seen = new byte[total];
+        var stack = new int[total];
+        var comp = new int[total];
+        bool changed = false;
+
+        for (int start = 0; start < total; start++)
+        {
+            if (Captured[start] || seen[start] != 0) continue;
+
+            int sp = 0;
+            stack[sp++] = start;
+            seen[start] = 1;
+            int n = 0;
+            bool touchesEdge = false;
+
+            while (sp > 0)
+            {
+                int i = stack[--sp];
+                comp[n++] = i;
+                int x = i % GridSize;
+                int z = i / GridSize;
+                if (x == 0 || z == 0 || x == GridSize - 1 || z == GridSize - 1)
+                    touchesEdge = true;
+
+                void Try(int nx, int nz)
+                {
+                    if ((uint)nx >= GridSize || (uint)nz >= GridSize) return;
+                    int ni = nz * GridSize + nx;
+                    if (Captured[ni] || seen[ni] != 0) return;
+                    seen[ni] = 1;
+                    stack[sp++] = ni;
+                }
+                Try(x - 1, z);
+                Try(x + 1, z);
+                Try(x, z - 1);
+                Try(x, z + 1);
+            }
+
+            if (touchesEdge) continue;
+
+            bool progress = true;
+            while (progress)
+            {
+                progress = false;
+                for (int k = 0; k < n; k++)
+                {
+                    int i = comp[k];
+                    if (Captured[i]) continue;
+                    int x = i % GridSize;
+                    int z = i / GridSize;
+                    int src = -1;
+                    void Take(int nx, int nz)
+                    {
+                        if (src >= 0) return;
+                        if ((uint)nx >= GridSize || (uint)nz >= GridSize) return;
+                        int ni = nz * GridSize + nx;
+                        if (Captured[ni]) src = ni;
+                    }
+                    Take(x - 1, z);
+                    Take(x + 1, z);
+                    Take(x, z - 1);
+                    Take(x, z + 1);
+                    if (src < 0) continue;
+                    ulong[] copy = ColumnRuns(src).ToArray();
+                    SetColumn(i, copy);
+                    progress = true;
+                    changed = true;
+                }
+            }
+        }
+
+        return changed;
+    }
+
+    public bool ClearProvisional(int quadrant)
+    {
+        byte mask = (byte)(1 << quadrant);
+        if ((ProvisionalQuadrants & mask) == 0) return false;
+        ProvisionalQuadrants &= (byte)~mask;
+        return true;
+    }
+
+    /// <summary>
+    /// Flag every quadrant that holds a captured column, for a section that arrived
+    /// from somewhere other than local capture. Empty quadrants stay clear: there is
+    /// nothing in them for a real capture to correct, and QueueColumn already treats
+    /// an uncaptured quadrant as work.
+    /// </summary>
+    public void MarkCapturedQuadrantsProvisional()
+    {
+        byte mask = 0;
+        for (int q = 0; q < QuadrantCount; q++)
+        {
+            int x0 = (q & 1) * QuadrantColumns;
+            int z0 = (q >> 1) * QuadrantColumns;
+            for (int z = z0; z < z0 + QuadrantColumns && (mask & (1 << q)) == 0; z++)
+            {
+                int row = z * GridSize + x0;
+                for (int x = 0; x < QuadrantColumns; x++)
+                {
+                    if (Captured[row + x]) { mask |= (byte)(1 << q); break; }
+                }
+            }
+        }
+        ProvisionalQuadrants = mask;
+    }
+
     /// <summary>Min/max top-surface Y across captured columns. Used to coarsen flats.</summary>
     public int SurfaceYMin = int.MaxValue;
     public int SurfaceYMax = int.MinValue;

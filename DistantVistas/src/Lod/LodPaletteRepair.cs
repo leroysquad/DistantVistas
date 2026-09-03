@@ -216,6 +216,24 @@ public static class LodPaletteRepair
     /// <summary>Fallback when a block has no usable atlas colour.</summary>
     public const int TerrainFallbackColor = unchecked((int)0xFF2F6B3A);
 
+    /// <summary>
+    /// Stream / lake blue when the atlas sample is foam-white or missing-tex.
+    /// Packed R in the low byte, same as every other palette colour.
+    /// </summary>
+    public const int WaterFallbackColor = unchecked((int)0xFF785A2E);
+
+    /// <summary>
+    /// Water that stored as snow-white or pale foam draws as ice. Keep real
+    /// mid-chroma water; replace the rest with a lake blue.
+    /// </summary>
+    public static int WaterDrawColor(int color)
+    {
+        if (NeedsColor(color) || IsBrightCap(color)) return WaterFallbackColor;
+        Channels(color, out _, out _, out _, out int luma, out int chroma);
+        if (luma >= 160 && chroma <= 64) return WaterFallbackColor;
+        return color;
+    }
+
     /// <summary>Reject zero / near-white; otherwise return color (or fallback).</summary>
     public static int Sanitize(int color, int fallback = TerrainFallbackColor)
     {

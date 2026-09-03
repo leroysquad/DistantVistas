@@ -24,6 +24,8 @@ public static class ResidencyChecks
         NoStorageThreadFallsBackToInline(c);
         LoadedSectionNeverClobbersALiveOne(c);
         IncompleteLeavesDoNotReplaceParentCoverage(c);
+        ProvisionalStoredKeyIsKnownCold(c);
+        DeletedDerivedParentIsCreatedFromChildren(c);
     }
 
     /// <summary>
@@ -185,6 +187,63 @@ public static class ResidencyChecks
         classified.ClassifySparseL0(leafKey, leaf);
         c.False(classified.IncompleteL0Keys.Contains(leafKey),
             "a fully captured L0 becomes safe without changing its distance");
+    }
+
+    static void ProvisionalStoredKeyIsKnownCold(Check c)
+    {
+        var world = NewWorld(out _);
+        world.InstallStoredKey(0, 3, 4, applyToParent: false, provisional: true);
+        c.True(world.ProvisionalL0Keys.Contains(Key),
+            "a peeked L0 on disk is known without loading the blob");
+
+        world.InstallStoredKey(0, 5, 5, applyToParent: false, provisional: false);
+        c.False(world.ProvisionalL0Keys.Contains(LodWorld.SectionKey(0, 5, 5)),
+            "a locally captured cold key is not provisional");
+
+        var section = new LodSection();
+        section.SetColumn(0, new[] { LodSection.PackRun(0, 8, 0) });
+        section.MarkCapturedQuadrantsProvisional();
+        world.InstallLoaded(Key, section);
+        c.True(world.ProvisionalL0Keys.Contains(Key),
+            "installing a peeked resident keeps the key in the set");
+
+        section.ClearProvisional(0);
+        world.ClassifySparseL0(Key, section);
+        c.False(world.ProvisionalL0Keys.Contains(Key),
+            "confirming the last quadrant drops the key");
+    }
+
+    /// <summary>
+    /// Remip deletes derived parents and queues L0 ApplyToParent. The parent key
+    /// is still in HasDataSet (the L0 registered the tree). Loading that parent
+    /// comes back empty. Mip must build it from the children this tick, not
+    /// spend the budget waiting on a read that will fail.
+    /// </summary>
+    static void DeletedDerivedParentIsCreatedFromChildren(Check c)
+    {
+        var world = NewWorld(out List<long> requested);
+        world.InstallStoredKey(0, 3, 4, applyToParent: true);
+
+        var child = new LodSection();
+        int rock = child.FindOrAddPaletteEntry(blockId: 1, color: 0x00707070, flags: 0);
+        child.SetColumn(0, new[] { LodSection.PackRun(rock, 20, 1) });
+        long childKey = LodWorld.SectionKey(0, 3, 4);
+        long parentKey = LodWorld.ParentKey(childKey);
+        world.Sections[childKey] = child;
+
+        c.True(world.MipDirty.Contains(childKey), "ApplyToParent queued the L0");
+        c.True(world.HasDataSet.Contains(parentKey), "the L0 registered its parent in the tree");
+        c.False(world.Sections.ContainsKey(parentKey), "the derived parent row is gone");
+
+        world.ProcessPropagation(8);
+
+        c.True(world.Sections.ContainsKey(parentKey),
+            "mip created the missing parent from the child this tick");
+        c.False(world.MipDirty.Contains(childKey), "the child is no longer waiting");
+        c.True(world.Sections[parentKey].CapturedColumns > 0,
+            "the parent received the child columns");
+        c.Eq(0, requested.Count,
+            "mip did not async-load a parent it was about to rebuild");
     }
 
     // ---- helpers ----

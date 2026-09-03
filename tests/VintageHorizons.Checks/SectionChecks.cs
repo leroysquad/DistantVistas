@@ -16,6 +16,7 @@ public static class SectionChecks
         FlagRemoval(c);
         PaletteReuse(c);
         SnapshotSharesSectionArrays(c);
+        ProvisionalQuadrants(c);
     }
 
     static void RunPacking(Check c)
@@ -219,5 +220,31 @@ public static class SectionChecks
         c.False(ReferenceEquals(grown.PaletteColors, snap.PaletteColors),
             "palette cache rebuilds when an entry is added");
         c.Eq(2, grown.PaletteColors.Length, "rebuilt cache covers the new entry");
+    }
+
+    static void ProvisionalQuadrants(Check c)
+    {
+        c.Eq(0, LodSection.QuadrantOf(0, 0), "SW quadrant is 0");
+        c.Eq(1, LodSection.QuadrantOf(LodSection.QuadrantColumns, 0), "SE quadrant is 1");
+        c.Eq(2, LodSection.QuadrantOf(0, LodSection.QuadrantColumns), "NW quadrant is 2");
+        c.Eq(3, LodSection.QuadrantOf(LodSection.QuadrantColumns, LodSection.QuadrantColumns),
+            "NE quadrant is 3");
+
+        var s = new LodSection();
+        ulong[] run = { LodSection.PackRun(0, 10, 0) };
+        s.SetColumn(LodSection.ColumnIndex(0, 0), run);
+        s.SetColumn(LodSection.ColumnIndex(LodSection.QuadrantColumns, 0), run);
+
+        s.MarkCapturedQuadrantsProvisional();
+        c.True(s.IsProvisionalQuadrant(0), "a captured SW quadrant is marked provisional");
+        c.True(s.IsProvisionalQuadrant(1), "a captured SE quadrant is marked provisional");
+        c.False(s.IsProvisionalQuadrant(2), "an empty NW quadrant is not marked");
+        c.False(s.IsProvisionalQuadrant(3), "an empty NE quadrant is not marked");
+
+        c.True(s.ClearProvisional(0), "clearing a set bit reports a change");
+        c.False(s.IsProvisionalQuadrant(0), "the bit is gone");
+        c.False(s.ClearProvisional(0), "clearing it again is a no-op");
+        c.True(s.IsProvisionalQuadrant(1), "sibling bits stay");
+        c.Eq((byte)0b0010, s.ProvisionalQuadrants, "only SE remains after clear");
     }
 }

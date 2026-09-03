@@ -22,6 +22,7 @@ public static class StoreChecks
         DisposingTheOfferReaderReleasesItsFileHandle(c);
         Rejection(c);
         PurgeKeepsMatchingData(c);
+        ProvisionalBitsSurviveReopen(c);
     }
 
     /// <summary>
@@ -82,6 +83,37 @@ public static class StoreChecks
             c.True(staleLogger.Contains("discarding"), "the purge says that it discarded data");
             c.True(staleLogger.Contains("2"), "the purge reports how many sections it took");
             stale.Dispose();
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* temp dir */ }
+        }
+    }
+
+    /// <summary>
+    /// 0.7.43 bookkeeping: peek/foreign quadrants live in a column beside the blob,
+    /// not in a format bump that would purge the table. A reopen must still see them
+    /// so QueueColumn recaptures a cold peeked row without loading it.
+    /// </summary>
+    static void ProvisionalBitsSurviveReopen(Check c)
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "vh-prov-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "cache.db");
+        try
+        {
+            var store = new LodStore(new CaptureLogger());
+            c.True(store.Open(path), "a new cache file opens for the provisional column");
+            store.SaveBlob(0, 7, 9, new byte[] { 1, 2, 3, 4 }, applyToParent: false, provisional: 0b0101);
+            store.Dispose();
+
+            var reopened = new LodStore(new CaptureLogger());
+            c.True(reopened.Open(path), "the cache reopens with the new column");
+            int seen = -1;
+            int kept = reopened.LoadAllKeys((_, _, _, _, prov) => seen = prov);
+            c.Eq(1, kept, "the row survived");
+            c.Eq(0b0101, seen, "provisional bits survive a reopen without loading the blob");
+            reopened.Dispose();
         }
         finally
         {
