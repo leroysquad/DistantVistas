@@ -44,7 +44,19 @@ uniform float tintYHigh;
 // current seasonRel, uploaded every frame. A=0 means no season map.
 uniform vec4 seasonTints[TINT_SLOTS];
 uniform float seasonRel;
-uniform float seasonTempX;
+// Keep-origin climate the slot table was sampled at, and the four corners of
+// this section from the coarse field (RGB plant tint, A = temp/255). Grass,
+// leaves, and bushes at one XZ share this sample. Vertex Y blends low/high.
+uniform vec4 keepClimateLow;
+uniform vec4 keepClimateHigh;
+uniform vec4 climateLow00;
+uniform vec4 climateLow10;
+uniform vec4 climateLow01;
+uniform vec4 climateLow11;
+uniform vec4 climateHigh00;
+uniform vec4 climateHigh10;
+uniform vec4 climateHigh01;
+uniform vec4 climateHigh11;
 
 out vec3 tint;
 out vec4 worldPos;
@@ -71,6 +83,7 @@ void main()
 
     int slotRaw = int(vertexColorIn.a * 255.0 + 0.5);
     int slot = clamp(slotRaw - (slotRaw / TINT_SLOTS) * TINT_SLOTS, 0, TINT_SLOTS - 1);
+    int band = slotRaw / TINT_SLOTS;
     float tintBlend = clamp((yLevel - tintYLow) / max(1.0, tintYHigh - tintYLow), 0.0, 1.0);
     tint = mix(tintsLow[slot].rgb, tintsHigh[slot].rgb, tintBlend);
     // Slot 0 is identity. A snow-row high sample must not bleach captured grass
@@ -87,17 +100,32 @@ void main()
         if (tintLum > 0.78) tint *= 0.78 / max(tintLum, 0.001);
     }
 
+    // Spatial climate: shift every vegetation slot by local/keep plant tint so
+    // grass, leaves, and bushes on one hill share that XZ sample. Dirt-share
+    // dilution stays in the slot table. Slot 0 is rock/snow; band 1 is water.
+    float tu = clamp(localXZ.x / max(1.0, sectionSize), 0.0, 1.0);
+    float tv = clamp(localXZ.y / max(1.0, sectionSize), 0.0, 1.0);
+    vec4 cLow = mix(mix(climateLow00, climateLow10, tu), mix(climateLow01, climateLow11, tu), tv);
+    vec4 cHigh = mix(mix(climateHigh00, climateHigh10, tu), mix(climateHigh01, climateHigh11, tu), tv);
+    vec4 localCl = mix(cLow, cHigh, tintBlend);
+    vec4 keepCl = mix(keepClimateLow, keepClimateHigh, tintBlend);
+    if (slot > 0 && band != 1) {
+        vec3 keepRgb = max(keepCl.rgb, vec3(0.04));
+        vec3 ratio = clamp(localCl.rgb / keepRgb, vec3(0.25), vec3(4.0));
+        tint *= ratio;
+    }
+
     // Live season mix. Vanilla chunk shaders do mix(climate, seasonColor, seasonWeight)
     // from uniform seasonRel. We keep climate in the slow table and mix the live
     // season map here so backing out of vanilla range keeps autumn orange.
     // band 1 is water: climate only, never fake autumn. Rock/snow are slot 0.
-    int band = slotRaw / TINT_SLOTS;
+    // seasonWeight is the LOCAL temperature, not a global sea-level byte.
     if (band != 1 && seasonTints[slot].a > 0.0) {
-        // seasonTempX is already worldgen / sea-level temperature. Vanilla adds
-        // (y - sea)*1.5 only to undo lapse on a vertex tempRel that is already
-        // colder up high. Adding it here again treats every canopy as tropical
-        // and zeros autumn on the tree tops.
-        float x = seasonTempX;
+        // localCl.a is already worldgen / sea-level temperature at this XZ.
+        // Vanilla adds (y - sea)*1.5 only to undo lapse on a vertex tempRel
+        // that is already colder up high. Adding it here again treats every
+        // canopy as tropical and zeros autumn on the tree tops.
+        float x = localCl.a * 255.0;
         float seasonWeight = clamp(0.5 - cos(x / 42.0) / 2.3 + max(0.0, 128.0 - x) / 512.0 - max(0.0, x - 130.0) / 200.0, 0.0, 1.0);
         float amt = clamp(seasonTints[slot].a * seasonWeight, 0.0, 1.0);
         // seasonRel is the clock the table was sampled at; keep it live so a

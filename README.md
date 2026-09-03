@@ -56,22 +56,17 @@ in advance.
 | `.vhfar <blocks>` | Cap the LOD render distance. `0` means unlimited, which is the default. |
 | `.vhdefer [on\|off]` | Stay idle when another LOD mod draws (on by default). A change applies at the next start, not at once. |
 
-### If your server runs Farseer, ChunkLOD or TopoHorizon
+### If you also run Farseer, ChunkLOD or TopoHorizon
 
-The client must have those mods, so the game installs one on your machine when you join
-such a server. If two LOD mods draw at the same time, they fight over the camera far
-plane and draw over each other. So this mod stays idle while another mod **draws**.
+**Farseer:** this mod used to go idle whenever Farseer was installed, which is why
+people said Distant Vistas did not render. From 0.7.55 we draw with Farseer behind us.
+Our tiles sit on top where we have them. Farseer still paints fog-colored hills in the
+leftover distance. It should not crash. I am not sure the mix looks right for everyone.
 
-An installed mod does not always draw. Switch Farseer off in its own dialog
-(Ctrl+Shift+F). This mod then draws by itself, and there is nothing else to set. For the
-mods whose switch this one cannot read, `.vhdefer off` makes it draw anyway. Then switch
-the other mod off as well, or the two will draw over the same ground.
+**ChunkLOD and TopoHorizon:** we still sit out while those draw. `.dvdefer off` makes
+this mod draw anyway. Then switch the other one off as well, or they fight.
 
-**Restart the game after either change.** The mod decides which one draws once, at
-startup, before a world exists. If you switch the other mod off while you play, nothing
-changes until the next start.
-
-`.vhinfo` names the mod that this one defers to.
+**Restart** after changing `.dvdefer`. `.dvistas` names the other LOD mod if we sat out.
 
 **Komet** is not in that list on purpose. It is a client Harmony patch of vanilla's
 visibility sweep, occlusion, and chunk loading. It does not draw distant terrain, so

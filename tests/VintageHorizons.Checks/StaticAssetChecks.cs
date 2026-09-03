@@ -154,7 +154,12 @@ public static class StaticAssetChecks
         c.True(vsh.Contains("uniform float seasonRel"), "lodterrain.vsh has live seasonRel");
         c.True(vsh.Contains("seasonTints"), "lodterrain.vsh has seasonTints");
         c.True(vsh.Contains("band != 1"), "lodterrain.vsh skips season on water");
-        c.True(vsh.Contains("seasonTempX"), "lodterrain.vsh has seasonTempX for vanilla seasonWeight");
+        c.False(vsh.Contains("uniform float seasonTempX"),
+            "lodterrain.vsh does not drive vegetation with a global seasonTempX");
+        c.True(vsh.Contains("keepClimateLow") && vsh.Contains("climateLow00"),
+            "lodterrain.vsh looks up the coarse climate field at vertex XZ");
+        c.True(vsh.Contains("localCl.a"),
+            "lodterrain.vsh seasonWeight uses the local climate temperature");
         c.False(vsh.Contains("(yLevel - tintYLow) * 1.5"),
             "lodterrain.vsh does not add canopy altitude onto worldgen seasonTempX");
     }

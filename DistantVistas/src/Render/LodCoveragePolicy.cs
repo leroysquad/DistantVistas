@@ -275,6 +275,26 @@ public static class LodCoveragePolicy
         !anyChildDrew && drawableCoarse && !forcedDetail && !holdVisitedL0 && !touchesVanilla;
 
     /// <summary>
+    /// Never paint a coarse (L1+) WHOLE footprint when the camera is inside it.
+    /// Descend and draw children; clip-fill only gaps that fail VanillaOwnsKey.
+    /// Far L1/L2 whose near edge is past the coverage radius may still draw whole.
+    /// Not a blanket "nearDist &lt; view distance" ban — that hid far children of
+    /// a tile you are standing in (0.7.51 rectangle / chunkster).
+    /// </summary>
+    public static bool MaySubmitCoarseWhole(
+        int level, double nearDist, double vanillaCoverageRadius) =>
+        level < 1 || nearDist >= vanillaCoverageRadius;
+
+    /// <summary>
+    /// Idle remesh. Already-meshed land waits for a 64-block origin shift, except
+    /// a peek / provisional section: that mesh is terrain-only cubes until the
+    /// real chunk recaptures, and spawn never walks a tile.
+    /// </summary>
+    public static bool ShouldRemeshWhileIdle(
+        bool windowMoved, bool hasMesh, bool provisional) =>
+        windowMoved || !hasMesh || provisional;
+
+    /// <summary>
     /// Whether an L0 that has captured only some of its columns draws its own
     /// mesh. Its captured quadrants are the finest picture we hold of them;
     /// the parent mip has nothing more there. Only vanilla-owned ground hides

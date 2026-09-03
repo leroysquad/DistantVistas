@@ -160,6 +160,7 @@ public class DistantVistasModSystem : ModSystem
         // Refreshes old stable colours as well as empty server colours. Client-side only:
         // this needs the texture atlas and topsoil textures; a server stores 0 on purpose.
         pipeline.RepairUncoloredPalette = RefreshStoredPalette;
+        bool farseerBehind = capi.ModLoader.IsModEnabled("farseer");
         renderer = new LodTerrainRenderer(capi, pipeline.World, pipeline.Worker, tints)
         {
             AutoUnpause = Environment.GetEnvironmentVariable("VINTAGEHORIZONS_AUTOUNPAUSE") == "1",
@@ -169,6 +170,7 @@ public class DistantVistasModSystem : ModSystem
             SkyFadeStart = config.SkyFadeStart,
             PastViewHaze = config.PastViewHaze,
             OverdrawStart = config.OverdrawStart,
+            DrawAfterCompanion = farseerBehind,
         };
         // Real holes (captured land with no mesh at any rung) are reported with
         // the state of the keys involved, so a screenshot of sky has a log line.
@@ -243,7 +245,7 @@ public class DistantVistasModSystem : ModSystem
     /// </summary>
     string? ChooseDeferralTarget()
     {
-        (string? drawing, string[] switchedOff) =
+        (string? drawing, string[] switchedOff, string[] companions) =
             OtherLodMods.Inspect(capi.ModLoader.IsModEnabled, ReadOtherModSwitch);
 
         if (switchedOff.Length > 0)
@@ -251,6 +253,13 @@ public class DistantVistasModSystem : ModSystem
             Mod.Logger.Notification(
                 "Installed but switched off in its own settings, so DistantVistas is not "
                 + "staying idle for it: {0}", string.Join(", ", switchedOff));
+        }
+
+        if (companions.Length > 0)
+        {
+            Mod.Logger.Notification(
+                "Drawing with background LOD (Farseer stays behind; Distant Vistas takes "
+                + "any tile it has): {0}", string.Join(", ", companions));
         }
 
         if (drawing != null && config.IgnoreOtherLodMods)

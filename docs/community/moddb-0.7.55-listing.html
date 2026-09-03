@@ -1,0 +1,59 @@
+<h3>Why this exists</h3>
+<p>This was made for me. It was made for <strong>singleplayer</strong>. I wanted something like Minecraft Distant Horizons in Vintage Story. What was on the market was not good enough for how I play. I had the tools, so I forked <strong>Vintage Horizons</strong> (AliasFactory, MIT) and built the version I actually want to look at. Everybody else is along for that if they want to be.</p>
+<p>If you can improve it, take it, or change it, I do not care. If the game is better at the end of the day, that is all I care about. Anybody can have the credit. There is no credit due to me.</p>
+<p>Why make a mod? Same reason anybody makes anything. There was a void in the marketplace, and I had the skills to fill it. That is it.</p>
+
+<h3>What this is</h3>
+<p>Far terrain past vanilla view distance. A persistent level-of-detail cache from chunks your client already has. Real 3D land, trees, and builds you already saw. Not a fog silhouette. I am not trying to replace Horizons. Credit stays with AliasFactory and everyone else who is actually owed it.</p>
+<p><strong>What works for me may not work for you.</strong> Different worlds, hardware, and servers behave differently. If Horizons or another LOD mod already does what you need, use that.</p>
+<p>I will be updating the comment section on this page.</p>
+
+<h3>Required: Client MeshRef Leak Fix</h3>
+<p>Run this with <a href="https://mods.vintagestory.at/vsvaogc"><strong>Client MeshRef Leak Fix</strong></a> (<code>vsvaogc</code>). I would not run Distant Vistas without it. Treat it as required on your client. It is client-only. A dedicated server does not need it.</p>
+
+<h3>Singleplayer vs client-side</h3>
+<ul>
+<li><strong>Singleplayer:</strong> install on the client. This is what I built it for and what I test.</li>
+<li><strong>Client-side:</strong> it draws from what the client already loaded. You do not need a server install for that. That is the point.</li>
+<li><strong>Server assist:</strong> exists if you put it on a server too. That is not an official feature I care about. I did not make this for multiplayer first.</li>
+</ul>
+
+<h3>Latest: 0.7.55</h3>
+<p>This is the build on my main world. It looks solid to me. Renders look solid. Drop <code>distantvistas_0.7.55.zip</code> in Mods. Do not extract.</p>
+<ul>
+<li><strong>Farseer.</strong> Farseer used to make this mod not render at all. That is fixed. We draw with Farseer in the background. Our tiles sit on top where we have them. It does not crash the game. I am not sure the mix actually looks right for everyone. Tell me if it does. It would be much appreciated. Farseer is still fog-colored hills, not far buildings. ChunkLOD and TopoHorizon still make us sit out.</li>
+<li><strong>Winter and colour.</strong> I thought winter was fixed in 0.7.14. It was better, but far autumn still snapped green while you walked. That was not actually gone until 0.7.49. This drop also fixes colour shading so mountain leaves match the grass. On my main world winter looks right now. If you still see the old mismatch, say so.</li>
+<li><strong>Visited land stays.</strong> Land you already walked does not turn into sky when you leave. I claimed this more than once. 0.7.49 is when it actually held.</li>
+<li><strong>View-distance sky circle.</strong> Earlier drops said this was gone. It was not fully gone until 0.7.49. LOD only steps aside when that tile is actually loaded.</li>
+<li><strong>Mountains.</strong> Ridges no longer chop down into caves at the LOD ring.</li>
+<li><strong>Spawn plates.</strong> Looking down at spawn no longer paints a low-poly plate over the real ground.</li>
+</ul>
+<p>Source: <a href="https://github.com/leroysquad/DistantVistas">GitHub</a></p>
+
+<h3>Why a fork, and what is different</h3>
+<p>Same starting point as Vintage Horizons: a persistent LOD cache from chunks the client already received. After that the draw path is different.</p>
+<ul>
+<li><strong>Parent plates.</strong> Horizons will mesh a coarse parent as coverage when children are not ready. From the air that is giant square plates with sheer walls. Distant Vistas does not use a parent box as a stand-in. Incomplete L0 stays off screen until it is real land.</li>
+<li><strong>Trail behind the camera.</strong> This build keeps captured land in the draw set behind and beside the camera. Fill is not allowed to stall those tiles just because the window moved.</li>
+<li><strong>Vanilla handoff.</strong> Vanilla-owns is 3D plus look-down, not a horizontal disc. Looking down from altitude still draws LOD where vanilla has no chunks.</li>
+<li><strong>Night color.</strong> Stored albedo is multiplied by the same live ambient the chunk shaders use.</li>
+<li><strong>Vanilla edge fade.</strong> Vanilla chunk shaders fade alpha at the view-distance ring. Those vertex shaders are overridden so LOD joins behind at full alpha instead of a fog slice.</li>
+<li><strong>Farseer.</strong> We do not Harmony-patch Farseer. We draw after it. Their heightmap can stay as a cheap backdrop. Ours is the real far terrain.</li>
+</ul>
+
+<h3>Credits</h3>
+<p>Fork of <strong>Vintage Horizons</strong> (AliasFactory, MIT). Rendering tricks adapted from <strong>Farseer</strong> (Badgerson, MIT). Built and shared by <strong>IllLeroySquad</strong>. Not claiming anyone else's work.</p>
+
+<h3>In-game commands</h3>
+<ul>
+<li><code>.dvistas</code> status, meshes, far edge, server assist</li>
+<li><code>.dvdetail [blocks]</code> detail halving distance (default 512)</li>
+<li><code>.dvfar</code> cap LOD distance (<code>0</code> = unlimited)</li>
+<li><code>.dvdefer [on|off]</code> defer when ChunkLOD or TopoHorizon draws (restart to apply). Farseer no longer uses this path.</li>
+</ul>
+
+<h3>Author testing (1.22.6, RTX 3090)</h3>
+<ul>
+<li>Singleplayer: high view distance, stable FPS after fill window. This is the instance that looks good.</li>
+<li>Multiplayer: LOD works but is limited by server view distance and chunk streaming</li>
+</ul>

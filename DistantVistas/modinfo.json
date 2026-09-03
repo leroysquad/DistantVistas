@@ -2,11 +2,11 @@
     "type": "code",
     "modid": "distantvistas",
     "name": "Distant Vistas",
-    "version": "0.7.49",
+    "version": "0.7.55",
     "side": "Universal",
     "requiredOnClient": true,
     "requiredOnServer": false,
-    "description": "Far terrain for Vintage Story. Season colours match the ground under you. Land you already walked stays on screen when you leave. I forked Vintage Horizons to fix problems in my own worlds and I'm sharing it in case it helps. Not taking credit for anyone else's work. What works for me might not work for you.",
+    "description": "Far terrain for Vintage Story. Land you walked stays. Seasons and winter colour match the ground. Farseer no longer shuts this off. I forked Vintage Horizons to fix problems in my own worlds. Not taking credit for anyone else's work. What works for me might not work for you.",
     "authors": [
         "IllLeroySquad"
     ],
