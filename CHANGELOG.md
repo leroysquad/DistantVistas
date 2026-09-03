@@ -1,3 +1,18 @@
+## 0.7.60
+- **Looking at the workshop no longer draws the whole cache as L0.** The lead cone used to treat every captured tile in front of you as intervening land. Fine L0 now stops at 512 blocks plus one tile. Farther L0 stays on the GPU for walk-back; the parent draws. Chests, crates, forges, and anvils are still vanilla plus TrueScale. We do not render those.
+
+## 0.7.59
+- **Far visited land coarsens again.** 0.7.58 stopped the mesh pile, then drew every captured L0 in the keep-circle. A cached multiplayer world selected 3400 L0 tiles. Fine L0/L1 now stops at view distance plus one tile. Past that the parent draws. Walk-away next to you is still the real tile.
+
+## 0.7.58
+- **Multiplayer join no longer eats the frame.** 0.7.57 waited for a world-chunk before hiding LOD. On a server those arrive late, so the client drew every cached L0 in view and piled thousands of finished meshes behind an 8-upload cap. Map-chunks hide the far disc again. The captured L0 under your feet still draws until the world-chunk exists. Keep-mesh requests stay in that same near ring. Mesh jobs stop when 48 are already in flight.
+
+## 0.7.57
+- **Visited tiles stay after you leave, as the land you already captured.** LOD used to hide as soon as the map-chunks existed, before vanilla had a world-chunk. Standing there was sky. Walking off then remeshed nothing, or a parent plate sat in: a weird low-poly chunk. Yield waits for a live world-chunk. The captured L0/L1 is requested while you stand on it and remeshed when you leave. A coarse parent does not replace that tile.
+
+## 0.7.56
+- **Look-down cubes wait for a real down pitch.** Coarse fill used to kick in at 0.55 (~33 deg). That still has most of the sky in frame, so the hills in front turned into blocks while you could see the skyline. It now waits until 0.92 (~67 deg). Same delay on the skip-disc shrink and the shader near-sink. Straight down still coarsens for the FPS win.
+
 ## 0.7.55
 - **Farseer no longer shuts this mod off.** If Farseer is installed we still draw. Farseer stays in the background as a fog silhouette. Our tiles sit on top where we have them. No Harmony patch on Farseer, so a missing or different Farseer cannot crash the client. ChunkLOD and TopoHorizon still idle us. I am not sure the mix looks right for everyone. Tell me if it does.
 - **Colour shading.** Mountain leaves match mountain grass. Far vegetation uses climate at that place, not one global sample.

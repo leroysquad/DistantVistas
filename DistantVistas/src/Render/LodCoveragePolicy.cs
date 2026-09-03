@@ -61,6 +61,25 @@ public static class LodCoveragePolicy
     public static bool ShouldKeepVisitedDraw(int level, bool hasDataSet, double distance, double viewDistanceAnchor) =>
         hasDataSet && IsVisitedKeepLevel(level) && IsNearVisitedTrail(distance, viewDistanceAnchor);
 
+    /// <summary>
+    /// Draw captured L0/L1 at that quality only inside vanilla view distance
+    /// plus one L0 tile. Past that the keep-circle still holds the mesh, but
+    /// the parent draws. Walking the whole 2x keep-circle as L0 is what put
+    /// 3400 L0 submits on a cached multiplayer join.
+    /// </summary>
+    public static bool HoldVisitedFine(double distance, double viewDistanceAnchor) =>
+        distance < FineDrawRadius(viewDistanceAnchor);
+
+    /// <summary>
+    /// Fine L0/L1 radius. Never larger than 512 + one tile even when vanilla
+    /// view distance is huge. A 2k view disc of captured L0 is the 3200-draw
+    /// hitch; the keep-circle still holds those meshes for walk-back.
+    /// </summary>
+    public const int FineDrawRadiusCap = 512;
+
+    public static double FineDrawRadius(double viewDistanceAnchor) =>
+        Math.Min(viewDistanceAnchor, FineDrawRadiusCap) + LodSection.SectionBlocks;
+
     public static bool MustDescendForVisualCap(int level, int maxVisualLevel) =>
         level > Math.Clamp(maxVisualLevel, 0, LodWorld.MaxLevel);
 
@@ -105,10 +124,13 @@ public static class LodCoveragePolicy
         // tile you are standing on. That drew LOD on loaded ice and the two
         // meshes flickered. Only uncover when the camera is high enough that
         // vanilla often dropped that column; at your feet the 3D sphere wins.
+        // Mild pitch still has skyline in frame (0.55 is ~33 deg). Do not
+        // shrink until LookDownSteepAmount, same gate as coarse fill.
         double aboveSurface = Math.Max(0, cameraY - surfaceYMax);
-        if (aboveSurface >= radius * 0.45)
+        float steep = LookDownSteepAmount(lookDown01);
+        if (aboveSurface >= radius * 0.45 && steep > 0)
         {
-            double scale = 1.0 - lookDown01;
+            double scale = 1.0 - steep;
             groundReachSq *= scale * scale;
         }
         return horizontalDistanceSq < groundReachSq;
@@ -136,13 +158,38 @@ public static class LodCoveragePolicy
     }
 
     /// <summary>
-    /// Hand the tile to vanilla when the whole AABB is inside view distance
-    /// and every map-chunk covering it is loaded. A geometric circle alone
-    /// punches sky when you raise VD before the columns arrive.
+    /// Map-chunks have claimed this footprint. Vanilla may still be empty:
+    /// heightmaps arrive before world-chunks. Hide far LOD here so a
+    /// multiplayer join does not draw a thousand L0 tiles. Cover only the
+    /// tiles under your feet until a world-chunk exists.
     /// </summary>
-    public static bool VanillaOwnsFootprint(
+    public static bool VanillaMapClaimed(
         bool entireAabbInsideVanilla3D, bool allMapChunksLoaded) =>
         entireAabbInsideVanilla3D && allMapChunksLoaded;
+
+    /// <summary>
+    /// How far from the camera a streaming (map-chunk, no world-chunk) L0
+    /// may draw or request a keep-mesh. The rest of the view disc waits.
+    /// Three L0 tiles: under you, not the whole server view distance.
+    /// </summary>
+    public const int StreamingCoverBlocks = LodSection.SectionBlocks * 3;
+
+    public static bool DrawStreamingCover(bool hasMesh, double nearDist) =>
+        hasMesh && nearDist < StreamingCoverBlocks;
+
+    public static bool RequestStreamingKeep(
+        int level, bool hasMesh, bool hasData, double nearDist) =>
+        !hasMesh && KeepVisitedSurface(level, hasData) && nearDist < StreamingCoverBlocks;
+
+    /// <summary>
+    /// Vanilla is actually drawing this column: AABB inside view distance,
+    /// map-chunks loaded, and a live world-chunk at rain height. Map-chunks
+    /// alone are a claim, not a draw.
+    /// </summary>
+    public static bool VanillaOwnsFootprint(
+        bool entireAabbInsideVanilla3D, bool allMapChunksLoaded,
+        bool worldChunksReady = true) =>
+        entireAabbInsideVanilla3D && allMapChunksLoaded && worldChunksReady;
 
     /// <summary>
     /// At least one vanilla map-chunk covering this block AABB is present.
@@ -316,13 +363,15 @@ public static class LodCoveragePolicy
     /// ring even when WantedLevel wants something coarser. Far visited land
     /// meshes at the wanted rung instead; the keep-circle still holds meshes
     /// we already uploaded. Intervening land in the lead cone is the exception:
-    /// it is requested however far out it sits.
+    /// it is requested however far out it sits. Yielding the DRAW to vanilla
+    /// does not skip this request: the mesh has to exist before you leave or
+    /// the tile is sky.
     /// </summary>
     public static bool RequestVisitedKeepMesh(
         int level, bool hasMesh, bool hasData, bool insideVanilla,
         double distance, double viewDistanceAnchor,
         bool inLeadCone = false, bool fartherLoaded = false) =>
-        !hasMesh && !insideVanilla && KeepVisitedSurface(level, hasData)
+        !hasMesh && KeepVisitedSurface(level, hasData)
         && (IsDrawFullDetail(distance, viewDistanceAnchor)
             || MustCoverIntervening(level, hasData, inLeadCone, fartherLoaded));
 
@@ -359,12 +408,24 @@ public static class LodCoveragePolicy
 
     /// <summary>
     /// Pitch below the horizon (LookDownAmount) at which the lead cone is
-    /// the ground, not the skyline. Horizon bans L2+ so a 256-block shelf
-    /// does not sit on the hills; looking down that same ban left 64x64
-    /// sky squares wherever an L0 was incomplete or unmeshed. At or above
-    /// this pitch, a parent mesh is coverage.
+    /// the ground, not the skyline. 0.55 is ~33 deg and still leaves a strip
+    /// of sky in frame, so hills in front turned into blocks. 0.92 is ~67 deg:
+    /// skyline is gone on a typical FOV. At or above this pitch, a parent mesh
+    /// is coverage and those squares sit off the monitor.
     /// </summary>
-    public const float LookDownCoarseFill = 0.55f;
+    public const float LookDownCoarseFill = 0.92f;
+
+    /// <summary>
+    /// 0 until LookDownCoarseFill, 1 looking straight down. Skip-disc shrink
+    /// and the shader near-sink use this so a skyline pan does not already
+    /// drop to cubes.
+    /// </summary>
+    public static float LookDownSteepAmount(double lookDown01)
+    {
+        lookDown01 = Math.Clamp(lookDown01, 0, 1);
+        if (lookDown01 <= LookDownCoarseFill) return 0f;
+        return (float)((lookDown01 - LookDownCoarseFill) / (1.0 - LookDownCoarseFill));
+    }
 
     /// <summary>
     /// True when the lead-cone shelf ban still applies. Looking down is
@@ -424,14 +485,19 @@ public static class LodCoveragePolicy
     public static bool ShouldVisitChildForDraw(
         int childLevel, int wanted, bool drawFullDetail, bool parentHasMesh,
         bool parentLandLike = true, bool inLeadCone = false, float lookDown01 = 0,
-        bool childHasData = false, bool fartherLoaded = false)
+        bool childHasData = false, bool fartherLoaded = false,
+        bool holdVisitedFine = false)
     {
         if (drawFullDetail) return true;
-        // Land you already captured stays in the walk. Wanted-level used to stop
-        // at L1/L2 and hide that mesh; backing away then punched 64x64 / 128x128
-        // sky rectangles through hills that were on the GPU a second ago.
-        if (childHasData && childLevel <= 1) return true;
-        if (MustCoverIntervening(childLevel, childHasData, inLeadCone, fartherLoaded)) return true;
+        // One tile past vanilla still walks L0 so leaving a chunk is not a
+        // parent plate. The rest of the keep-circle coarsens.
+        if (holdVisitedFine && childHasData && childLevel <= 1) return true;
+        // Far intervening walks L1, not every L0 in the lead cone. Looking at
+        // a workshop used to drag 3000 L0 submits through that cone.
+        if (MustCoverIntervening(childLevel, childHasData, inLeadCone, fartherLoaded)
+            && (childLevel >= 1 || holdVisitedFine)) return true;
+        // No parent mesh: walking the captured child is the hole-fill.
+        if (childHasData && childLevel <= 1 && !parentHasMesh) return true;
         if (HorizonLeadCone(inLeadCone, lookDown01)
             && (!parentLandLike || childLevel >= LeadConeMaxDrawLevel)) return true;
         if (childLevel >= wanted) return true;
@@ -515,7 +581,15 @@ public static class LodCoveragePolicy
         bool parentLandLike = true, bool inLeadCone = false, float lookDown01 = 0,
         bool mustCover = false)
     {
-        if (level == 0) return false;
+        // L0 past the 1.0x ring coarsens when a real parent can draw it.
+        // Never-skip L0 is what submitted 3400 tiles on a cached MP join.
+        if (level == 0)
+        {
+            if (drawFullDetail || mustCover) return false;
+            if (!parentHasMesh) return false;
+            if (HorizonLeadCone(inLeadCone, lookDown01) && !parentLandLike) return false;
+            return true;
+        }
         if (drawFullDetail || level >= wanted || !parentHasMesh) return false;
         if (mustCover) return false;
         if (HorizonLeadCone(inLeadCone, lookDown01) && !parentLandLike) return false;

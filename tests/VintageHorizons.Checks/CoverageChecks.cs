@@ -37,6 +37,20 @@ public static class CoverageChecks
             "looking up is not look-down");
         c.True(LodCoveragePolicy.LookDownAmount(-1) >= 0.99f,
             "straight down is full look-down");
+        c.Eq(0.92f, LodCoveragePolicy.LookDownCoarseFill,
+            "coarse fill waits until ~67 deg, not a skyline pan");
+        c.Eq(0f, LodCoveragePolicy.LookDownSteepAmount(0.55),
+            "0.55 still has skyline: skip-disc and sink do not steepen yet");
+        c.Eq(0f, LodCoveragePolicy.LookDownSteepAmount(0.82),
+            "0.82 still has sky in frame: do not steepen yet");
+        c.Eq(0f, LodCoveragePolicy.LookDownSteepAmount(LodCoveragePolicy.LookDownCoarseFill),
+            "at the coarse-fill pitch steep amount is still zero");
+        c.True(LodCoveragePolicy.LookDownSteepAmount(1) >= 0.99f,
+            "nadir is full steep look-down");
+        c.True(LodCoveragePolicy.HorizonLeadCone(true, 0.55f),
+            "0.55 look-down still has skyline; keep the shelf ban");
+        c.True(LodCoveragePolicy.HorizonLeadCone(true, 0.82f),
+            "0.82 look-down still has skyline; keep the shelf ban");
 
         const double radius = 281;
         // At the surface, horizontal 0 is inside vanilla.
@@ -74,8 +88,8 @@ public static class CoverageChecks
             "unmeshed visited L0 far away meshes at wanted rung instead");
         c.False(LodCoveragePolicy.RequestVisitedKeepMesh(0, true, true, false, NearTrail, TrailAnchor),
             "already-meshed L0 does not re-request");
-        c.False(LodCoveragePolicy.RequestVisitedKeepMesh(0, false, true, true, NearTrail, TrailAnchor),
-            "vanilla-owned L0 is not this helper");
+        c.True(LodCoveragePolicy.RequestVisitedKeepMesh(0, false, true, true, NearTrail, TrailAnchor),
+            "vanilla-owned L0 still requests a keep mesh so walk-away is not sky");
         c.False(LodCoveragePolicy.RequestVisitedKeepMesh(3, false, true, false, NearTrail, TrailAnchor),
             "coarse wanted-level tiles are not keep-surface requests");
         c.True(LodCoveragePolicy.DescendForVisitedKeep(2, true, NearTrail, TrailAnchor),
@@ -110,38 +124,56 @@ public static class CoverageChecks
             "a parent that could not stop walks into intervening visited children");
         c.False(LodCoveragePolicy.DescendForVisitedKeep(2, true, at2x, TrailAnchor, false, true),
             "behind the camera the parent mesh is still what we draw");
-        c.False(LodCoveragePolicy.SkipDrawTooFine(0, 1, false, true),
-            "a meshed L0 is never hidden just because wanted is coarser");
+        c.True(LodCoveragePolicy.SkipDrawTooFine(0, 1, false, true),
+            "far L0 coarsens when a parent mesh exists");
         c.False(LodCoveragePolicy.SkipDrawTooFine(0, 1, false, false),
             "L0 still draws when the parent has no real mesh");
         c.False(LodCoveragePolicy.SkipDrawTooFine(0, 1, true, true),
             "inside the 1.0x ring, L0 still draws");
         c.False(LodCoveragePolicy.SkipDrawTooFine(0, 1, false, true, false, true),
             "L0 still draws across the coarsen ring when the parent is a plate in the lead cone");
+        c.True(LodCoveragePolicy.HoldVisitedFine(NearTrail, TrailAnchor),
+            "inside vanilla view distance is still fine L0");
+        c.True(LodCoveragePolicy.HoldVisitedFine(TrailAnchor + 32, TrailAnchor),
+            "one L0 past vanilla still draws fine so walk-away is not a plate");
+        c.False(LodCoveragePolicy.HoldVisitedFine(TrailAnchor + 128, TrailAnchor),
+            "two L0 past vanilla coarsens");
+        c.False(LodCoveragePolicy.HoldVisitedFine(800, 1600),
+            "a huge view distance still caps fine L0 at 512 + one tile");
+        c.Eq(512 + LodSection.SectionBlocks, (int)LodCoveragePolicy.FineDrawRadius(1600),
+            "fine radius cap is 512 plus one L0");
+        c.False(LodCoveragePolicy.HoldVisitedFine(800, 2000),
+            "a huge view distance still caps fine L0 at 512+64");
+        c.True(LodCoveragePolicy.HoldVisitedFine(400, 2000),
+            "inside the 512 cap, fine L0 still draws");
         c.True(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, false, true, false, 0f, true),
             "captured L0 is walked even when wanted is L2 and the parent has no mesh");
         c.True(LodCoveragePolicy.ShouldVisitChildForDraw(1, 2, false, false),
             "missing L2: visit L1 children for hole-fill");
         c.True(LodCoveragePolicy.ShouldVisitChildForDraw(0, 1, false, false),
             "missing L1 when wanted is L1: L0 is the hole-fill rung");
-        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, false, 0f, true),
-            "captured L0 is walked even when a parent mesh exists and wanted is L2");
-        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(0, 1, false, true, true, false, 0f, true),
-            "captured L0 is walked under an L1 mesh");
+        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, false, 0f, true),
+            "far L0 with a parent mesh is not walked; the parent draws");
+        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, false, 0f, true, false, true),
+            "one tile past vanilla still walks captured L0");
+        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 1, false, true, true, false, 0f, true),
+            "far L0 under an L1 mesh coarsens");
         c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, false),
             "an L0 with no data is still not walked as hole-fill of a missing L2");
-        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, true, 0f, true, true),
-            "intervening visited L0 in the lead cone is walked even when wanted is L2");
+        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, true, 0f, true, true, true),
+            "near intervening visited L0 in the lead cone is walked even when wanted is L2");
+        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, true, 0f, true, true, false),
+            "far intervening L0 is not walked; L1 covers the cone");
         c.True(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, false, true, true, 0f, true, true),
             "missing L2, intervening L0 in the cone: walk it, not just the L1 rung");
         c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, true, 1f, false, true),
             "a child with no data is never intervening land");
-        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, false, 1f, true, true),
-            "captured L0 is walked behind the camera too");
-        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, true, 1f, true, false),
-            "captured L0 is walked even looking down with no land past it");
-        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(1, 3, false, true, true, false, 0f, true),
-            "captured L1 is walked when wanted is L3 and a parent mesh exists");
+        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, false, 1f, true, true),
+            "far L0 behind the camera coarsens when the parent can draw");
+        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, true, 1f, true, false),
+            "look-down far L0 coarsens when nothing past it forces a keep");
+        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(1, 3, false, true, true, false, 0f, true),
+            "far L1 with a parent mesh coarsens when wanted is L3");
         c.False(LodCoveragePolicy.ShouldVisitChildForDraw(2, 3, false, true, true, true, 1f, true, true),
             "intervening applies to L0/L1 only; look-down L2 under an L3 mesh is not forced");
         c.True(LodCoveragePolicy.ShouldVisitChildForDraw(2, 2, false, true),
@@ -224,8 +256,8 @@ public static class CoverageChecks
             "L1 still draws in the lead cone; L2 parent cannot stand in");
         c.False(LodCoveragePolicy.SkipDrawTooFine(0, 2, false, true, true, true, 1f, true),
             "intervening L0 never steps aside for a parent mesh, even looking down");
-        c.False(LodCoveragePolicy.SkipDrawTooFine(0, 2, false, true, true, true, 1f, false),
-            "look-down L0 still does not step aside - the mesh is the land");
+        c.True(LodCoveragePolicy.SkipDrawTooFine(0, 2, false, true, true, true, 1f, false),
+            "look-down far L0 steps aside when a parent can cover");
 
         InterveningSpan(c);
         GapFill(c);
@@ -308,7 +340,7 @@ public static class CoverageChecks
         // B relief-bumped to wanted 2. Both have data; land is drawn past them.
         const bool inCone = true, farther = true;
         bool visitA = LodCoveragePolicy.ShouldVisitChildForDraw(0, 0, false, true, true, inCone, 0f, true, farther);
-        bool visitB = LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, inCone, 0f, true, farther);
+        bool visitB = LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, inCone, 0f, true, farther, true);
         c.True(visitA, "hilly sibling at wanted 0 is visited");
         c.True(visitB, "flat sibling at wanted 2 is visited as intervening, not left to the parent");
         bool skipB = LodCoveragePolicy.SkipDrawTooFine(0, 2, false, true, true, inCone, 0f,
@@ -319,7 +351,7 @@ public static class CoverageChecks
         // and the renderer parks it until the parent decides.
         bool skipBehind = LodCoveragePolicy.SkipDrawTooFine(0, 2, false, true, true, false, 0f,
             LodCoveragePolicy.MustCoverIntervening(0, true, false, farther));
-        c.False(skipBehind, "a meshed L0 is never hidden behind the camera either");
+        c.True(skipBehind, "behind the camera, far L0 coarsens when the parent can draw");
 
         // Incomplete L0 is still the renderer's skip, intervening or not.
         c.False(LodCoveragePolicy.ChildCanReplaceParent(0, true, full / 2, true),
@@ -441,6 +473,24 @@ public static class CoverageChecks
             "loaded chunks outside the 3D sphere stay LOD (high camera / shrink VD)");
         c.True(LodCoveragePolicy.VanillaOwnsFootprint(true, true),
             "a loaded chunk whose whole tile sits inside view distance goes to vanilla");
+        c.False(LodCoveragePolicy.VanillaOwnsFootprint(true, true, false),
+            "map-chunks without world chunks are not vanilla (not-yet-drawn sky)");
+        c.True(LodCoveragePolicy.VanillaOwnsFootprint(true, true, true),
+            "map-chunks plus world chunks inside the 3D sphere go to vanilla");
+        c.True(LodCoveragePolicy.VanillaMapClaimed(true, true),
+            "map-chunks inside the 3D sphere have claimed the column");
+        c.False(LodCoveragePolicy.VanillaMapClaimed(true, false),
+            "no map-chunks is not a claim");
+        c.True(LodCoveragePolicy.DrawStreamingCover(true, 64),
+            "an already-meshed L0 under your feet covers a streaming column");
+        c.False(LodCoveragePolicy.DrawStreamingCover(true, 400),
+            "a meshed L0 across the view disc does not draw while chunks stream");
+        c.False(LodCoveragePolicy.DrawStreamingCover(false, 32),
+            "no mesh is not a streaming cover");
+        c.True(LodCoveragePolicy.RequestStreamingKeep(0, false, true, 64),
+            "unmeshed L0 under your feet still requests a keep mesh");
+        c.False(LodCoveragePolicy.RequestStreamingKeep(0, false, true, 400),
+            "do not request every L0 in view while map-chunks stream");
 
         var have = new HashSet<long>();
         static long K(int cx, int cz) => ((long)cz << 32) | (uint)cx;

@@ -52,7 +52,7 @@ public class LodPipeline
     const int CaptureBusyThreshold = 4;
 
     const int PropagationsPerTick = 4;
-    const int CatchUpPropagationsPerTick = 48;
+    const int CatchUpPropagationsPerTick = 8;
     const int CatchUpPropagationThreshold = 16;
     const int SectionSavesPerTick = 2;
     const int ChunkSize = GlobalConstants.ChunkSize;
@@ -162,6 +162,11 @@ public class LodPipeline
     {
         if (!NeedsCapture(cx, cz)) return;
 
+        // Snap while the chunks are still in memory. The key queue looks them
+        // up later; walk-off before that tick used to drop the column and the
+        // tile stayed sky after vanilla unloaded.
+        if (TryEnqueueLiveCapture(cx, cz)) return;
+
         if (pendingColumns.Count >= MaxPendingColumns)
         {
             Interlocked.Increment(ref columnsDropped);
@@ -170,6 +175,52 @@ public class LodPipeline
 
         long key = ((long)cz << 32) | (uint)cx;
         if (queuedColumns.TryAdd(key, 0)) pendingColumns.Enqueue(key);
+    }
+
+    bool TryEnqueueLiveCapture(int cx, int cz)
+    {
+        if (!Active) return false;
+        if (Worker.PendingCaptures >= MaxWorkerCaptureBacklog) return false;
+        if (!TryReadLiveColumn(cx, cz, out IWorldChunk?[] chunks, out ushort[] rainMap))
+            return false;
+        Worker.EnqueueCapture(new CaptureJob
+        {
+            Cx = cx,
+            Cz = cz,
+            Chunks = chunks,
+            RainMap = rainMap,
+        });
+        return true;
+    }
+
+    bool TryReadLiveColumn(int cx, int cz, out IWorldChunk?[] chunks, out ushort[] rainMap)
+    {
+        chunks = Array.Empty<IWorldChunk?>();
+        rainMap = Array.Empty<ushort>();
+        IMapChunk? mapChunk = api.World.BlockAccessor.GetMapChunk(cx, cz);
+        ushort[]? rain = mapChunk?.RainHeightMap;
+        if (rain == null) return false;
+
+        int chunkYCount = api.World.BlockAccessor.MapSizeY / ChunkSize;
+        var stack = new IWorldChunk?[chunkYCount];
+        bool any = false;
+        for (int cy = 0; cy < chunkYCount; cy++)
+        {
+            IWorldChunk? chunk = api.World.BlockAccessor.GetChunk(cx, cy, cz);
+            if (chunk == null || chunk.Disposed) continue;
+            stack[cy] = chunk;
+            any = true;
+        }
+        if (!any) return false;
+        chunks = stack;
+        rainMap = (ushort[])rain.Clone();
+        return true;
+    }
+
+    void RequeueColumn(long key)
+    {
+        if (queuedColumns.TryAdd(key, 0))
+            pendingColumns.Enqueue(key);
     }
 
     /// <summary>
@@ -519,8 +570,6 @@ public class LodPipeline
 
     void ScheduleCaptures()
     {
-        int chunkYCount = api.World.BlockAccessor.MapSizeY / ChunkSize;
-
         for (int n = 0; n < CaptureSchedulesPerTick
              && Worker.PendingCaptures < MaxWorkerCaptureBacklog
              && pendingColumns.TryDequeue(out long key); n++)
@@ -529,14 +578,13 @@ public class LodPipeline
             int cx = (int)(key & 0xFFFFFFFF);
             int cz = (int)(key >> 32);
 
-            IMapChunk? mapChunk = api.World.BlockAccessor.GetMapChunk(cx, cz);
-            ushort[]? rainMap = mapChunk?.RainHeightMap;
-            if (rainMap == null) continue;
-
-            var chunks = new IWorldChunk?[chunkYCount];
-            for (int cy = 0; cy < chunkYCount; cy++)
+            if (!TryReadLiveColumn(cx, cz, out IWorldChunk?[] chunks, out ushort[] rainMap))
             {
-                chunks[cy] = api.World.BlockAccessor.GetChunk(cx, cy, cz);
+                // Still loaded but the Y-stack is not ready: put it back.
+                // Already unloaded: leave it. Sweep/ChunkDirty retry next visit.
+                if (api.World.BlockAccessor.GetMapChunk(cx, cz) != null && NeedsCapture(cx, cz))
+                    RequeueColumn(key);
+                continue;
             }
 
             Worker.EnqueueCapture(new CaptureJob
@@ -544,7 +592,7 @@ public class LodPipeline
                 Cx = cx,
                 Cz = cz,
                 Chunks = chunks,
-                RainMap = (ushort[])rainMap.Clone(),
+                RainMap = rainMap,
             });
         }
     }
