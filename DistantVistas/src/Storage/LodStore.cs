@@ -25,6 +25,15 @@ public class LodStore : SQLiteDBConnection
     /// </summary>
     const string DerivedMipVersion = "8"; // v8: solid 1-of-4 keeps cliff/ridge faces (v7 was cave anti-floater)
 
+    /// <summary>
+    /// Capture policy stamp. 0.7.51 wrote FlagSkip on leaves and deleted canopy
+    /// runs; a zip rollback looked fixed while the DB was empty trees. Missing
+    /// key is current (do not wipe a good world). Only a known skip-leaves
+    /// stamp purges L0.
+    /// </summary>
+    public const string CapturePolicyLeavesSolid = "leaves-solid";
+    public const string CapturePolicyLeavesSkipped = "leaves-skipped";
+
     public override string DBTypeCode => "distantvistas lod cache";
 
     SqliteCommand? upsertCmd;
@@ -76,6 +85,7 @@ public class LodStore : SQLiteDBConnection
 
         PurgeOutdatedData(sqliteConn);
         RebuildOutdatedDerivedMips(sqliteConn);
+        ApplyCapturePolicyVersion(sqliteConn);
     }
 
     /// <summary>
@@ -133,6 +143,47 @@ public class LodStore : SQLiteDBConnection
         using var cmd = sqliteConn.CreateCommand();
         cmd.CommandText = "DELETE FROM Section; INSERT OR REPLACE INTO Meta (Key, Value) VALUES ('FormatVersion', '" + SchemaVersion + "');";
         cmd.ExecuteNonQuery();
+    }
+
+    public static bool MustPurgeSkipLeavesStamp(string? stored) =>
+        stored == CapturePolicyLeavesSkipped;
+
+    void ApplyCapturePolicyVersion(SqliteConnection sqliteConn)
+    {
+        string? existing;
+        using (var check = sqliteConn.CreateCommand())
+        {
+            check.CommandText = "SELECT Value FROM Meta WHERE Key='CapturePolicyVersion'";
+            existing = check.ExecuteScalar() as string;
+        }
+
+        if (existing == CapturePolicyLeavesSolid) return;
+
+        if (MustPurgeSkipLeavesStamp(existing))
+        {
+            long discarded = 0;
+            using (var count = sqliteConn.CreateCommand())
+            {
+                count.CommandText = "SELECT COUNT(*) FROM Section";
+                discarded = (long)(count.ExecuteScalar() ?? 0L);
+            }
+            using var wipe = sqliteConn.CreateCommand();
+            wipe.CommandText = "DELETE FROM Section;";
+            wipe.ExecuteNonQuery();
+            if (discarded > 0)
+            {
+                logger.Notification(
+                    "[DistantVistas] LOD cache was captured with skipped leaf canopies; "
+                    + "discarding {0} sections so they recapture with solid leaves.",
+                    discarded);
+            }
+        }
+
+        using var stamp = sqliteConn.CreateCommand();
+        stamp.CommandText =
+            "INSERT OR REPLACE INTO Meta (Key, Value) VALUES ('CapturePolicyVersion', '"
+            + CapturePolicyLeavesSolid + "');";
+        stamp.ExecuteNonQuery();
     }
 
     void RebuildOutdatedDerivedMips(SqliteConnection sqliteConn)

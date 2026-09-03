@@ -18,7 +18,7 @@ namespace DistantVistas;
 /// </summary>
 public class LodTerrainRenderer : IRenderer
 {
-    public double RenderOrder => 0.36; // just before opaque terrain Ã¢â€ â€™ occluded by real chunks
+    public double RenderOrder => DrawAfterCompanion ? 0.365 : 0.36; // Farseer is 0.36; later draw wins our tiles
     public int RenderRange => 9999;
 
     const int MeshSchedulesPerFrame = 12;
@@ -150,6 +150,9 @@ public class LodTerrainRenderer : IRenderer
     int seasonalRefreshX;
     int seasonalRefreshZ;
     readonly BlockPos climatePos = new(0, 0, 0);
+    readonly LodClimateField climateField = new();
+    LodClimateField.Sample keepClimate = LodClimateField.Identity;
+    bool keepClimateValid;
 
     /// <summary>Optional hard cap in blocks; 0 = unlimited draw coverage.</summary>
     public int FarViewDistanceCap = 0;
@@ -163,6 +166,12 @@ public class LodTerrainRenderer : IRenderer
     /// Lower = more overlap under vanilla/fog; 1.0 = start at cut (seams).
     /// </summary>
     public float OverdrawStart = 0.55f;
+
+    /// <summary>
+    /// Farseer also registers at 0.36. Draw after it so our mesh wins any tile
+    /// we actually submitted. Vanilla opaque still comes later and occludes both.
+    /// </summary>
+    public bool DrawAfterCompanion;
 
     /// <summary>Current far edge in blocks: the farthest loaded LOD data, independent of the vanilla view distance.</summary>
     public float EffectiveFarDistance { get; private set; } = 3000;
@@ -501,6 +510,13 @@ public class LodTerrainRenderer : IRenderer
 
     bool HasAnyMesh(long key) =>
         sectionMeshes.ContainsKey(key) || waterMeshes.ContainsKey(key) || emptyMeshKeys.Contains(key);
+
+    bool IsProvisionalKey(long key)
+    {
+        if (world.ProvisionalL0Keys.Contains(key)) return true;
+        return world.Sections.TryGetValue(key, out LodSection? section)
+            && section.ProvisionalQuadrants != 0;
+    }
 
     bool HasDrawableMesh(long key) =>
         sectionMeshes.ContainsKey(key) || waterMeshes.ContainsKey(key);
@@ -895,7 +911,8 @@ public class LodTerrainRenderer : IRenderer
         // the hills. Behind the lead cone L2+ (even a plate) may stop as a
         // cheap stand-in.
         bool stopAtThisRung = LodCoveragePolicy.StopDescentAtAvailableRung(
-            level, wanted, drawFullDetail, hasMesh, landLike, inLeadCone, lookDown01);
+            level, wanted, drawFullDetail, hasMesh, landLike, inLeadCone, lookDown01)
+            && LodCoveragePolicy.MaySubmitCoarseWhole(level, nearDist, vanillaCoverageRadius);
         if (stopAtThisRung && level < wanted)
             RequestCoarseFill(key, wanted);
 
@@ -1005,7 +1022,8 @@ public class LodTerrainRenderer : IRenderer
                 // its children. Far away, a meshed L1 is still land. Next to the
                 // player it is the brown cubes over vanilla — do not Submit.
                 lastSelectedFrame[key] = frameCounter;
-                if (!insideVanilla && HasDrawableMesh(key) && nearDist >= liveViewDistance)
+                if (!insideVanilla && HasDrawableMesh(key)
+                    && LodCoveragePolicy.MaySubmitCoarseWhole(level, nearDist, vanillaCoverageRadius))
                 {
                     Submit(key);
                     return true;
@@ -1052,6 +1070,12 @@ public class LodTerrainRenderer : IRenderer
                 }
             }
 
+            if (!LodCoveragePolicy.MaySubmitCoarseWhole(level, nearDist, vanillaCoverageRadius))
+            {
+                lastSelectedFrame[key] = frameCounter;
+                if (!insideVanilla) AddGap(key);
+                return false;
+            }
             Submit(key);
             return true;
         }
@@ -1116,7 +1140,13 @@ public class LodTerrainRenderer : IRenderer
 
         world.Sections.TryGetValue(key, out LodSection? fillerBounds);
 
-        if (wholeFootprint)
+        float overdraw = GameMath.Clamp(OverdrawStart, 0.15f, 0.95f);
+        double coverageRadius = liveViewDistance * overdraw;
+        bool mayWhole = wholeFootprint
+            && LodCoveragePolicy.MaySubmitCoarseWhole(
+                LodWorld.KeyLevel(key), Math.Sqrt(NearestDistanceSqTo(key)), coverageRadius);
+
+        if (mayWhole)
         {
             if (gapDraws.Count < LodCoveragePolicy.MaxGapDrawsPerFrame
                 && !GapInsideVanilla(key, fillerBounds, vanillaCoverageRadius))
@@ -1179,6 +1209,11 @@ public class LodTerrainRenderer : IRenderer
             if (!HasDrawableMesh(key)) continue;
             world.Sections.TryGetValue(key, out LodSection? gapSec);
             if (VanillaOwnsKey(key, gapSec, liveViewDistance)) continue;
+            float overdraw = GameMath.Clamp(OverdrawStart, 0.15f, 0.95f);
+            if (!LodCoveragePolicy.MaySubmitCoarseWhole(
+                    LodWorld.KeyLevel(key), Math.Sqrt(NearestDistanceSqTo(key)),
+                    liveViewDistance * overdraw))
+                continue;
             Submit(key);
             gaps.RemoveAt(i);
         }
@@ -1433,6 +1468,7 @@ public class LodTerrainRenderer : IRenderer
         lastSeasonRefreshMs = now;
         lastClimateSampleX = seasonalRefreshX;
         lastClimateSampleZ = seasonalRefreshZ;
+        CaptureKeepClimate(seasonalRefreshX, seasonalRefreshZ);
     }
 
     float CalculateSnowLine(int px, int pz)
@@ -1507,6 +1543,10 @@ public class LodTerrainRenderer : IRenderer
             lastKeepOriginX = camPos.X;
             lastKeepOriginZ = camPos.Z;
             windowMovedThisFrame = true;
+            int maxDist = (int)(liveViewDistance * LodCoveragePolicy.KeepCircleScale * 3.0);
+            if (maxDist < 2048) maxDist = 2048;
+            if (climateField.Count > LodClimateField.MaxCells)
+                climateField.EvictFar((int)camPos.X, (int)camPos.Z, maxDist);
         }
         else
         {
@@ -1719,9 +1759,11 @@ public class LodTerrainRenderer : IRenderer
             // Skip anything already being meshed or reloaded, so the per-frame budget
             // goes to sections that can actually start work now.
             if (meshJobInFlight.Contains(key) || world.LoadsInFlight.Contains(key)) continue;
-            // Idle: do not even consider already-meshed tiles. Capture-dirty remesh
-            // waits until the window actually moves.
-            if (!windowMovedThisFrame && HasAnyMesh(key)) continue;
+            // Idle: already-meshed land waits for a tile of travel, except peek
+            // cubes that have to remesh when the real chunk lands at spawn.
+            if (!LodCoveragePolicy.ShouldRemeshWhileIdle(
+                    windowMovedThisFrame, HasAnyMesh(key), IsProvisionalKey(key)))
+                continue;
 
             double distSq = NearestDistanceSqTo(key);
             int candLevel = LodWorld.KeyLevel(key);
@@ -1860,7 +1902,9 @@ public class LodTerrainRenderer : IRenderer
         // Standing still: keep GPU meshes. Do not clone a snapshot or enqueue a job
         // for land that is already on screen. Capture-dirty keys stay in RenderDirty
         // until the origin actually moves.
-        if (!windowMovedThisFrame && HasAnyMesh(best)) return false;
+        if (!LodCoveragePolicy.ShouldRemeshWhileIdle(
+                windowMovedThisFrame, HasAnyMesh(best), IsProvisionalKey(best)))
+            return false;
 
         // It was dirty and not in flight a moment ago, and nothing below touches any
         // key but the one it is working on. Remove says so anyway for the price of
@@ -2060,26 +2104,25 @@ public class LodTerrainRenderer : IRenderer
         prog.Uniform("rgbaAmbientIn", capi.Ambient.BlendedAmbientColor);
 
         // Live season, same class of clock: the calendar, every frame, not a recapture.
-        // Climate stays in tintsLow/High. Vegetation slots mix seasonTints in the shader.
-        // Sample at the keep origin, not the camera: one warmer GetClimateAt under
-        // your feet used to zero seasonWeight on the entire far canopy.
+        // Climate slots stay the keep-origin table. Vegetation shifts by the coarse
+        // climate field at that vertex XZ so mountain leaves match mountain grass.
         climatePos.Set((int)lastKeepOriginX, capi.World.SeaLevel, (int)lastKeepOriginZ);
         float seasonRel = 0.5f;
         try
         {
             seasonRel = capi.World.Calendar.GetSeasonRel(climatePos);
-            ClimateCondition? cl = capi.World.BlockAccessor.GetClimateAt(climatePos);
-            if (cl != null)
-                lastSeasonTempX = LodTintRegistry.UnscaledTempByteFromCelsius(cl.WorldGenTemperature);
             tints.RefreshSeason(capi.World, climatePos.X, climatePos.Z);
         }
         catch
         {
-            // Keep the last good seasonTempX; identity season is worse than a guess.
         }
-        float seasonTempX = lastSeasonTempX;
+        if (!keepClimateValid)
+            CaptureKeepClimate(climatePos.X, climatePos.Z);
         prog.Uniform("seasonRel", seasonRel);
-        prog.Uniform("seasonTempX", seasonTempX);
+        prog.Uniform("keepClimateLow",
+            keepClimate.LowR, keepClimate.LowG, keepClimate.LowB, keepClimate.LowTemp / 255f);
+        prog.Uniform("keepClimateHigh",
+            keepClimate.HighR, keepClimate.HighG, keepClimate.HighB, keepClimate.HighTemp / 255f);
         prog.Uniforms4("seasonTints", LodTintRegistry.MaxSlots, tints.SeasonTints);
 
         // Live ambient fog so the overdraw ring matches vanilla chunks in front.
@@ -2238,6 +2281,110 @@ public class LodTerrainRenderer : IRenderer
             HasNeighbourData(key, 1, 0) ? 0f : 1f,
             HasNeighbourData(key, 0, -1) ? 0f : 1f,
             HasNeighbourData(key, 0, 1) ? 0f : 1f);
+        UploadSectionClimate((int)originX, (int)originZ, footprint);
+        return true;
+    }
+
+    void CaptureKeepClimate(int x, int z)
+    {
+        if (!TrySampleClimateCell(x, z, out LodClimateField.Sample sample)) return;
+        keepClimate = sample;
+        keepClimateValid = true;
+        lastSeasonTempX = sample.LowTemp;
+        climateField.Put(x, z, sample);
+    }
+
+    void UploadSectionClimate(int originX, int originZ, int footprint)
+    {
+        int x1 = originX + footprint;
+        int z1 = originZ + footprint;
+        LodClimateField.Sample s00 = EnsureClimateCell(originX, originZ);
+        LodClimateField.Sample s10 = EnsureClimateCell(x1, originZ);
+        LodClimateField.Sample s01 = EnsureClimateCell(originX, z1);
+        LodClimateField.Sample s11 = EnsureClimateCell(x1, z1);
+        UploadClimateCorner("climateLow00", "climateHigh00", s00);
+        UploadClimateCorner("climateLow10", "climateHigh10", s10);
+        UploadClimateCorner("climateLow01", "climateHigh01", s01);
+        UploadClimateCorner("climateLow11", "climateHigh11", s11);
+    }
+
+    void UploadClimateCorner(string lowName, string highName, in LodClimateField.Sample s)
+    {
+        prog!.Uniform(lowName, s.LowR, s.LowG, s.LowB, s.LowTemp / 255f);
+        prog.Uniform(highName, s.HighR, s.HighG, s.HighB, s.HighTemp / 255f);
+    }
+
+    LodClimateField.Sample EnsureClimateCell(int x, int z)
+    {
+        if (climateField.TryGet(x, z, out LodClimateField.Sample existing))
+            return existing;
+        if (TrySampleClimateCell(x, z, out LodClimateField.Sample sample))
+        {
+            climateField.Put(x, z, sample);
+            return sample;
+        }
+        return keepClimate;
+    }
+
+    bool TrySampleClimateCell(int x, int z, out LodClimateField.Sample sample)
+    {
+        sample = keepClimate;
+        try
+        {
+            int sea = capi.World.SeaLevel;
+            int yHigh = sea + LodTintRegistry.HighSampleOffsetBlocks;
+            if (!TrySamplePlantTint(x, sea, z, out float lr, out float lg, out float lb, out float lt))
+                return false;
+            if (!TrySamplePlantTint(x, yHigh, z, out float hr, out float hg, out float hb, out float ht))
+                return false;
+            if (LodTintRegistry.IsSnowLikeTint(hr, hg, hb)
+                && !LodTintRegistry.IsSnowLikeTint(lr, lg, lb))
+            {
+                hr = lr;
+                hg = lg;
+                hb = lb;
+            }
+            sample = new LodClimateField.Sample
+            {
+                LowR = lr, LowG = lg, LowB = lb, LowTemp = lt,
+                HighR = hr, HighG = hg, HighB = hb, HighTemp = ht,
+                Filled = true
+            };
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    bool TrySamplePlantTint(int x, int y, int z, out float r, out float g, out float b, out float temp)
+    {
+        r = g = b = 1f;
+        temp = 128f;
+        climatePos.Set(x, y, z);
+        ClimateCondition? cl = capi.World.BlockAccessor.GetClimateAt(climatePos);
+        if (cl != null)
+            temp = LodTintRegistry.UnscaledTempByteFromCelsius(cl.WorldGenTemperature);
+
+        int rgba;
+        Block? plant = tints.PlantTintFallback;
+        if (plant != null && plant.ClimateColorMapResolved != null)
+        {
+            rgba = capi.World.ApplyColorMapOnRgba(
+                plant.ClimateColorMap, (string?)null,
+                unchecked((int)0xFFFFFFFF), x, y, z);
+        }
+        else
+        {
+            rgba = capi.World.ApplyColorMapOnRgba(
+                "climatePlantTint", (string?)null,
+                unchecked((int)0xFFFFFFFF), x, y, z);
+        }
+        r = ((rgba >> 16) & 0xFF) / 255f;
+        g = ((rgba >> 8) & 0xFF) / 255f;
+        b = (rgba & 0xFF) / 255f;
+        LodTintRegistry.ClampTintAwayFromWhite(ref r, ref g, ref b);
         return true;
     }
 
@@ -2265,6 +2412,9 @@ public class LodTerrainRenderer : IRenderer
         snowLineY = pendingSnowLineY = 99999;
         seasonalRefreshActive = false;
         seasonalStateInitialized = false;
+        climateField.Clear();
+        keepClimate = LodClimateField.Identity;
+        keepClimateValid = false;
     }
 
     public void Dispose()

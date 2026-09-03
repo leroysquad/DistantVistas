@@ -22,6 +22,7 @@ public static class Program
         ("pure", "mesher", MesherChecks.Run),
         ("pure", "top-soil tint", TopSoilColorChecks.Run),
         ("pure", "tint clamp", TintClampChecks.Run),
+        ("pure", "spatial climate", ClimateFieldChecks.Run),
         ("pure", "snow overlay", SnowOverlayChecks.Run),
         ("pure", "server config", ConfigChecks.Run),
         ("pure", "lod mod deferral", DeferralChecks.Run),

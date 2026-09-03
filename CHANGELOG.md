@@ -1,3 +1,16 @@
+## 0.7.55
+- **Farseer no longer shuts this mod off.** If Farseer is installed we still draw. Farseer stays in the background as a fog silhouette. Our tiles sit on top where we have them. No Harmony patch on Farseer, so a missing or different Farseer cannot crash the client. ChunkLOD and TopoHorizon still idle us. I am not sure the mix looks right for everyone. Tell me if it does.
+- **Colour shading.** Mountain leaves match mountain grass. Far vegetation uses climate at that place, not one global sample.
+- **Spawn plates.** Looking down at spawn no longer paints a low-poly plate over loaded ground. Far coarse land past vanilla still draws.
+- **Winter and seasons.** I thought winter was done in 0.7.14. It was better, but far autumn still snapped green while you walked until 0.7.49. This drop keeps that and the colour shading. On my main world winter looks right.
+- Still in from 0.7.49: visited land stays, the view-distance sky circle is gone, mountain ridges no longer chop into caves.
+
+## 0.7.54
+- **Mountain leaves match mountain grass, and the fade keeps vanilla hue.** Far vegetation no longer takes one climate from the keep origin. A coarse field samples GetClimateAt at that XZ; grass, leaves, and bushes on one hill share it. Season weight uses that temperature, not a global sea-level byte.
+
+## 0.7.53
+- **Spawn plates stay locked.** A coarse L1+ tile you are standing inside never paints its whole footprint. The walk descends and clip-fills only gaps vanilla does not own. Far L1/L2 past the coverage radius still draw whole. Peek cubes remesh while you stand still so spawn is not frozen terrain blocks.
+
 ## 0.7.49
 - **Far autumn no longer snaps back to green while you walk.** Climate and seasonWeight were resampled at your feet. One warmer GetClimateAt, or the shader adding tree-top height onto worldgen temperature (vanilla only does that to undo lapse), zeroed the season mix on every distant canopy. Tints now sit on the keep origin and only move when you travel a few hundred blocks. Tree tops keep the calendar.
 ## 0.7.48

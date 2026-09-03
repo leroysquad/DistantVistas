@@ -29,9 +29,9 @@ public static class OtherLodMods
     /// <summary>
     /// Mod id, and the mod's own client config file when its switch can be read from one.
     ///
-    /// Farseer's dialog writes "Enabled" into farseer-client.json, and Farseer rewrites
-    /// that file every time it loads, so the value on disk is always current. Verified
-    /// against Farseer 1.4.0 by writing a one-field file and reading back what it stored.
+    /// Farseer's dialog writes "Enabled" into farseer-client.json. Farseer is a
+    /// companion, not a defer target: we read the file only so the log can say
+    /// whether it is actually drawing behind us.
     ///
     /// ChunkLOD and TopoHorizon expose no config file we could find, so they get null and
     /// we keep deferring to them.
@@ -58,16 +58,22 @@ public static class OtherLodMods
         ("topohorizon", null),
     };
 
+    /// <summary>Background LOD. We draw with it. It does not idle us.</summary>
+    public static bool IsCompanion(string modId) =>
+        string.Equals(modId, "farseer", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>
-    /// The first loaded mod that is still drawing, plus every loaded mod we found
-    /// switched off. <paramref name="switchedOn"/> takes a config file name and returns
-    /// null when the file is missing or unreadable, which counts as on.
+    /// The first loaded mod that is still drawing (never a companion), every loaded
+    /// mod we found switched off, and every companion that is on. <paramref name="switchedOn"/>
+    /// takes a config file name and returns null when the file is missing or unreadable,
+    /// which counts as on.
     /// </summary>
-    public static (string? Drawing, string[] SwitchedOff) Inspect(
+    public static (string? Drawing, string[] SwitchedOff, string[] Companions) Inspect(
         Func<string, bool> isLoaded, Func<string, bool?> switchedOn)
     {
         string? drawing = null;
         var switchedOff = new List<string>();
+        var companions = new List<string>();
 
         foreach ((string modid, string? switchFile) in Known)
         {
@@ -79,11 +85,17 @@ public static class OtherLodMods
                 continue;
             }
 
+            if (IsCompanion(modid))
+            {
+                companions.Add(modid);
+                continue;
+            }
+
             // Keep going rather than return, so the report names every mod that is
             // installed, not just the first one that stops us.
             drawing ??= modid;
         }
 
-        return (drawing, switchedOff.ToArray());
+        return (drawing, switchedOff.ToArray(), companions.ToArray());
     }
 }
