@@ -112,6 +112,10 @@ public class LodTintRegistry
     readonly float[] tintsHigh = new float[MaxSlots * 4];
     readonly float[] pendingTintsLow = new float[MaxSlots * 4];
     readonly float[] pendingTintsHigh = new float[MaxSlots * 4];
+    // Season map colour at the current calendar seasonRel, one vec4 per slot.
+    // RGB is the map sample; A is 1 when the slot has a season map, else 0.
+    // Water is skipped in the shader even if A is 1. Uploaded every frame.
+    readonly float[] seasonTints = new float[MaxSlots * 4];
     float pendingSampleYLow;
     float pendingSampleYHigh;
 
@@ -119,6 +123,7 @@ public class LodTintRegistry
     public int Version { get; private set; }
     public float[] TintsLow => tintsLow;
     public float[] TintsHigh => tintsHigh;
+    public float[] SeasonTints => seasonTints;
     public int SlotCount => representative.Count;
 
     /// <summary>World Y the two tint tables were sampled at.</summary>
@@ -132,6 +137,11 @@ public class LodTintRegistry
         slotByMaps[(null, null, 0)] = SlotNone;
         for (int i = 0; i < tintsLow.Length; i++)
             tintsLow[i] = tintsHigh[i] = pendingTintsLow[i] = pendingTintsHigh[i] = 1f;
+        for (int i = 0; i < seasonTints.Length; i += 4)
+        {
+            seasonTints[i] = seasonTints[i + 1] = seasonTints[i + 2] = 1f;
+            seasonTints[i + 3] = 0f;
+        }
     }
 
     /// <summary>
@@ -152,6 +162,7 @@ public class LodTintRegistry
     public int SlotFor(Block? block, LodUntintedShare share)
     {
         if (block == null) return SlotNone;
+        if (LodBlockPolicy.IsClimateUntinted(block)) return SlotNone;
 
         string? climate = block.ClimateColorMapResolved != null ? block.ClimateColorMap : null;
         string? season = block.SeasonColorMapResolved != null ? block.SeasonColorMap : null;
@@ -190,10 +201,12 @@ public class LodTintRegistry
     {
         Array.Copy(tintsLow, pendingTintsLow, tintsLow.Length);
         Array.Copy(tintsHigh, pendingTintsHigh, tintsHigh.Length);
-        // Span the height range terrain actually occupies around the viewer, so the
-        // interpolation covers valley floor to peak rather than extrapolating.
+        // Valley floor plus a lapse-rate offset for colder mountain grass. 320 used to
+        // put the high sample in snow-climate white, so greyscale grass on high peaks
+        // multiplied to plastic white while rock sides (slot 0) stayed correct. 160
+        // still cools the tint; snow is captured snow blocks plus the alpine overlay.
         pendingSampleYLow = world.SeaLevel;
-        pendingSampleYHigh = world.SeaLevel + 320;
+        pendingSampleYHigh = world.SeaLevel + HighSampleOffsetBlocks;
     }
 
     /// <summary>Refresh one climate/season tint slot; safe to spread over render frames.</summary>
@@ -207,6 +220,7 @@ public class LodTintRegistry
             pendingTintsLow, slot, untintedShare[slot]);
         Sample(world, block, x, (int)pendingSampleYHigh, z,
             pendingTintsHigh, slot, untintedShare[slot]);
+        ProtectHighTintFromSnow(pendingTintsLow, pendingTintsHigh, slot);
     }
 
     /// <summary>Atomically publish the completely refreshed table to the renderer.</summary>
@@ -252,8 +266,12 @@ public class LodTintRegistry
             {
                 int sz = GameMath.Clamp(z + (j - SampleGridSide / 2) * SampleGridStride, 0, maxZ);
 
+                // Climate only. Season is a live shader clock (seasonRel / seasonTints),
+                // the same class of fix as rgbaAmbientIn for night. Baking both maps
+                // here froze far land on the last 30s sample, so autumn snapped to
+                // grey-green the moment vanilla unloaded.
                 int rgba = world.ApplyColorMapOnRgba(
-                    block.ClimateColorMapResolved, block.SeasonColorMapResolved,
+                    block.ClimateColorMap, (string?)null,
                     unchecked((int)0xFFFFFFFF), sx, y, sz);
 
                 // Unpacked by hand rather than through ColorUtil.ToRGBAFloats, which
@@ -270,12 +288,173 @@ public class LodTintRegistry
 
         const float scale = SampleGridSide * SampleGridSide * 255f;
 
+        float rf = r / scale;
+        float gf = g / scale;
+        float bf = b / scale;
+        ClampTintAwayFromWhite(ref rf, ref gf, ref bf);
+
         // Dilute by the share the tint must not touch, so a slot registered from
         // grass-covered soil reproduces vanilla's top-soil shader: the bare dirt that
         // shows through the overlay stays the colour it already is.
-        into[slot * 4 + 0] = LodTopSoil.Dilute(share.R, r / scale);
-        into[slot * 4 + 1] = LodTopSoil.Dilute(share.G, g / scale);
-        into[slot * 4 + 2] = LodTopSoil.Dilute(share.B, b / scale);
+        into[slot * 4 + 0] = LodTopSoil.Dilute(share.R, rf);
+        into[slot * 4 + 1] = LodTopSoil.Dilute(share.G, gf);
+        into[slot * 4 + 2] = LodTopSoil.Dilute(share.B, bf);
         into[slot * 4 + 3] = 1f;
+    }
+
+    /// <summary>
+    /// High climate sample, in blocks above sea. Must stay below the snow band of the
+    /// colour maps: those maps are indexed by temperature, and temperature falls with
+    /// height, so a sample hundreds of blocks up returns snow-white even in summer.
+    /// </summary>
+    public const int HighSampleOffsetBlocks = 160;
+
+    /// <summary>
+    /// Only pull a climate sample down when it is brighter than this. 0.7.19 used
+    /// 0.65 and that crushed greens toward grey. 0.7.18 used 0.78. Never scale
+    /// toward grey; this only clamps high-luma (toward white) samples.
+    /// Slot 0 is identity and is never sampled. Real snow is a snow block plus overlay.
+    /// </summary>
+    public const float MaxTintLuminance = 0.78f;
+
+    public static void ClampTintAwayFromWhite(ref float r, ref float g, ref float b)
+    {
+        float lum = (r + g + b) / 3f;
+        if (lum <= MaxTintLuminance || lum <= 0f) return;
+        float k = MaxTintLuminance / lum;
+        r *= k;
+        g *= k;
+        b *= k;
+    }
+
+    /// <summary>
+    /// High climate sample in the snow band of the colour map (low chroma, high
+    /// luma). Do not live-tint HIGH grass toward snow white: copy the valley
+    /// climate colour instead, which must itself be a real green/brown sample,
+    /// not identity or the grey clamp leftover. Real snow is a snow block.
+    /// </summary>
+    public static bool IsSnowLikeTint(float r, float g, float b)
+    {
+        float mx = r > g ? r : g;
+        if (b > mx) mx = b;
+        float mn = r < g ? r : g;
+        if (b < mn) mn = b;
+        float lum = (r + g + b) / 3f;
+        return lum >= 0.62f && (mx - mn) <= 0.12f;
+    }
+
+    public static void ProtectHighTintFromSnow(float[] low, float[] high, int slot)
+    {
+        if (slot <= SlotNone) return;
+        int i = slot * 4;
+        if (i + 2 >= high.Length || i + 2 >= low.Length) return;
+        if (!IsSnowLikeTint(high[i], high[i + 1], high[i + 2])) return;
+        // Copying identity or another snow-grey would paint greyscale grass
+        // grey at every altitude. Valley has to be an actual climate colour.
+        if (IsSnowLikeTint(low[i], low[i + 1], low[i + 2])) return;
+        high[i] = low[i];
+        high[i + 1] = low[i + 1];
+        high[i + 2] = low[i + 2];
+    }
+
+    /// <summary>
+    /// How much live season to mix onto climate. Water (band 1) is always 0 so
+    /// lakes do not pick up autumn. Slot 0 / no season map is 0. Matches the
+    /// lodterrain.vsh mix; keep them in lockstep.
+    /// </summary>
+    public static float LiveSeasonAmount(int band, float seasonAlpha, float seasonWeight)
+    {
+        if (band == 1) return 0f;
+        if (seasonAlpha <= 0f || seasonWeight <= 0f) return 0f;
+        float a = seasonAlpha * seasonWeight;
+        if (a < 0f) return 0f;
+        if (a > 1f) return 1f;
+        return a;
+    }
+
+    /// <summary>
+    /// Vanilla colormap.vsh seasonWeight at sea, from an unscaled 0..255 worldgen
+    /// temperature byte. Temperate (~128) is about 0.93, so autumn actually shows.
+    /// </summary>
+    public static float SeasonWeightFromTempByte(float unscaledTemp)
+    {
+        float x = unscaledTemp;
+        if (x < 0f) x = 0f;
+        if (x > 255f) x = 255f;
+        float w = 0.5f - MathF.Cos(x / 42f) / 2.3f
+            + Math.Max(0f, 128f - x) / 512f
+            - Math.Max(0f, x - 130f) / 200f;
+        if (w < 0f) return 0f;
+        if (w > 1f) return 1f;
+        return w;
+    }
+
+    /// <summary>
+    /// Inverse of Climate.GetScaledAdjustedTemperatureFloat at sea level.
+    /// WorldGenTemperature is celsius; the shader formula wants the 0..255 byte.
+    /// </summary>
+    public static float UnscaledTempByteFromCelsius(float tempC)
+    {
+        float unscaled = (tempC - 12.5f) * 5.06f + 128f;
+        if (unscaled < 0f) return 0f;
+        if (unscaled > 255f) return 255f;
+        return unscaled;
+    }
+
+    /// <summary>
+    /// Resample every slot's season map at the current calendar. Cheap enough
+    /// for every frame so /time and walking out of vanilla range keep autumn.
+    /// Does not recapture terrain; the mesh albedo is unchanged.
+    /// </summary>
+    public void RefreshSeason(IClientWorldAccessor world, int x, int z)
+    {
+        for (int slot = 1; slot < representative.Count; slot++)
+            RefreshSeasonSlot(world, x, z, slot);
+    }
+
+    void RefreshSeasonSlot(IClientWorldAccessor world, int x, int z, int slot)
+    {
+        int i = slot * 4;
+        Block? block = representative[slot];
+        if (block == null || block.SeasonColorMapResolved == null)
+        {
+            seasonTints[i] = seasonTints[i + 1] = seasonTints[i + 2] = 1f;
+            seasonTints[i + 3] = 0f;
+            return;
+        }
+
+        int y = world.SeaLevel;
+        SampleSeason(world, block, x, y, z, seasonTints, slot, untintedShare[slot]);
+        seasonTints[i + 3] = 1f;
+    }
+
+    const int SeasonSampleCount = 8;
+
+    static void SampleSeason(IClientWorldAccessor world, Block block, int x, int y, int z, float[] into,
+        int slot, LodUntintedShare share)
+    {
+        int maxX = world.BlockAccessor.MapSizeX - 1;
+        int maxZ = world.BlockAccessor.MapSizeZ - 1;
+
+        int r = 0, g = 0, b = 0;
+        for (int n = 0; n < SeasonSampleCount; n++)
+        {
+            int sx = GameMath.Clamp(x + (n - SeasonSampleCount / 2) * SampleGridStride, 0, maxX);
+            int sz = GameMath.Clamp(z, 0, maxZ);
+            int rgba = world.ApplyColorMapOnRgba(
+                (string?)null, block.SeasonColorMap,
+                unchecked((int)0xFFFFFFFF), sx, y, sz);
+            r += (rgba >> 16) & 0xFF;
+            g += (rgba >> 8) & 0xFF;
+            b += rgba & 0xFF;
+        }
+
+        const float scale = SeasonSampleCount * 255f;
+        float rf = r / scale;
+        float gf = g / scale;
+        float bf = b / scale;
+        into[slot * 4 + 0] = LodTopSoil.Dilute(share.R, rf);
+        into[slot * 4 + 1] = LodTopSoil.Dilute(share.G, gf);
+        into[slot * 4 + 2] = LodTopSoil.Dilute(share.B, bf);
     }
 }

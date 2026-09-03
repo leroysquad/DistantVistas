@@ -49,7 +49,7 @@ public static class LodMip
                 }
                 if (captured == 0) continue;
 
-                ulong[] merged = MergeColumns(child.Runs, colStart, colEnd, captured);
+                ulong[] merged = MergeColumns(child, colStart, colEnd, captured);
 
                 // Remap child palette ids to the parent palette.
                 for (int i = 0; i < merged.Length; i++)
@@ -59,7 +59,14 @@ public static class LodMip
                     if (ppid < 0)
                     {
                         LodPaletteEntry e = child.Palette[cpid];
-                        ppid = parent.FindOrAddPaletteEntry(e.BlockId, e.Color, e.Flags, e.TintSlot);
+                        // Parent rebuild used to copy the child colour as-is. Fill()
+                        // neighbour-steal only runs on disk load, so a missing-tex L0
+                        // captured on MP before the atlas was ready promoted white
+                        // onto the parent that the walk-away handoff actually draws.
+                        int color = e.Color;
+                        if (LodPaletteRepair.NeedsColor(color))
+                            color = LodPaletteRepair.Sanitize(color, LodPaletteRepair.NeighborTerrainColor(child, cpid));
+                        ppid = parent.FindOrAddPaletteEntry(e.BlockId, color, e.Flags, e.TintSlot);
                         paletteMap[cpid] = ppid;
                     }
                     merged[i] = LodSection.PackRun(ppid, LodSection.RunYTop(merged[i]), LodSection.RunYBottom(merged[i]));
@@ -78,9 +85,15 @@ public static class LodMip
     /// The columns are given as ranges into the child section's own run array. That array
     /// is immutable once created (writes swap the whole array), which is the same property
     /// the worker snapshots rely on, so reading through it here needs no copy.
+    ///
+    /// Bright (missing-tex / snow-white) slices only become the parent surface when they
+    /// cover at least 3 of the 2x2. A lone snow or chalk column used to win Boyer-Moore
+    /// and paint a whole 64x64 mountain cap white; closer in, those blocks were rock.
+    /// Real snow fields still win: they cover 3 or 4 children.
     /// </summary>
-    static ulong[] MergeColumns(ulong[] runs, ReadOnlySpan<int> colStart, ReadOnlySpan<int> colEnd, int count)
+    static ulong[] MergeColumns(LodSection child, ReadOnlySpan<int> colStart, ReadOnlySpan<int> colEnd, int count)
     {
+        ulong[] runs = child.Runs;
         var bounds = boundaries ??= new List<int>(64);
         bounds.Clear();
 
@@ -108,10 +121,16 @@ public static class LodMip
         var result = outRuns ??= new List<ulong>(16);
         result.Clear();
 
-        // FidelityStep 1: keep sparse foliage with 1-of-4 coverage when the slice is
-        // short (canopy), but still require majority for thick solid rock/soil.
-        int solidMajority = count >= 2 ? 2 : 1;
-        int canopyMajority = LodWorld.FidelityStep >= 0.5 ? 1 : solidMajority;
+        // Any solid coverage stays. 2-of-4 was meant to kill lone dirt spikes; on a
+        // cliff or ridge the 2x2 almost never shares the same Y, so the face (the
+        // one tall column) was dropped and L1 drew a hole through to sky and caves.
+        // Bright-cap still needs 3-of-4 in PickSlicePalette. Plant scraps still
+        // fall out in DropUnsupportedFloaters. A 1-of-4 rock slice is a cliff.
+        int solidMajority = 1;
+        int canopyMajority = 1;
+
+        Span<int> pidList = stackalloc int[4];
+        Span<int> pidN = stackalloc int[4];
 
         for (int i = uniqueCount - 1; i > 0; i--)
         {
@@ -120,10 +139,10 @@ public static class LodMip
             int mid = (sliceTop + sliceBottom) / 2;
             int sliceH = sliceTop - sliceBottom;
 
-            // Which columns cover this slice, and with what block?
             int covering = 0;
-            int bestPid = -1;
-            int bestPidCount = 0;
+            int nPids = 0;
+            pidList.Clear();
+            pidN.Clear();
             for (int c = 0; c < count; c++)
             {
                 foreach (ulong run in runs.AsSpan(colStart[c], colEnd[c] - colStart[c]))
@@ -132,10 +151,18 @@ public static class LodMip
                     {
                         covering++;
                         int pid = LodSection.RunPaletteId(run);
-                        // Cheap mode estimate over ≤4 values (Boyer–Moore style).
-                        if (bestPidCount == 0) { bestPid = pid; bestPidCount = 1; }
-                        else if (pid == bestPid) bestPidCount++;
-                        else bestPidCount--;
+                        int found = -1;
+                        for (int k = 0; k < nPids; k++)
+                        {
+                            if (pidList[k] == pid) { found = k; break; }
+                        }
+                        if (found < 0)
+                        {
+                            pidList[nPids] = pid;
+                            pidN[nPids] = 1;
+                            nPids++;
+                        }
+                        else pidN[found]++;
                         break;
                     }
                 }
@@ -143,6 +170,9 @@ public static class LodMip
 
             int need = sliceH <= 4 ? canopyMajority : solidMajority;
             if (covering < need) continue;
+
+            int bestPid = PickSlicePalette(child, pidList, pidN, nPids);
+            if (bestPid < 0) continue;
 
             // Merge with the previous run when contiguous and same block.
             if (result.Count > 0)
@@ -157,35 +187,120 @@ public static class LodMip
             result.Add(LodSection.PackRun(bestPid, sliceTop, sliceBottom));
         }
 
-        // Anti-floater: drop runs that sit on air with a gap below (unsupported scraps).
-        // Keep continuous stacks from the lowest solid down; orphan mid-air slices go.
-        return DropUnsupportedFloaters(result);
+        // Anti-floater: drop plant scraps that sit on air with a gap below. Terrain
+        // over a cave is rock on air too and must stay - see DropUnsupportedFloaters.
+        return DropUnsupportedFloaters(result, child);
     }
 
     /// <summary>
-    /// Remove mid-air scraps left after sparse canopy mip. A run may stay only when it
-    /// rests on another kept run or on y&lt;=1 (bedrock/terrain base). Strengthens the
-    /// continuous-range / no-floater rule for mid-far leaves on ridges.
+    /// Most common covering block. Bright-white (snow / missing tex) may win only with
+    /// a true 3-of-4 majority; otherwise the rock/dirt neighbour in the same slice wins.
     /// </summary>
-    static ulong[] DropUnsupportedFloaters(List<ulong> topDown)
+    static int PickSlicePalette(LodSection child, ReadOnlySpan<int> pidList, ReadOnlySpan<int> pidN, int nPids)
+    {
+        int bestPid = -1, bestN = -1;
+        int bestEarthPid = -1, bestEarthN = -1;
+        for (int k = 0; k < nPids; k++)
+        {
+            int pid = pidList[k];
+            int n = pidN[k];
+            if (n > bestN)
+            {
+                bestN = n;
+                bestPid = pid;
+            }
+            bool bright = pid >= 0 && pid < child.Palette.Count
+                && LodPaletteRepair.IsBrightCap(child.Palette[pid].Color);
+            if (!bright && n > bestEarthN)
+            {
+                bestEarthN = n;
+                bestEarthPid = pid;
+            }
+        }
+
+        if (bestPid < 0) return -1;
+        bool winnerBright = bestPid < child.Palette.Count
+            && LodPaletteRepair.IsBrightCap(child.Palette[bestPid].Color);
+        // 3-of-4 or unanimous bright is real snow (or a whole missing-tex plateau).
+        // A 1-of-4 or 2-of-4 bright cap is patchy snow or a missing tex; closer in those blocks are rock.
+        // Skip a bright slice that is not a 3-of-4 majority. Returning -1 drops a
+        // lone snow/missing-tex cap so the rock below becomes the parent surface.
+        if (winnerBright && bestN < 3)
+            return bestEarthPid;
+        return bestPid;
+    }
+
+    /// <summary>
+    /// Remove mid-air plant scraps left after sparse canopy mip, and nothing else.
+    ///
+    /// Runs are walked bottom-up in stacks: runs resting on each other (a 1-block crack
+    /// is allowed for tree trunk quirks) form one stack, and a stack whose bottom hangs
+    /// more than a block above everything kept so far is floating. A floating stack is
+    /// dropped only when it is plant matter through and through - a leaf crown whose
+    /// trunk lost the majority vote, snow cap included. Any other floating stack is
+    /// terrain and stays, and becomes the support for whatever sits above it.
+    ///
+    /// That last rule is the whole point. A mountain over a cave room is rock on air,
+    /// and 0.7.10 through 0.7.40 dropped everything above the first air gap: the merged
+    /// column sank to the cave floor whenever two of the four children shared a cave at
+    /// the same height. Measured on a real cache, 16% of L1 columns sat 12+ blocks
+    /// below the L0 surface under them and 8% sat 40+ below - every one of them over a
+    /// cave gap. On screen that was the ridge line chopped down to the cave floor from
+    /// the L0/L1 ring outward, and the ring moves with the camera.
+    /// </summary>
+    static ulong[] DropUnsupportedFloaters(List<ulong> topDown, LodSection child)
     {
         if (topDown.Count == 0) return Array.Empty<ulong>();
-        // topDown is top→bottom. Walk bottom-up building support.
+        // topDown is top->bottom. Walk bottom-up building support.
         var kept = new List<ulong>(topDown.Count);
         int supportTop = 1; // ground support starts at bedrock band
-        for (int i = topDown.Count - 1; i >= 0; i--)
+        int bottom = topDown.Count - 1;
+        while (bottom >= 0)
         {
-            ulong run = topDown[i];
-            int yBottom = LodSection.RunYBottom(run);
-            int yTop = LodSection.RunYTop(run);
-            // Allow a 1-block air crack (tree trunk quirks); bigger gaps = floater.
-            if (yBottom > supportTop + 1) continue;
-            kept.Add(run);
-            if (yTop > supportTop) supportTop = yTop;
+            // The stack resting on run `bottom`: index `top` is its highest run.
+            int top = bottom;
+            int stackTop = LodSection.RunYTop(topDown[bottom]);
+            while (top > 0 && LodSection.RunYBottom(topDown[top - 1]) <= stackTop + 1)
+            {
+                top--;
+                int y = LodSection.RunYTop(topDown[top]);
+                if (y > stackTop) stackTop = y;
+            }
+
+            bool floating = LodSection.RunYBottom(topDown[bottom]) > supportTop + 1;
+            if (!floating || !IsPlantScrap(child, topDown, top, bottom))
+            {
+                for (int k = bottom; k >= top; k--) kept.Add(topDown[k]);
+                if (stackTop > supportTop) supportTop = stackTop;
+            }
+            bottom = top - 1;
         }
         if (kept.Count == 0) return Array.Empty<ulong>();
         // Restore top-down order for callers.
         kept.Reverse();
         return kept.ToArray();
+    }
+
+    /// <summary>
+    /// A floating stack is a scrap when every run in it is plant matter or the snow on
+    /// top of plant matter, and at least one run is plant. Plant is anything the tint
+    /// registry gave a climate/season slot (leaves, grass tops, ferns) or thin cover.
+    /// Bright-only stacks are not plant: a chalk cliff over a cave keeps its cap.
+    /// </summary>
+    static bool IsPlantScrap(LodSection child, List<ulong> runs, int top, int bottom)
+    {
+        bool anyPlant = false;
+        for (int k = top; k <= bottom; k++)
+        {
+            int pid = LodSection.RunPaletteId(runs[k]);
+            if (pid < 0 || pid >= child.Palette.Count) return false;
+            LodPaletteEntry e = child.Palette[pid];
+            if ((e.Flags & LodPaletteEntry.FlagWater) != 0) return false;
+            bool plant = (e.Flags & LodPaletteEntry.FlagThin) != 0
+                || e.TintSlot != LodTintRegistry.SlotNone;
+            if (plant) { anyPlant = true; continue; }
+            if (!LodPaletteRepair.IsSnowOrIceAlbedo(e.Color)) return false;
+        }
+        return anyPlant;
     }
 }

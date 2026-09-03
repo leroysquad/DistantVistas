@@ -16,11 +16,13 @@ public static class StoreChecks
         DeferredPalette(c);
         AFailedLookupIsNotRemembered(c);
         AColourlessCacheIsRepaired(c);
+        MissingTextureWhiteTakesNeighbour(c);
         AStaleStableColourIsRefreshed(c);
         DerivedMipUpgradeKeepsDetailedLeaves(c);
         DisposingTheOfferReaderReleasesItsFileHandle(c);
         Rejection(c);
         PurgeKeepsMatchingData(c);
+        ProvisionalBitsSurviveReopen(c);
     }
 
     /// <summary>
@@ -81,6 +83,37 @@ public static class StoreChecks
             c.True(staleLogger.Contains("discarding"), "the purge says that it discarded data");
             c.True(staleLogger.Contains("2"), "the purge reports how many sections it took");
             stale.Dispose();
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* temp dir */ }
+        }
+    }
+
+    /// <summary>
+    /// 0.7.43 bookkeeping: peek/foreign quadrants live in a column beside the blob,
+    /// not in a format bump that would purge the table. A reopen must still see them
+    /// so QueueColumn recaptures a cold peeked row without loading it.
+    /// </summary>
+    static void ProvisionalBitsSurviveReopen(Check c)
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "vh-prov-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "cache.db");
+        try
+        {
+            var store = new LodStore(new CaptureLogger());
+            c.True(store.Open(path), "a new cache file opens for the provisional column");
+            store.SaveBlob(0, 7, 9, new byte[] { 1, 2, 3, 4 }, applyToParent: false, provisional: 0b0101);
+            store.Dispose();
+
+            var reopened = new LodStore(new CaptureLogger());
+            c.True(reopened.Open(path), "the cache reopens with the new column");
+            int seen = -1;
+            int kept = reopened.LoadAllKeys((_, _, _, _, prov) => seen = prov);
+            c.Eq(1, kept, "the row survived");
+            c.Eq(0b0101, seen, "provisional bits survive a reopen without loading the blob");
+            reopened.Dispose();
         }
         finally
         {
@@ -221,15 +254,63 @@ public static class StoreChecks
         c.Eq(unchecked((int)0xFF112233), section.Palette[0].Color, "a known block takes its real colour");
         c.Eq(unchecked((int)0xFF336699), section.Palette[1].Color, "an already-coloured entry is untouched");
 
-        // The provider answered 0 for the unknown block. Storing that would leave the
+        // The provider answered 0 for the unknown block. Take a neighbour rock/dirt
+        // sample from this section instead of white or black. Storing 0 would leave the
         // entry needing repair for ever, and repairing marks the section dirty, so the
         // cache would be rewritten on every single load.
-        c.Eq(LodPaletteRepair.UnknownBlockColor, section.Palette[2].Color,
-            "a block nothing can colour becomes grey rather than staying black");
+        c.Eq(unchecked((int)0xFF336699), section.Palette[2].Color,
+            "a block nothing can colour takes a neighbour earth tone, never white");
         c.False(LodPaletteRepair.NeedsColor(section.Palette[2].Color),
             "so the repair finishes instead of running again every load");
 
         c.Eq(0, LodPaletteRepair.Fill(section, _ => 0), "a repaired section needs no second pass");
+    }
+
+
+    static void MissingTextureWhiteTakesNeighbour(Check c)
+    {
+        c.True(LodPaletteRepair.NeedsColor(unchecked((int)0x00FCFCFC)),
+            "unknown.png near-white is treated as missing colour");
+        // Isolated without TrueScale: unknown.png can sample as Farseer slate
+        // (0.26, 0.29, 0.45) or packed 0x001D3954, which is not near-white.
+        int farseerSlate = 66 | (74 << 8) | (115 << 16);
+        c.True(LodPaletteRepair.IsMissingTextureSky(farseerSlate),
+            "Farseer slate-blue is a missing-tex stand-in, not rock");
+        c.True(LodPaletteRepair.NeedsColor(farseerSlate),
+            "slate-blue missing tex is repaired like unknown.png white");
+        c.False(LodPaletteRepair.IsMissingTextureSky(unchecked((int)0xFF336699)),
+            "a real mid-chroma earth/water sample is not treated as sky");
+        int glacier = 170 | (200 << 8) | (220 << 16);
+        c.True(LodPaletteRepair.IsIceLikeAlbedo(glacier),
+            "pale cyan glacier ice is ice, not missing tex");
+        c.False(LodPaletteRepair.IsMissingTextureSky(glacier),
+            "glacier ice is not Farseer slate");
+        c.False(LodPaletteRepair.NeedsColor(glacier),
+            "glacier ice is not repaired into grass");
+        c.True(LodPaletteRepair.IsSnowOrIceAlbedo(unchecked((int)0x00E8E8E8)),
+            "luma-232 snow is a snow/ice albedo");
+        c.Eq(unchecked((int)0x00FCFCFC),
+            LodPaletteRepair.KeepCapturedColor(unchecked((int)0x00FCFCFC), LodPaletteRepair.TerrainFallbackColor, snowOrIceBlock: true),
+            "a known snow block keeps near-white instead of becoming grass");
+        c.Eq(LodPaletteRepair.TerrainFallbackColor,
+            LodPaletteRepair.KeepCapturedColor(farseerSlate, LodPaletteRepair.TerrainFallbackColor, snowOrIceBlock: true),
+            "Farseer slate on a snow-named block is still missing tex");
+        c.True(LodPaletteRepair.IsBrightCap(unchecked((int)0xFFFCFCFC)),
+            "opaque near-white is a bright cap");
+
+        var section = new LodSection();
+        int dirt = unchecked((int)0xFF406080); // R=0x80 G=0x60 B=0x40, mid-luma earth
+        section.FindOrAddPaletteEntry(blockId: 11, color: dirt, flags: 0);
+        section.FindOrAddPaletteEntry(blockId: 12, color: unchecked((int)0x00FCFCFC), flags: 0);
+
+        int repaired = LodPaletteRepair.Fill(section, id =>
+            id == 12 ? unchecked((int)0x00FCFCFC) : dirt);
+
+        c.Eq(1, repaired, "the missing-tex entry is repaired");
+        c.Eq(dirt, section.Palette[1].Color,
+            "missing-tex white takes the neighbour dirt, never stays white");
+        c.Eq(dirt, LodPaletteRepair.NeighborTerrainColor(section, skipIndex: 1),
+            "neighbour lookup prefers the earth-tone entry");
     }
 
     static void AStaleStableColourIsRefreshed(Check c)

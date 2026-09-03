@@ -1,0 +1,29 @@
+﻿# Why a fork, and what is different
+
+I forked Vintage Horizons to fix problems in my own worlds. Not taking credit for Horizons or anyone else. What works for me might not work for you.
+
+Same starting point: a persistent LOD cache from chunks the client already received. After that the draw path is different.
+
+## Parent plates
+
+Horizons will mesh a coarse parent as coverage when children are not ready. From the air that is giant square plates with sheer walls. Distant Vistas does not use a parent box as a stand-in. Incomplete L0 stays off screen until it is real land.
+
+## Trail behind the camera
+
+A wanted-level camera window plus frustum cull drops captured near tiles once you fly past, so land you already generated turns into sky until you linger. Distant Vistas keeps captured L0/L1 in the draw set behind and beside the camera. Fill is not allowed to stall those tiles just because the window moved.
+
+## Vanilla handoff
+
+Vanilla-owns is 3D plus look-down, not a horizontal disc. Looking down from altitude still draws LOD where vanilla has no chunks.
+
+## Night color
+
+Stored albedo is multiplied by the same live ambient the chunk shaders use. SunColor times daylight is the sun disc and stays orange after vanilla has gone dark.
+
+## Season
+
+Climate tint is sampled into a slow table. Season is a live shader clock from the calendar (`seasonRel`), mixed only onto vegetation slots. Rock, snow, and water stay untinted by autumn. Backing out of vanilla range keeps the current season instead of snapping to grey-green.
+
+## Vanilla edge fade
+
+Vanilla chunk shaders fade alpha at the view-distance ring. Those vertex shaders are overridden so LOD joins behind at full alpha instead of a fog slice.

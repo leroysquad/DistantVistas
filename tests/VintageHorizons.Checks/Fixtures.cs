@@ -61,28 +61,8 @@ public static class Fixtures
         };
     }
 
-    /// <summary>Snapshot for meshing. Palette arrays are per-entry, matching SectionSnapshot.Of.</summary>
-    public static SectionSnapshot Snap(LodSection s)
-    {
-        var colors = new int[s.Palette.Count];
-        var flags = new byte[s.Palette.Count];
-        var slots = new byte[s.Palette.Count];
-        for (int i = 0; i < s.Palette.Count; i++)
-        {
-            colors[i] = s.Palette[i].Color;
-            flags[i] = s.Palette[i].Flags;
-            slots[i] = s.Palette[i].TintSlot;
-        }
-        return new SectionSnapshot
-        {
-            Runs = s.Runs,
-            ColumnStart = s.ColumnStart,
-            Captured = (bool[])s.Captured.Clone(),
-            PaletteColors = colors,
-            PaletteFlags = flags,
-            PaletteTintSlots = slots,
-        };
-    }
+    /// <summary>Snapshot for meshing. Same sharing rules as SectionSnapshot.Of.</summary>
+    public static SectionSnapshot Snap(LodSection s) => SectionSnapshot.Of(s);
 
     public static MeshJob Job(LodSection self, long key = 0, SectionSnapshot?[]? neighbors = null) =>
         new()

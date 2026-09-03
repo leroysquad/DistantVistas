@@ -123,7 +123,7 @@ public class LodStorageThread : IDisposable
     {
         try
         {
-            store.SaveBlob(snap.Level, snap.SX, snap.SZ, LodStore.Serialize(snap), snap.ApplyToParent);
+            store.SaveBlob(snap.Level, snap.SX, snap.SZ, LodStore.Serialize(snap), snap.ApplyToParent, snap.Provisional);
             SectionsWritten++;
         }
         catch (Exception e)

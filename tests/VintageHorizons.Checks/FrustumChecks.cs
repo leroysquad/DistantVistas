@@ -24,18 +24,23 @@ public static class FrustumChecks
         Rejects(c, frustum);
         NearAndFar(c, frustum);
         Conservative(c, frustum);
+        LeadCone(c, frustum);
     }
 
     /// <summary>Looking down -Z, the OpenGL convention, from a camera at the origin.</summary>
-    static float[] View() =>
+    public static float[] ViewForTests() =>
         Mat4f.LookAt(Mat4f.Create(),
             eye: new[] { 0f, 0f, 0f },
             center: new[] { 0f, 0f, -1f },
             up: new[] { 0f, 1f, 0f });
 
-    static float[] Projection() =>
+    public static float[] ProjectionForTests() =>
         Mat4f.Perspective(Mat4f.Create(), fovy: 1.05f /* ~60 degrees */, aspect: 16f / 9f,
             near: 0.1f, far: 1000f);
+
+    static float[] View() => ViewForTests();
+
+    static float[] Projection() => ProjectionForTests();
 
     static void Accepts(Check c, LodFrustum f)
     {
@@ -56,6 +61,16 @@ public static class FrustumChecks
         // behind the player is drawn, which is roughly half of them.
         c.False(Box(f, 0, 0, 100, 10), "a box behind the camera is rejected");
         c.False(Box(f, 0, 0, 500, 50), "a box far behind the camera is rejected");
+        c.True(LodCoveragePolicy.ShouldKeepVisitedDraw(0, hasDataSet: true, 400, 512),
+            "visited L0 near the trail is exempt from this reject at draw time, not in LodFrustum itself");
+        c.False(LodCoveragePolicy.ShouldKeepVisitedDraw(0, hasDataSet: true, 7000, 512),
+            "horizon L0 is not exempt from frustum reject");
+
+        double ringEdge = 512 * LodMemoryBudget.DefaultKeepScale;
+        c.True(LodCoveragePolicy.IsNearVisitedTrail(ringEdge - 1, 512),
+            "one block inside the trail ring still counts as near");
+        c.False(LodCoveragePolicy.IsNearVisitedTrail(ringEdge + 1, 512),
+            "one block outside the trail ring is far visited land");
 
         c.False(Box(f, 2000, 0, -100, 10), "a box far to the right is rejected");
         c.False(Box(f, -2000, 0, -100, 10), "a box far to the left is rejected");
@@ -99,6 +114,21 @@ public static class FrustumChecks
     }
 
     /// <summary>An axis-aligned cube of the given half-extent, centred on the point.</summary>
+    static void LeadCone(Check c, LodFrustum f)
+    {
+        c.True(Lead(f, 0, 0, -100, 10), "a box straight ahead is in the lead cone");
+        c.False(Lead(f, 0, 0, 100, 10), "a box behind the camera is outside the lead cone");
+        // Tight frustum at z=-100 rejects y around 70 for a ~60 degree fovy;
+        // 15 degrees of lead still keeps that box.
+        c.False(Box(f, 0, 70, -100, 5), "a box just outside the tight vertical frustum is rejected for draw");
+        c.True(Lead(f, 0, 70, -100, 5), "the same box is inside the 15 degree lead cone for selection");
+        c.False(Lead(f, 0, 400, -100, 5), "a box far above the lead cone is still rejected");
+        c.True(Lead(f, 0, 0, 0, 50), "a box containing the camera is in the lead cone");
+    }
+
     static bool Box(LodFrustum f, double x, double y, double z, double half) =>
         f.BoxInView(x - half, y - half, z - half, x + half, y + half, z + half);
+
+    static bool Lead(LodFrustum f, double x, double y, double z, double half) =>
+        f.BoxInLeadCone(x - half, y - half, z - half, x + half, y + half, z + half);
 }

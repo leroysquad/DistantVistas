@@ -1,3 +1,4 @@
+using System.Buffers;
 namespace DistantVistas;
 
 /// <summary>
@@ -34,10 +35,20 @@ public static class LodMesher
     const byte WaterBase = LodTintRegistry.MaxSlots;
     const byte ThinBase = LodTintRegistry.MaxSlots * 2;
 
-    static byte AlphaFor(byte paletteFlags, byte tintSlot)
+    static byte AlphaFor(byte paletteFlags, byte tintSlot, int color)
     {
         byte slot = tintSlot < LodTintRegistry.MaxSlots ? tintSlot : (byte)LodTintRegistry.SlotNone;
-        if ((paletteFlags & LodPaletteEntry.FlagWater) != 0) return (byte)(WaterBase + slot);
+        // Skip live tint for stored colours that are already brown earth, or
+        // snow/ice that would turn green if a grass high-tint were multiplied
+        // on. Greyscale and dull-olive grass MUST keep the climate slot or far
+        // LOD stays the raw atlas grey. Remesh-only: old caches keep albedo
+        // and only drop the slot.
+        bool water = (paletteFlags & LodPaletteEntry.FlagWater) != 0;
+        // Water keeps its climate slot. Treating pale/foam water as snow/ice
+        // stripped the tint and left a white stream.
+        if (!water && (LodPaletteRepair.IsRockLikeAlbedo(color) || LodPaletteRepair.IsSnowOrIceAlbedo(color)))
+            slot = (byte)LodTintRegistry.SlotNone;
+        if (water) return (byte)(WaterBase + slot);
         if ((paletteFlags & LodPaletteEntry.FlagThin) != 0) return (byte)(ThinBase + slot);
         return slot;
     }
@@ -134,9 +145,12 @@ public static class LodMesher
                         continue;
                     }
 
-                    // Mid-far anti-floater: skip short opaque scraps that hang in air
+                    // Mid-far anti-floater: skip short plant scraps that hang in air
                     // (sparse leaf pixels after mip) unless supported within 1 block.
-                    if (level >= 1 && !isTranslucent)
+                    // Plant only: a short soil or ore run at a cave ceiling is the
+                    // bottom of the terrain above it, and skipping it slit the face.
+                    if (level >= 1 && !isTranslucent
+                        && self.PaletteTintSlots[pid] != LodTintRegistry.SlotNone)
                     {
                         int runH = yTop - yBottom;
                         bool supported = r < runs.Length - 1
@@ -183,17 +197,27 @@ public static class LodMesher
         return new MeshResult
         {
             Key = job.Key,
-            Xyz = opaque.Xyz.ToArray(),
-            Rgba = opaque.Rgba.ToArray(),
-            Indices = opaque.Indices.ToArray(),
+            Xyz = RentCopy(opaque.Xyz),
+            Rgba = RentCopy(opaque.Rgba),
+            Indices = RentCopy(opaque.Indices),
             VertexCount = opaque.Xyz.Count / 3,
             IndexCount = opaque.Indices.Count,
-            WaterXyz = water.Xyz.Count > 0 ? water.Xyz.ToArray() : null,
-            WaterRgba = water.Xyz.Count > 0 ? water.Rgba.ToArray() : null,
-            WaterIndices = water.Xyz.Count > 0 ? water.Indices.ToArray() : null,
+            WaterXyz = water.Xyz.Count > 0 ? RentCopy(water.Xyz) : null,
+            WaterRgba = water.Xyz.Count > 0 ? RentCopy(water.Rgba) : null,
+            WaterIndices = water.Xyz.Count > 0 ? RentCopy(water.Indices) : null,
             WaterVertexCount = water.Xyz.Count / 3,
             WaterIndexCount = water.Indices.Count,
         };
+    }
+
+    // Thread-static lists stay grown. The result arrays come from the pool so a
+    // finished mesh is not a second copy sitting next to the list until GC.
+    static T[] RentCopy<T>(List<T> src)
+    {
+        if (src.Count == 0) return Array.Empty<T>();
+        T[] rented = ArrayPool<T>.Shared.Rent(src.Count);
+        src.CopyTo(0, rented, 0, src.Count);
+        return rented;
     }
 
     // ---- Horizontal faces: per-plane 2D greedy rectangles ----
@@ -259,7 +283,8 @@ public static class LodMesher
 
             Buffers buf = first.Water ? water : opaque;
             int color = self.PaletteColors[first.Pid];
-            byte alpha = AlphaFor(self.PaletteFlags[first.Pid], self.PaletteTintSlots[first.Pid]);
+            if (first.Water) color = LodPaletteRepair.WaterDrawColor(color);
+            byte alpha = AlphaFor(self.PaletteFlags[first.Pid], self.PaletteTintSlots[first.Pid], color);
 
             for (int i = start; i < end; i++)
             {
@@ -358,7 +383,8 @@ public static class LodMesher
 
             Buffers buf = seg.Water ? water : opaque;
             int color = self.PaletteColors[seg.Pid];
-            byte alpha = AlphaFor(self.PaletteFlags[seg.Pid], self.PaletteTintSlots[seg.Pid]);
+            if (seg.Water) color = LodPaletteRepair.WaterDrawColor(color);
+            byte alpha = AlphaFor(self.PaletteFlags[seg.Pid], self.PaletteTintSlots[seg.Pid], color);
 
             // W/E walls run along Z at fixed X; N/S walls run along X at fixed Z.
             bool xWall = seg.Dir is W or E;

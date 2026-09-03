@@ -21,6 +21,9 @@ public sealed class LodSaveSnapshot
     public int SZ;
     public bool ApplyToParent;
 
+    /// <summary>LodSection.ProvisionalQuadrants at snapshot time.</summary>
+    public int Provisional;
+
     public string[] PaletteCodes = Array.Empty<string>();
     public int[] PaletteColors = Array.Empty<int>();
     public byte[] PaletteFlags = Array.Empty<byte>();
@@ -51,6 +54,7 @@ public sealed class LodSaveSnapshot
             SX = sx,
             SZ = sz,
             ApplyToParent = applyToParent,
+            Provisional = section.ProvisionalQuadrants,
             PaletteCodes = codes,
             PaletteColors = colors,
             PaletteFlags = flags,

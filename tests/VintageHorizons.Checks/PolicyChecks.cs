@@ -21,7 +21,20 @@ public static class PolicyChecks
     {
         c.Eq(LodPaletteEntry.FlagWater, Flags(EnumBlockMaterial.Water, "water-still-7"), "water is translucent");
         c.Eq(LodPaletteEntry.FlagWater, Flags(EnumBlockMaterial.Lava, "lava-still-7"), "lava uses the water path");
-        c.Eq(LodPaletteEntry.FlagWater, Flags(EnumBlockMaterial.Ice, "lakeice"), "ice uses the water path");
+        c.Eq(LodPaletteEntry.FlagWater, Flags(EnumBlockMaterial.Ice, "lakeice"), "lake ice uses the water path");
+        c.Eq((byte)0, Flags(EnumBlockMaterial.Ice, "glacierice"), "glacier ice is opaque, not a lake");
+        c.True(LodBlockPolicy.IsClimateUntinted(new Block
+            {
+                BlockMaterial = EnumBlockMaterial.Ice,
+                Code = new AssetLocation("game", "glacierice"),
+            }),
+            "glacier ice never takes a climate multiply");
+        c.True(LodBlockPolicy.IsClimateUntinted(new Block
+            {
+                BlockMaterial = EnumBlockMaterial.Stone,
+                Code = new AssetLocation("game", "snowblock"),
+            }),
+            "snow blocks never take a climate multiply");
 
         // Not terrain at all, so it never becomes geometry.
         c.Eq(LodPaletteEntry.FlagSkip, Flags(EnumBlockMaterial.Fire, "fire"), "fire is skipped");
@@ -30,6 +43,12 @@ public static class PolicyChecks
         c.Eq((byte)0, Flags(EnumBlockMaterial.Stone, "rock-granite"), "stone is ordinary opaque terrain");
         c.Eq((byte)0, Flags(EnumBlockMaterial.Soil, "soil-medium-normal"), "soil is ordinary opaque terrain");
         c.Eq((byte)0, Flags(EnumBlockMaterial.Wood, "log-grown-pine-ud"), "wood is ordinary opaque terrain");
+        c.Eq((byte)0, Flags(EnumBlockMaterial.Plant, "leaves-grown-birch-green"),
+            "birch canopy stays solid terrain");
+        c.Eq((byte)0, Flags(EnumBlockMaterial.Plant, "needles-grown-pine-ud"),
+            "pine needles stay solid terrain");
+        c.Eq((byte)0, Flags(EnumBlockMaterial.Plant, "leavesbranchy-grown-oak"),
+            "branchy oak canopy stays solid terrain");
     }
 
     /// <summary>

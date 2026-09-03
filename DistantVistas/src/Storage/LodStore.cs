@@ -23,7 +23,7 @@ public class LodStore : SQLiteDBConnection
     /// Derived parents are disposable. Version changes preserve detailed L0 captures,
     /// remove only compressed parents, and queue L0 to rebuild the pyramid.
     /// </summary>
-    const string DerivedMipVersion = "3";
+    const string DerivedMipVersion = "8"; // v8: solid 1-of-4 keeps cliff/ridge faces (v7 was cave anti-floater)
 
     public override string DBTypeCode => "distantvistas lod cache";
 
@@ -56,14 +56,47 @@ public class LodStore : SQLiteDBConnection
                     ModifiedMs INTEGER NOT NULL,
                     PRIMARY KEY (Detail, SX, SZ)
                 );
-                CREATE INDEX IF NOT EXISTS SectionKeys ON Section (Detail, SX, SZ, ApplyToParent);
                 DROP TABLE IF EXISTS Region;
                 DROP TABLE IF EXISTS Region2;";
             cmd.ExecuteNonQuery();
         }
 
+        AddProvisionalColumn(sqliteConn);
+
+        // After the column exists: the key scan reads Provisional too, and it has to stay
+        // a covering index read (see LoadAllKeys) rather than fall back to a table scan
+        // over hundreds of megabytes of blobs.
+        using (var cmd = sqliteConn.CreateCommand())
+        {
+            cmd.CommandText = @"
+                CREATE INDEX IF NOT EXISTS SectionKeys2 ON Section (Detail, SX, SZ, ApplyToParent, Provisional);
+                DROP INDEX IF EXISTS SectionKeys;";
+            cmd.ExecuteNonQuery();
+        }
+
         PurgeOutdatedData(sqliteConn);
         RebuildOutdatedDerivedMips(sqliteConn);
+    }
+
+    /// <summary>
+    /// 0.7.43: which quadrants of an L0 row are provisional (LodSection.ProvisionalQuadrants).
+    /// Added in place rather than through a format bump, because a bump purges the
+    /// table and this is a bit of bookkeeping beside data that took hours to explore.
+    /// SQLite has no ADD COLUMN IF NOT EXISTS, so the duplicate-column error on every
+    /// later open is the expected outcome and is swallowed.
+    /// </summary>
+    static void AddProvisionalColumn(SqliteConnection sqliteConn)
+    {
+        try
+        {
+            using var cmd = sqliteConn.CreateCommand();
+            cmd.CommandText = "ALTER TABLE Section ADD COLUMN Provisional INTEGER NOT NULL DEFAULT 0";
+            cmd.ExecuteNonQuery();
+        }
+        catch (SqliteException)
+        {
+            // Column already there.
+        }
     }
 
     void PurgeOutdatedData(SqliteConnection sqliteConn)
@@ -153,14 +186,15 @@ public class LodStore : SQLiteDBConnection
 
         upsertCmd = sqliteConn.CreateCommand();
         upsertCmd.CommandText =
-            "INSERT OR REPLACE INTO Section (Detail, SX, SZ, Data, ApplyToParent, ModifiedMs) " +
-            "VALUES (@detail, @sx, @sz, @data, @atp, @ms)";
+            "INSERT OR REPLACE INTO Section (Detail, SX, SZ, Data, ApplyToParent, ModifiedMs, Provisional) " +
+            "VALUES (@detail, @sx, @sz, @data, @atp, @ms, @prov)";
         upsertCmd.Parameters.Add("@detail", SqliteType.Integer);
         upsertCmd.Parameters.Add("@sx", SqliteType.Integer);
         upsertCmd.Parameters.Add("@sz", SqliteType.Integer);
         upsertCmd.Parameters.Add("@data", SqliteType.Blob);
         upsertCmd.Parameters.Add("@atp", SqliteType.Integer);
         upsertCmd.Parameters.Add("@ms", SqliteType.Integer);
+        upsertCmd.Parameters.Add("@prov", SqliteType.Integer);
         upsertCmd.Prepare();
     }
 
@@ -169,7 +203,7 @@ public class LodStore : SQLiteDBConnection
     /// lock, on the storage thread); the lock is held only for the row write, so a
     /// main-thread demand load never waits behind compression.
     /// </summary>
-    public void SaveBlob(int level, int sx, int sz, byte[] data, bool applyToParent)
+    public void SaveBlob(int level, int sx, int sz, byte[] data, bool applyToParent, int provisional = 0)
     {
         if (upsertCmd == null) return;
 
@@ -181,6 +215,7 @@ public class LodStore : SQLiteDBConnection
             upsertCmd.Parameters["@data"].Value = data;
             upsertCmd.Parameters["@atp"].Value = applyToParent ? 1 : 0;
             upsertCmd.Parameters["@ms"].Value = Environment.TickCount64;
+            upsertCmd.Parameters["@prov"].Value = provisional;
             upsertCmd.ExecuteNonQuery();
         }
     }
@@ -207,7 +242,7 @@ public class LodStore : SQLiteDBConnection
             if (loadOneCmd == null)
             {
                 loadOneCmd = sqliteConn.CreateCommand();
-                loadOneCmd.CommandText = "SELECT Data FROM Section WHERE Detail=@detail AND SX=@sx AND SZ=@sz";
+                loadOneCmd.CommandText = "SELECT Data, Provisional FROM Section WHERE Detail=@detail AND SX=@sx AND SZ=@sz";
                 loadOneCmd.Parameters.Add("@detail", SqliteType.Integer);
                 loadOneCmd.Parameters.Add("@sx", SqliteType.Integer);
                 loadOneCmd.Parameters.Add("@sz", SqliteType.Integer);
@@ -218,8 +253,17 @@ public class LodStore : SQLiteDBConnection
             loadOneCmd.Parameters["@sx"].Value = sx;
             loadOneCmd.Parameters["@sz"].Value = sz;
 
-            object? blob = loadOneCmd.ExecuteScalar();
-            if (blob is not byte[] bytes) return null;
+            byte[]? bytes = null;
+            int provisional = 0;
+            using (SqliteDataReader reader = loadOneCmd.ExecuteReader())
+            {
+                if (reader.Read())
+                {
+                    bytes = reader.IsDBNull(0) ? null : (byte[])reader.GetValue(0);
+                    provisional = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
+                }
+            }
+            if (bytes == null) return null;
 
             LodSection? section = Deserialize(bytes, resolveBlockIds ? world : null);
             if (section == null)
@@ -228,7 +272,9 @@ public class LodStore : SQLiteDBConnection
                 // sessions - delete on sight; the area recaptures on exploration.
                 logger.Warning("[DistantVistas] Deleting unreadable cached section L{0} {1},{2}", level, sx, sz);
                 DeleteSection(level, sx, sz);
+                return null;
             }
+            section.ProvisionalQuadrants = (byte)(provisional & 0xF);
             return section;
         }
     }
@@ -386,17 +432,24 @@ public class LodStore : SQLiteDBConnection
     /// The same test against tmpfs shows only 2.1x, so a measurement taken in RAM will
     /// say this does not matter. It does; the cache lives on a disk.
     /// </summary>
-    public int LoadAllKeys(Action<int, int, int, bool> onKey)
+    public int LoadAllKeys(Action<int, int, int, bool> onKey) =>
+        LoadAllKeys((level, sx, sz, applyToParent, _) => onKey(level, sx, sz, applyToParent));
+
+    /// <param name="onKey">(level, sx, sz, applyToParent, provisionalQuadrants)</param>
+    public int LoadAllKeys(Action<int, int, int, bool, int> onKey)
     {
         int count = 0;
         lock (transactionLock)
         {
             using var cmd = sqliteConn.CreateCommand();
-            cmd.CommandText = "SELECT Detail, SX, SZ, ApplyToParent FROM Section";
+            // Provisional is read here too, off the index, because QueueColumn has to
+            // know a cold row is a peek without loading it.
+            cmd.CommandText = "SELECT Detail, SX, SZ, ApplyToParent, Provisional FROM Section";
             using var reader = cmd.ExecuteReader();
             while (reader.Read())
             {
-                onKey(reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3) != 0);
+                onKey(reader.GetInt32(0), reader.GetInt32(1), reader.GetInt32(2), reader.GetInt32(3) != 0,
+                    reader.IsDBNull(4) ? 0 : reader.GetInt32(4));
                 count++;
             }
         }

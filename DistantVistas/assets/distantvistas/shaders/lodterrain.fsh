@@ -13,6 +13,12 @@ in float dist;
 in float fogAmount;
 in float edgeFade;
 in vec3 tint;
+in vec2 localXZ;
+
+// Gap fill: a coarser parent mesh drawn only inside one child footprint that
+// nothing finer covered this frame (minX, minZ, maxX, maxZ in section-local
+// blocks). Whole-section draws pass a rectangle far larger than any section.
+uniform vec4 clipRect;
 
 uniform float fogDensityIn;
 uniform float fogMinIn;
@@ -22,6 +28,7 @@ uniform float disableLodFog;
 uniform vec3 sunPosition;
 uniform vec3 sunColor;
 uniform float dayLight;
+uniform vec3 rgbaAmbientIn;
 
 // Live tint table. The alpha byte carries a tint SLOT plus a blend band:
 //   0..63    opaque,     slot = alpha
@@ -66,7 +73,9 @@ layout(location = 3) out vec4 outGPosition;
 
 void main()
 {
-    if (dist < 0.0 || dist > 1.0) discard;
+    if (dist > 1.0) discard;
+    if (localXZ.x < clipRect.x || localXZ.y < clipRect.y
+        || localXZ.x > clipRect.z || localXZ.y > clipRect.w) discard;
 
     // Flat-shaded facet normal from position derivatives - no normals in the mesh.
     vec3 normal = normalize(cross(dFdx(worldPos.xyz), dFdy(worldPos.xyz)));
@@ -87,6 +96,10 @@ void main()
 
     vec3 albedo = vertexColor.rgb * tint;
     float outAlpha = band == 2 ? THIN_ALPHA : (band == 1 ? WATER_ALPHA : 1.0);
+    // Foam / missing-tex water stores near-white and then looks like ice.
+    // Force a water blue so streams stay streams without a remesh.
+    if (band == 1 && (albedo.r + albedo.g + albedo.b) > 1.65)
+        albedo = vec3(0.18, 0.38, 0.50);
 
     if (!translucent) {
         // Alpine overlay only. Winter valleys leave snowLineY disabled so captured
@@ -104,9 +117,13 @@ void main()
     }
 
     vec4 terraColor = vec4(albedo, outAlpha);
-    terraColor.rgb *= shade * clamp(sunColor * clamp(dayLight, 0.0, 1.0), 0.02, 1.0);
 
-        // Clamp lit albedo so dusk sunColor cannot blow LOD into a saturated orange band.
+    // One clock for the whole horizon: vanilla's live ambient, the same rgbaAmbientIn
+    // chunk shaders feed applyLight. Captured albedo is daytime-bright; this is what
+    // actually goes purple/dark at night. Calendar.SunColor stays sunset orange after
+    // the near ground has already gone dark, which is why far sand was a glowing
+    // yellow band. DisableLodFog only skips extra pastViewHaze, not this.
+    terraColor.rgb *= shade * rgbaAmbientIn;
     terraColor.rgb = clamp(terraColor.rgb, 0.0, 1.0);
 
     // Same applyFog path as vanilla chunks. Skip applySpheresFog (height fog punches

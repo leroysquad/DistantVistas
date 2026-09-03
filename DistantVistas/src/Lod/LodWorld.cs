@@ -74,6 +74,13 @@ public class LodWorld
     /// <summary>L0 keys whose CapturedColumns were inspected (complete or sparse).</summary>
     public readonly HashSet<long> SparseL0Classified = new();
 
+    /// <summary>
+    /// L0 keys with at least one provisional quadrant (LodSection.ProvisionalQuadrants),
+    /// resident or not. QueueColumn consults this for cold keys so a peeked section on
+    /// disk is still re-captured when its real chunk loads, without a demand load to ask.
+    /// </summary>
+    public readonly HashSet<long> ProvisionalL0Keys = new();
+
     /// <summary>Top-level (MaxLevel) ancestor keys - the quadtree roots.</summary>
     public readonly HashSet<long> TopLevelKeys = new();
 
@@ -220,6 +227,8 @@ public class LodWorld
         else SparseL0Keys.Remove(key);
         if (captured > 0 && captured < full) IncompleteL0Keys.Add(key);
         else IncompleteL0Keys.Remove(key);
+        if (section.ProvisionalQuadrants != 0) ProvisionalL0Keys.Add(key);
+        else ProvisionalL0Keys.Remove(key);
     }
 
     /// <summary>
@@ -238,7 +247,7 @@ public class LodWorld
         LastSweepPinned = 0;
         LastSweepCold = 0;
 
-        foreach ((long key, LodSection _) in Sections)
+        foreach ((long key, LodSection section) in Sections)
         {
             LastSweepChecked++;
             int level = KeyLevel(key);
@@ -254,6 +263,14 @@ public class LodWorld
             double dz = Math.Max(0, Math.Max(minZ - camZ, camZ - (minZ + footprint)));
             double dist = Math.Sqrt(dx * dx + dz * dz);
 
+            // Near-trail L0/L1 stay resident so a fast turn does not wait on reload.
+            // Farther visited tiles spill to disk; the renderer disposes their GPU
+            // meshes and reloads from SQLite when the walk comes back.
+            if (level <= 1 && LodCoveragePolicy.IsNearVisitedTrail(dist, ViewDistanceAnchor))
+            {
+                LastSweepPinned++;
+                continue;
+            }
             if (WantedLevelFor(dist) < level + 2) continue;
 
             LastSweepCold++;
@@ -369,11 +386,12 @@ public class LodWorld
     /// from keys alone; section data demand-loads when first needed, so join time
     /// and RAM stay independent of how much was ever explored.
     /// </summary>
-    public void InstallStoredKey(int level, int sx, int sz, bool applyToParent)
+    public void InstallStoredKey(int level, int sx, int sz, bool applyToParent, bool provisional = false)
     {
         long key = SectionKey(level, sx, sz);
         RegisterInTree(key);
         if (applyToParent && level < MaxLevel) MipDirty.Add(key);
+        if (provisional && level == 0) ProvisionalL0Keys.Add(key);
     }
 
     // ---- Mip propagation (child â†’ parent), main thread, budgeted ----
@@ -385,27 +403,41 @@ public class LodWorld
         List<long>? batch = null;
         foreach (long key in MipDirty)
         {
+            // Do not spend the whole budget on children whose decompress is still
+            // in flight. After a derived-mip wipe those waiters are parents that
+            // will come back empty, and the ready L0 behind them never run.
+            if (!Sections.ContainsKey(key) && LoadsInFlight.Contains(key)) continue;
             (batch ??= new List<long>()).Add(key);
             if (batch.Count >= maxSections) break;
         }
-        if (batch == null) return;
+        if (batch == null)
+        {
+            int kicked = 0;
+            foreach (long key in MipDirty)
+            {
+                if (Sections.ContainsKey(key)) continue;
+                EnsureResident(key);
+                if (++kicked >= 8) break;
+            }
+            return;
+        }
 
         foreach (long childKey in batch)
         {
-            // Both sides must be in RAM before the flag may be cleared. Clearing it
-            // while a section is still on disk would drop the propagation on the
-            // floor, so a section awaiting a reload simply stays pending and is
-            // retried on a later tick.
             long parentKey = ParentKey(childKey);
             if (!EnsureResident(childKey)) continue;
-            if (!EnsureResident(parentKey)) continue;
+
+            // GetOrCreate loads a stored parent or makes an empty shell to fill.
+            // EnsureResident here used to async-load a parent that the remip just
+            // deleted, mark it LoadFailed, and leave the child in MipDirty while
+            // the same in-flight keys ate every tick's budget. The land the
+            // children already hold never reached a drawable parent.
+            LodSection parent = GetOrCreateSection(parentKey);
 
             MipDirty.Remove(childKey);
             SaveDirty.Add(childKey); // persist the cleared ApplyToParent flag
 
             if (!Sections.TryGetValue(childKey, out LodSection? child) || child.CapturedColumns == 0) continue;
-
-            LodSection parent = GetOrCreateSection(parentKey);
 
             if (LodMip.DownsampleIntoParent(child, parent, KeySx(childKey) & 1, KeySz(childKey) & 1))
             {
@@ -444,5 +476,9 @@ public class LodWorld
         TopLevelKeys.Clear();
         LoadsInFlight.Clear();
         LoadFailed.Clear();
+        SparseL0Keys.Clear();
+        IncompleteL0Keys.Clear();
+        SparseL0Classified.Clear();
+        ProvisionalL0Keys.Clear();
     }
 }

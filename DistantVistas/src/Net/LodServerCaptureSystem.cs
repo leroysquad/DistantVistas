@@ -236,11 +236,30 @@ public class LodServerCaptureSystem : ModSystem
         pipeline = new LodPipeline(sapi, Mod.Logger, (_, _, _, _) => (0, 0));
         pipeline.Open("ModData/distantvistas", "-server");
 
-        tickListenerId = sapi.Event.RegisterGameTickListener(_ => pipeline!.Tick(), 50);
+        tickListenerId = sapi.Event.RegisterGameTickListener(OnServerPipelineTick, 50);
 
         Mod.Logger.Notification("Server LOD capture active ({0} sections from cache). {1}",
             pipeline.CachedSectionsLoaded, Config.Describe());
         return pipeline;
+    }
+
+    int serverSweepPlayer;
+
+    void OnServerPipelineTick(float dt)
+    {
+        if (pipeline == null || !pipeline.Active) return;
+        pipeline.Tick();
+
+        var players = sapi.World.AllOnlinePlayers;
+        if (players.Length == 0) return;
+        serverSweepPlayer = serverSweepPlayer % players.Length;
+        var pos = players[serverSweepPlayer].Entity.Pos;
+        serverSweepPlayer++;
+        int chunkSize = GlobalConstants.ChunkSize;
+        pipeline.SweepLoadedColumns(
+            (int)Math.Floor(pos.X / chunkSize),
+            (int)Math.Floor(pos.Z / chunkSize),
+            24);
     }
 
     // ---- /vhgen: build the cache around a player, generating what nobody visited ----
