@@ -177,6 +177,7 @@ public class LodTerrainRenderer : IRenderer
     public float EffectiveFarDistance { get; private set; } = 3000;
     float liveViewDistance = 512;
     readonly HashSet<long> loadedMapChunks = new();
+    readonly HashSet<long> readyTerrainColumns = new();
 
     /// <summary>Vanilla view distance this frame, after the server's last-approved cap.</summary>
     public float LiveViewDistance => liveViewDistance;
@@ -665,20 +666,32 @@ public class LodTerrainRenderer : IRenderer
     void RefreshLoadedMapChunks()
     {
         loadedMapChunks.Clear();
+        readyTerrainColumns.Clear();
         int cs = GlobalConstants.ChunkSize;
         if (cs <= 0) return;
         int cx0 = (int)Math.Floor(camPos.X / cs);
         int cz0 = (int)Math.Floor(camPos.Z / cs);
         int rad = Math.Max(4, (int)Math.Ceiling(liveViewDistance / cs) + 2);
         var ba = capi.World.BlockAccessor;
+        int maxCy = Math.Max(0, (ba.MapSizeY / cs) - 1);
         for (int dz = -rad; dz <= rad; dz++)
         {
             for (int dx = -rad; dx <= rad; dx++)
             {
                 int cx = cx0 + dx;
                 int cz = cz0 + dz;
-                if (ba.GetMapChunk(cx, cz) != null)
-                    loadedMapChunks.Add(MapChunkKey(cx, cz));
+                var map = ba.GetMapChunk(cx, cz);
+                if (map == null) continue;
+                loadedMapChunks.Add(MapChunkKey(cx, cz));
+                // Map-chunk is heightmap only. World-chunk at rain height is
+                // the first frame vanilla can actually draw this column.
+                int rain = 0;
+                if (map.RainHeightMap is { Length: > 0 } heights)
+                    rain = heights[heights.Length / 2];
+                int cy = rain <= 0 ? 0 : Math.Clamp(rain / cs, 0, maxCy);
+                var chunk = ba.GetChunk(cx, cy, cz);
+                if (chunk != null && !chunk.Disposed)
+                    readyTerrainColumns.Add(MapChunkKey(cx, cz));
             }
         }
     }
@@ -692,6 +705,17 @@ public class LodTerrainRenderer : IRenderer
             minX, minX + footprint, minZ, minZ + footprint,
             GlobalConstants.ChunkSize,
             (cx, cz) => loadedMapChunks.Contains(MapChunkKey(cx, cz)));
+    }
+
+    bool AllWorldChunksReadyForKey(long key)
+    {
+        int footprint = LodWorld.KeyFootprintBlocks(key);
+        int minX = LodWorld.KeySx(key) * footprint;
+        int minZ = LodWorld.KeySz(key) * footprint;
+        return LodCoveragePolicy.AllMapChunksLoaded(
+            minX, minX + footprint, minZ, minZ + footprint,
+            GlobalConstants.ChunkSize,
+            (cx, cz) => readyTerrainColumns.Contains(MapChunkKey(cx, cz)));
     }
 
     bool FarthestXzInsideViewDistance(long key, double radius)
@@ -719,8 +743,10 @@ public class LodTerrainRenderer : IRenderer
             : FarthestXzInsideViewDistance(key, hideRadius);
         // Every map-chunk covering this tile must be present. One of four
         // left plates on the loaded trees; zero of four is grow-VD / walk-away.
+        // World-chunks too: map-chunk-only is not-yet-drawn sky.
         bool allLoaded = AllMapChunksLoadedForKey(key);
-        return LodCoveragePolicy.VanillaOwnsFootprint(inside3d, allLoaded);
+        bool worldReady = AllWorldChunksReadyForKey(key);
+        return LodCoveragePolicy.VanillaOwnsFootprint(inside3d, allLoaded, worldReady);
     }
 
     bool ChildHasVisitedSurface(long key)
@@ -867,7 +893,10 @@ public class LodTerrainRenderer : IRenderer
             else if (!insideVanilla && level <= wanted + 1
                      && nearDist < liveViewDistance + LodSection.SectionBlocks * 4)
                 RequestMesh(key);
-            else if (insideVanilla && level == 0 && nearDist > vanillaCoverageRadius * 0.65)
+            else if (insideVanilla && level == 0)
+                RequestMesh(key);
+            else if (hasData && LodCoveragePolicy.KeepVisitedSurface(level, true)
+                     && LodCoveragePolicy.IsNearVisitedTrail(nearDist, liveViewDistance))
                 RequestMesh(key);
         }
 
@@ -970,6 +999,9 @@ public class LodTerrainRenderer : IRenderer
                 anyChildDrew |= FlushDeferredTooFine(deferredStart);
                 if (gaps.Count > gapStart)
                 {
+                    // Captured L0/L1 is already the real land. Remesh that.
+                    // Do not paint a coarse parent over it (weird low-poly tile).
+                    RequestVisitedKeepGaps(gapStart);
                     if (LodCoveragePolicy.MayFillGapWithParent(level, hasMesh, insideVanilla,
                             gapTouchesVanilla: false))
                     {
@@ -1091,6 +1123,24 @@ public class LodTerrainRenderer : IRenderer
     /// ancestor up the recursion that holds a mesh paints it (FillGaps).
     /// </summary>
     void AddGap(long key) => gaps.Add(key);
+
+    /// <summary>
+    /// Gaps that already have captured L0/L1 data remesh at that quality.
+    /// Pull them out of the parent-fill list so a coarse mip cannot replace
+    /// land the player already walked.
+    /// </summary>
+    void RequestVisitedKeepGaps(int start)
+    {
+        for (int i = gaps.Count - 1; i >= start; i--)
+        {
+            long gap = gaps[i];
+            int level = LodWorld.KeyLevel(gap);
+            if (!LodCoveragePolicy.KeepVisitedSurface(level, world.HasDataSet.Contains(gap)))
+                continue;
+            RequestMesh(gap);
+            gaps.RemoveAt(i);
+        }
+    }
 
     void DiscardGaps(int start)
     {
@@ -2134,7 +2184,7 @@ public class LodTerrainRenderer : IRenderer
 
         prog.Uniform("viewDistance", viewDistance);
         prog.Uniform("overdrawStart", GameMath.Clamp(OverdrawStart, 0.15f, 0.95f));
-        prog.Uniform("lookDown", lookDown01);
+        prog.Uniform("lookDown", LodCoveragePolicy.LookDownSteepAmount(lookDown01));
         prog.Uniform("farViewDistance", EffectiveFarDistance);
         prog.Uniform("skyFadeStart", SkyFadeStart);
         prog.Uniform("pastViewHaze", DisableLodFog ? 0f : PastViewHaze);

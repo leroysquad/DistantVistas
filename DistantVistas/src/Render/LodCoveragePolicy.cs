@@ -105,10 +105,13 @@ public static class LodCoveragePolicy
         // tile you are standing on. That drew LOD on loaded ice and the two
         // meshes flickered. Only uncover when the camera is high enough that
         // vanilla often dropped that column; at your feet the 3D sphere wins.
+        // Mild pitch still has skyline in frame (0.55 is ~33 deg). Do not
+        // shrink until LookDownSteepAmount, same gate as coarse fill.
         double aboveSurface = Math.Max(0, cameraY - surfaceYMax);
-        if (aboveSurface >= radius * 0.45)
+        float steep = LookDownSteepAmount(lookDown01);
+        if (aboveSurface >= radius * 0.45 && steep > 0)
         {
-            double scale = 1.0 - lookDown01;
+            double scale = 1.0 - steep;
             groundReachSq *= scale * scale;
         }
         return horizontalDistanceSq < groundReachSq;
@@ -136,13 +139,16 @@ public static class LodCoveragePolicy
     }
 
     /// <summary>
-    /// Hand the tile to vanilla when the whole AABB is inside view distance
-    /// and every map-chunk covering it is loaded. A geometric circle alone
-    /// punches sky when you raise VD before the columns arrive.
+    /// Hand the tile to vanilla when the whole AABB is inside view distance,
+    /// every map-chunk covering it is loaded, and every column has a live
+    /// world-chunk. Map-chunks arrive first (heightmap only). Yielding on
+    /// those alone hides LOD before vanilla has terrain, then walk-away is
+    /// sky if capture also missed.
     /// </summary>
     public static bool VanillaOwnsFootprint(
-        bool entireAabbInsideVanilla3D, bool allMapChunksLoaded) =>
-        entireAabbInsideVanilla3D && allMapChunksLoaded;
+        bool entireAabbInsideVanilla3D, bool allMapChunksLoaded,
+        bool worldChunksReady = true) =>
+        entireAabbInsideVanilla3D && allMapChunksLoaded && worldChunksReady;
 
     /// <summary>
     /// At least one vanilla map-chunk covering this block AABB is present.
@@ -316,13 +322,15 @@ public static class LodCoveragePolicy
     /// ring even when WantedLevel wants something coarser. Far visited land
     /// meshes at the wanted rung instead; the keep-circle still holds meshes
     /// we already uploaded. Intervening land in the lead cone is the exception:
-    /// it is requested however far out it sits.
+    /// it is requested however far out it sits. Yielding the DRAW to vanilla
+    /// does not skip this request: the mesh has to exist before you leave or
+    /// the tile is sky.
     /// </summary>
     public static bool RequestVisitedKeepMesh(
         int level, bool hasMesh, bool hasData, bool insideVanilla,
         double distance, double viewDistanceAnchor,
         bool inLeadCone = false, bool fartherLoaded = false) =>
-        !hasMesh && !insideVanilla && KeepVisitedSurface(level, hasData)
+        !hasMesh && KeepVisitedSurface(level, hasData)
         && (IsDrawFullDetail(distance, viewDistanceAnchor)
             || MustCoverIntervening(level, hasData, inLeadCone, fartherLoaded));
 
@@ -359,12 +367,24 @@ public static class LodCoveragePolicy
 
     /// <summary>
     /// Pitch below the horizon (LookDownAmount) at which the lead cone is
-    /// the ground, not the skyline. Horizon bans L2+ so a 256-block shelf
-    /// does not sit on the hills; looking down that same ban left 64x64
-    /// sky squares wherever an L0 was incomplete or unmeshed. At or above
-    /// this pitch, a parent mesh is coverage.
+    /// the ground, not the skyline. 0.55 is ~33 deg and still leaves a strip
+    /// of sky in frame, so hills in front turned into blocks. 0.92 is ~67 deg:
+    /// skyline is gone on a typical FOV. At or above this pitch, a parent mesh
+    /// is coverage and those squares sit off the monitor.
     /// </summary>
-    public const float LookDownCoarseFill = 0.55f;
+    public const float LookDownCoarseFill = 0.92f;
+
+    /// <summary>
+    /// 0 until LookDownCoarseFill, 1 looking straight down. Skip-disc shrink
+    /// and the shader near-sink use this so a skyline pan does not already
+    /// drop to cubes.
+    /// </summary>
+    public static float LookDownSteepAmount(double lookDown01)
+    {
+        lookDown01 = Math.Clamp(lookDown01, 0, 1);
+        if (lookDown01 <= LookDownCoarseFill) return 0f;
+        return (float)((lookDown01 - LookDownCoarseFill) / (1.0 - LookDownCoarseFill));
+    }
 
     /// <summary>
     /// True when the lead-cone shelf ban still applies. Looking down is
