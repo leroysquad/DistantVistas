@@ -13,9 +13,17 @@ public static class LodBlockPolicy
 {
     public static byte FlagsFor(Block block)
     {
-        if (block.BlockMaterial is EnumBlockMaterial.Water or EnumBlockMaterial.Lava or EnumBlockMaterial.Ice)
+        if (block.BlockMaterial is EnumBlockMaterial.Water or EnumBlockMaterial.Lava)
         {
             return LodPaletteEntry.FlagWater;
+        }
+
+        // Frozen lakes stay a water surface. Glacier / packed ice is opaque
+        // ice, not a see-through lake; drawing it as water plus a grass
+        // climate slot painted high ridges as green ice caps.
+        if (block.BlockMaterial == EnumBlockMaterial.Ice)
+        {
+            return IsLakeIce(block) ? LodPaletteEntry.FlagWater : (byte)0;
         }
 
         // Sparse, mostly-transparent ground cover. As solid LOD cubes these come out as
@@ -35,6 +43,31 @@ public static class LodBlockPolicy
         }
 
         return 0;
+    }
+
+    /// <summary>
+    /// Snow and ice already carry their colour in the atlas. A climate slot
+    /// on those blocks multiplies valley grass onto white/cyan albedo.
+    /// </summary>
+    public static bool IsClimateUntinted(Block block)
+    {
+        if (block.BlockMaterial == EnumBlockMaterial.Ice) return true;
+        string? path = block.Code?.Path;
+        if (path == null) return false;
+        return path.StartsWith("snow", StringComparison.Ordinal)
+            || path.StartsWith("glacier", StringComparison.Ordinal)
+            || path.StartsWith("lakeice", StringComparison.Ordinal)
+            || path.Contains("glacierice", StringComparison.Ordinal)
+            || path.Contains("glacialice", StringComparison.Ordinal)
+            || path.Contains("packedice", StringComparison.Ordinal);
+    }
+
+    static bool IsLakeIce(Block block)
+    {
+        string? path = block.Code?.Path;
+        if (path == null) return true;
+        return path.Contains("lakeice", StringComparison.Ordinal)
+            || path.StartsWith("lake", StringComparison.Ordinal);
     }
 
     static readonly string[] ThinGroundCoverPrefixes = { "flower", "fern", "tallfern" };

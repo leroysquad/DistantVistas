@@ -29,6 +29,8 @@ Story can download it for joining players.
 - **Live seasonal colour**. Grass and foliage follow the game's own climate and season
   maps. The mod derives a snow line from the local temperature lapse rate. So the far
   terrain changes with the seasons. It does not keep the colours it had at capture time.
+- **Visited land stays drawn.** Backing away does not punch sky rectangles through hills
+  you already walked, and new ground you generate is still there when you leave.
 - **Persistent per-world cache** that grows as you play. Join time and memory use do not
   depend on the size of the explored area.
 
@@ -70,6 +72,12 @@ startup, before a world exists. If you switch the other mod off while you play, 
 changes until the next start.
 
 `.vhinfo` names the mod that this one defers to.
+
+**Komet** is not in that list on purpose. It is a client Harmony patch of vanilla's
+visibility sweep, occlusion, and chunk loading. It does not draw distant terrain, so
+this mod still draws when Komet is installed. It can help frame rate at high vanilla
+view distance and close vanilla chunk-border holes while chunks stream in. It does not
+fill Distant Vistas holes at the view-distance ring, and it does not paint snow.
 
 Two server commands exist as well (`/`, not `.`). They need the controlserver
 privilege, which every singleplayer host has:

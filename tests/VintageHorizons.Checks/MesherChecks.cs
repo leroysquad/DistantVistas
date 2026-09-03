@@ -22,6 +22,50 @@ public static class MesherChecks
         CoverageRules(c);
         MissingNeighbourDoesNotBecomeCliff(c);
         UncapturedColumnDoesNotBecomeCliff(c);
+        AntiFloaterSkipsPlantScrapsOnly(c);
+        SkipFlagIsNotGeometry(c);
+    }
+
+    static void SkipFlagIsNotGeometry(Check c)
+    {
+        var s = new LodSection();
+        int skip = s.FindOrAddPaletteEntry(blockId: 3, color: 0x0040C040, flags: LodPaletteEntry.FlagSkip);
+        int soil = s.FindOrAddPaletteEntry(blockId: 1, color: 0x00305070, flags: 0);
+        s.SetColumn(LodSection.ColumnIndex(5, 5),
+            new[] { LodSection.PackRun(skip, 40, 20), LodSection.PackRun(soil, 10, 0) });
+        MeshResult mesh = LodMesher.BuildMesh(Fixtures.Job(s));
+        c.Eq(0, QuadsOnPlane(mesh.Xyz, mesh.VertexCount, axis: 1, value: 40f),
+            "FlagSkip canopy is not meshed");
+        c.True(QuadsOnPlane(mesh.Xyz, mesh.VertexCount, axis: 1, value: 10f) > 0,
+            "the soil under a skipped canopy still meshes");
+    }
+
+    /// <summary>
+    /// The mid-far anti-floater exists for leaf pixels the mip left hanging. A short
+    /// untinted run with air under it is the ceiling of a cave, i.e. the bottom of the
+    /// terrain above it, and must be drawn at every level.
+    /// </summary>
+    static void AntiFloaterSkipsPlantScrapsOnly(Check c)
+    {
+        long l1 = LodWorld.SectionKey(1, 0, 0);
+
+        var soilRoof = new LodSection();
+        int soil = soilRoof.FindOrAddPaletteEntry(blockId: 1, color: 0x00305070, flags: 0);
+        int rock = soilRoof.FindOrAddPaletteEntry(blockId: 2, color: 0x00707070, flags: 0);
+        soilRoof.SetColumn(LodSection.ColumnIndex(5, 5),
+            new[] { LodSection.PackRun(soil, 60, 59), LodSection.PackRun(rock, 50, 1) });
+        MeshResult roof = LodMesher.BuildMesh(Fixtures.Job(soilRoof, l1));
+        c.Eq(1, QuadsOnPlane(roof.Xyz, roof.VertexCount, axis: 1, value: 60f),
+            "a one-block soil run over a cave keeps its top at L1");
+
+        var leafScrap = new LodSection();
+        int leaves = leafScrap.FindOrAddPaletteEntry(blockId: 3, color: 0x00407040, flags: 0, tintSlot: 5);
+        int rock2 = leafScrap.FindOrAddPaletteEntry(blockId: 2, color: 0x00707070, flags: 0);
+        leafScrap.SetColumn(LodSection.ColumnIndex(5, 5),
+            new[] { LodSection.PackRun(leaves, 60, 59), LodSection.PackRun(rock2, 50, 1) });
+        MeshResult scrap = LodMesher.BuildMesh(Fixtures.Job(leafScrap, l1));
+        c.Eq(0, QuadsOnPlane(scrap.Xyz, scrap.VertexCount, axis: 1, value: 60f),
+            "a one-block leaf scrap floating over the ground is still skipped at L1");
     }
 
     static void Empty(Check c)
@@ -161,6 +205,22 @@ public static class MesherChecks
             "a slot at the limit falls back to no tint");
         c.Eq((byte)LodTintRegistry.SlotNone,
             AlphaOf(Column(flags: 0, tintSlot: 255)), "a wildly out-of-range slot falls back to no tint");
+
+        c.Eq((byte)LodTintRegistry.SlotNone,
+            AlphaOf(Column(flags: 0, tintSlot: 5, color: unchecked((int)0x00E8E8E8))),
+            "bright snow albedo drops a stored grass slot on remesh");
+        int glacier = 170 | (200 << 8) | (220 << 16);
+        c.Eq((byte)LodTintRegistry.SlotNone,
+            AlphaOf(Column(flags: 0, tintSlot: 5, color: glacier)),
+            "glacier-ice albedo drops a stored grass slot on remesh");
+        c.Eq((byte)(LodTintRegistry.MaxSlots + 5),
+            AlphaOf(Column(LodPaletteEntry.FlagWater, tintSlot: 5, color: unchecked((int)0x00E8E8E8))),
+            "foam-white water keeps the water band and its tint slot");
+        c.Eq(LodPaletteRepair.WaterFallbackColor,
+            LodPaletteRepair.WaterDrawColor(unchecked((int)0x00FCFCFC)),
+            "missing-tex water is forced to lake blue");
+        c.Eq((byte)5, AlphaOf(Column(flags: 0, tintSlot: 5)),
+            "ordinary grey-green tops keep the climate slot");
     }
 
     static void WaterIsASeparatePass(Check c)
@@ -317,10 +377,10 @@ public static class MesherChecks
     }
 
     /// <summary>A section with exactly one captured column.</summary>
-    static LodSection Column(byte flags = 0, byte tintSlot = 0, int yTop = 10, int yBottom = 0)
+    static LodSection Column(byte flags = 0, byte tintSlot = 0, int yTop = 10, int yBottom = 0, int color = 0x00A0B0C0)
     {
         var s = new LodSection();
-        s.FindOrAddPaletteEntry(blockId: 1, color: 0x00A0B0C0, flags: flags, tintSlot: tintSlot);
+        s.FindOrAddPaletteEntry(blockId: 1, color: color, flags: flags, tintSlot: tintSlot);
         s.SetColumn(LodSection.ColumnIndex(5, 5), new[] { LodSection.PackRun(0, yTop, yBottom) });
         return s;
     }

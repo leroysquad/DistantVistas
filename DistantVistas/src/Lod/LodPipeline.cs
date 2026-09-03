@@ -35,14 +35,36 @@ public delegate byte LodTintSlotResolver(Block block);
 /// </summary>
 public class LodPipeline
 {
-    const int CaptureSchedulesPerTick = 1;
+    // Scheduling only hands chunk references to the capture thread, so it is cheap and
+    // runs ahead; the worker backlog is the real throttle on capture work in flight.
+    const int CaptureSchedulesPerTick = 8;
+    const int MaxWorkerCaptureBacklog = 32;
+
+    /// <summary>
+    /// Applies per tick: one when idle, more while results are stacked up, always
+    /// under a time budget. One per tick was 20 columns a second, and a creative
+    /// flight at max view distance streams three to four times that: the excess sat
+    /// in the queue until the chunk unloaded, and was then dropped at schedule time.
+    /// </summary>
     const int CaptureAppliesPerTick = 1;
-    const int PropagationsPerTick = 1;
-    const int CatchUpPropagationsPerTick = 32;
-    const int CatchUpPropagationThreshold = 128;
+    const int CaptureAppliesPerTickBusy = 8;
+    const double CaptureApplyBudgetMs = 4.0;
+    const int CaptureBusyThreshold = 4;
+
+    const int PropagationsPerTick = 4;
+    const int CatchUpPropagationsPerTick = 48;
+    const int CatchUpPropagationThreshold = 16;
     const int SectionSavesPerTick = 2;
-    const int MaxWorkerCaptureBacklog = 8;
     const int ChunkSize = GlobalConstants.ChunkSize;
+
+    /// <summary>
+    /// Ceiling on columns waiting for capture. Memory only: an entry is one long. The
+    /// old ceiling of 200 silently dropped every ChunkDirty past it, and nothing ever
+    /// fired again for those columns while the chunk stayed loaded, so a fast flight
+    /// over new land left a scatter of never-captured 32x32 quadrants that drew as sky
+    /// squares once vanilla unloaded them. Anything that still hits this is counted.
+    /// </summary>
+    const int MaxPendingColumns = 16384;
 
     /// <summary>
     /// Queued snapshots hold copies of their section's run data, so an unbounded queue
@@ -92,6 +114,16 @@ public class LodPipeline
     public int CachedSectionsLoaded { get; private set; }
     public int ColumnsCaptured { get; private set; }
     public int PendingColumns => pendingColumns.Count;
+
+    /// <summary>Columns refused by QueueColumn because MaxPendingColumns was reached. Zero is the norm.</summary>
+    public int ColumnsDropped => columnsDropped;
+    int columnsDropped;
+
+    /// <summary>Columns the loaded-chunk sweep found uncaptured and re-queued.</summary>
+    public int ColumnsSwept { get; private set; }
+
+    /// <summary>Quadrants whose provisional (peeked / foreign) data a local capture replaced.</summary>
+    public int ProvisionalQuadrantsConfirmed { get; private set; }
     public string? DbPath { get; private set; }
 
     // Main-thread storage cost, measured to decide whether moving SQLite work to a
@@ -128,17 +160,34 @@ public class LodPipeline
     /// <summary>Note a chunk column as needing (re)capture. Safe from any thread.</summary>
     public void QueueColumn(int cx, int cz)
     {
-        // Cap pending hard. At max view distance vanilla streams hundreds of columns;
-        // capturing every one allocates and tanks singleplayer FPS.
-        if (pendingColumns.Count >= 200) return;
+        if (!NeedsCapture(cx, cz)) return;
 
-        // A level-0 section spans 2x2 vanilla chunks (64 blocks). Skipping whenever the
-        // SECTION key is in HasDataSet after the first chunk lands left the other three
-        // quadrants empty forever — median CapturedColumns=1024 on live caches, which
-        // draws as a regular 32-block checkerboard of cliffs into void. Skip only when
-        // THIS chunk's quadrant is already captured. Cold (non-resident) HasDataSet keys
-        // still skip to avoid ChunkDirty GC thrash; once the renderer residencies a
-        // partial section, the next dirty event fills missing quadrants.
+        if (pendingColumns.Count >= MaxPendingColumns)
+        {
+            Interlocked.Increment(ref columnsDropped);
+            return;
+        }
+
+        long key = ((long)cz << 32) | (uint)cx;
+        if (queuedColumns.TryAdd(key, 0)) pendingColumns.Enqueue(key);
+    }
+
+    /// <summary>
+    /// Whether a loaded chunk column has anything to teach the cache. Safe from any thread.
+    ///
+    /// A level-0 section spans 2x2 vanilla chunks (64 blocks). Skipping whenever the
+    /// SECTION key is in HasDataSet after the first chunk lands left the other three
+    /// quadrants empty forever — median CapturedColumns=1024 on live caches, which
+    /// draws as a regular 32-block checkerboard of cliffs into void. Skip only when
+    /// THIS chunk's quadrant is already captured by this side. A quadrant that is
+    /// captured but provisional (peek, sweep, another player) is still work: the loaded
+    /// chunk is the real terrain and replaces it. Cold (non-resident) HasDataSet keys
+    /// skip to avoid ChunkDirty GC thrash unless they are known sparse, incomplete or
+    /// provisional; once the renderer residencies a partial section, the next dirty
+    /// event or sweep fills missing quadrants.
+    /// </summary>
+    public bool NeedsCapture(int cx, int cz)
+    {
         int sb = LodSection.SectionBlocks;
         int sx = (cx * ChunkSize) / sb;
         int sz = (cz * ChunkSize) / sb;
@@ -147,22 +196,83 @@ public class LodPipeline
         {
             int colOx = ((cx * ChunkSize) % sb) / LodSection.ColumnStepBlocks;
             int colOz = ((cz * ChunkSize) % sb) / LodSection.ColumnStepBlocks;
-            if (sec.Captured[LodSection.ColumnIndex(colOx, colOz)]) return;
+            int q = LodSection.QuadrantOf(colOx, colOz);
+            if (sec.QuadrantFullyCaptured(q) && !sec.IsProvisionalQuadrant(q))
+                return false;
             // Track sparse pre-0.7.7 one-quadrant sections so cold skips stay open.
             World.ClassifySparseL0(sectionKey, sec);
+            return true;
         }
-        else if (World.HasDataSet.Contains(sectionKey))
+
+        if (World.HasDataSet.Contains(sectionKey))
         {
             // Pre-0.7.7 caches often stored only 1/4 of an L0 section. Skipping every
             // cold HasDataSet key froze those holes forever. Allow re-queue when marked
             // sparse (or unknown — demand-load will classify on first resident hit).
-            if (!World.SparseL0Keys.Contains(sectionKey) && World.SparseL0Classified.Contains(sectionKey))
-                return;
-            // Fall through to enqueue; GetOrCreateSection loads the row and fills gaps.
+            // Any incomplete L0 (2 or 3 of 4 quadrants) re-queues for the same
+            // reason: the renderer never draws it alone, so a walk-away mid-capture
+            // that spilled to disk stayed a sky square on every later visit.
+            bool classified = World.SparseL0Classified.Contains(sectionKey);
+            bool needsFill = World.SparseL0Keys.Contains(sectionKey)
+                || World.IncompleteL0Keys.Contains(sectionKey)
+                || World.ProvisionalL0Keys.Contains(sectionKey);
+            return !classified || needsFill;
+            // Enqueue falls through; GetOrCreateSection loads the row and fills gaps.
         }
 
-        long key = ((long)cz << 32) | (uint)cx;
-        if (queuedColumns.TryAdd(key, 0)) pendingColumns.Enqueue(key);
+        return true;
+    }
+
+    // ---- Loaded-chunk sweep ----
+
+    int sweepRow = int.MinValue;
+    int sweepRadius;
+
+    /// <summary>
+    /// Re-queue loaded chunk columns whose L0 quadrant is not captured (or only
+    /// provisionally). ChunkDirty is the primary feed, but it fires once per chunk
+    /// arrival: a column lost between that event and its capture - queue full, chunk
+    /// stack not complete yet so Capture skipped it, chunk disposed mid-read - stayed
+    /// uncaptured for as long as it stayed loaded, because nothing fired again. It only
+    /// came back as sky after vanilla unloaded it, and the next visit repeated the race.
+    ///
+    /// One row of the square per call, so a 55x55 chunk square (view distance 832)
+    /// costs 55 map-chunk lookups a tick and covers the whole disc in under 3 seconds.
+    /// Main thread only: it reads the loaded chunk list.
+    /// </summary>
+    public void SweepLoadedColumns(int centreCx, int centreCz, int radiusChunks)
+    {
+        if (!Active || radiusChunks <= 0) return;
+
+        if (sweepRow == int.MinValue || sweepRow > radiusChunks || sweepRadius != radiusChunks)
+        {
+            sweepRow = -radiusChunks;
+            sweepRadius = radiusChunks;
+        }
+
+        int cz = centreCz + sweepRow;
+        if (cz >= 0)
+        {
+            for (int dx = -radiusChunks; dx <= radiusChunks; dx++)
+            {
+                int cx = centreCx + dx;
+                if (cx < 0) continue;
+                // Cheap DV-side test first; the engine lookup only for columns we want.
+                if (!NeedsCapture(cx, cz)) continue;
+                long key = ((long)cz << 32) | (uint)cx;
+                if (queuedColumns.ContainsKey(key)) continue;
+                if (api.World.BlockAccessor.GetMapChunk(cx, cz) == null) continue;
+                if (pendingColumns.Count >= MaxPendingColumns) return;
+                if (queuedColumns.TryAdd(key, 0))
+                {
+                    pendingColumns.Enqueue(key);
+                    ColumnsSwept++;
+                }
+            }
+        }
+
+        sweepRow++;
+        if (sweepRow > radiusChunks) sweepRow = -radiusChunks;
     }
 
     /// <summary>
@@ -192,6 +302,7 @@ public class LodPipeline
             Cz = cz,
             Chunks = refs,
             RainMap = (ushort[])rainMap.Clone(),
+            Provisional = true, // PeekChunkColumn stops at Terrain; trees are not in this yet.
         });
         return true;
     }
@@ -268,10 +379,10 @@ public class LodPipeline
             if (ms > LoadMsMax) LoadMsMax = ms;
             return loaded;
         };
-        CachedSectionsLoaded = store.LoadAllKeys((level, sx, sz, applyToParent) =>
+        CachedSectionsLoaded = store.LoadAllKeys((level, sx, sz, applyToParent, provisional) =>
         {
             Remote.AddLocalKey(LodWorld.SectionKey(level, sx, sz));
-            World.InstallStoredKey(level, sx, sz, applyToParent);
+            World.InstallStoredKey(level, sx, sz, applyToParent, provisional != 0);
         });
         Active = true;
         logger.Notification("LOD cache: {0}", dbPath);
@@ -302,6 +413,11 @@ public class LodPipeline
         // before anything can draw the section.
         recolor?.Invoke(section);
         section.RemoveRunsWithFlag(LodPaletteEntry.FlagSkip);
+
+        // Not observed by this side. A peek stops at the Terrain pass (no trees, no
+        // ponds) and a sweep or another player's capture can predate edits; the chunk
+        // the player actually loads is the truth and re-captures over this.
+        if (LodWorld.KeyLevel(key) == 0) section.MarkCapturedQuadrantsProvisional();
 
         World.InstallLoaded(key, section);
         // Persist it: re-fetching a mean 45.9 KB a section every session is not an option,
@@ -403,11 +519,11 @@ public class LodPipeline
 
     void ScheduleCaptures()
     {
-        if (Worker.PendingCaptures >= MaxWorkerCaptureBacklog) return;
-
         int chunkYCount = api.World.BlockAccessor.MapSizeY / ChunkSize;
 
-        for (int n = 0; n < CaptureSchedulesPerTick && pendingColumns.TryDequeue(out long key); n++)
+        for (int n = 0; n < CaptureSchedulesPerTick
+             && Worker.PendingCaptures < MaxWorkerCaptureBacklog
+             && pendingColumns.TryDequeue(out long key); n++)
         {
             queuedColumns.TryRemove(key, out _);
             int cx = (int)(key & 0xFFFFFFFF);
@@ -444,9 +560,17 @@ public class LodPipeline
 
     const int MaxDeferredCaptures = 64;
 
+    readonly System.Diagnostics.Stopwatch applyClock = new();
+
     void ApplyCaptureResults()
     {
-        int budget = CaptureAppliesPerTick;
+        // Idle: one a tick, as always. Backed up: several, until the time budget is
+        // spent. The clock is checked between applies, so the floor of one stands even
+        // when a single apply overruns; a result is never split.
+        bool busy = Worker.CaptureResults.Count >= CaptureBusyThreshold || deferredCaptures.Count > 0;
+        int budget = busy ? CaptureAppliesPerTickBusy : CaptureAppliesPerTick;
+        int applied = 0;
+        applyClock.Restart();
 
         // Results waiting on a reload get first refusal, so a section that has come back
         // is merged before anything newer touches it.
@@ -456,10 +580,18 @@ public class LodPipeline
             ApplyOneCaptureResult(deferredCaptures[i]);
             deferredCaptures.RemoveAt(i);
             budget--;
+            applied++;
+            if (applyClock.Elapsed.TotalMilliseconds > CaptureApplyBudgetMs) return;
         }
 
-        while (budget-- > 0 && Worker.CaptureResults.TryDequeue(out CaptureResult? result))
+        while (budget-- > 0)
         {
+            // Checked before the dequeue, so an over-budget result stays in the worker's
+            // queue in order rather than being pulled out and parked ahead of older ones.
+            if (applied > 0 && applyClock.Elapsed.TotalMilliseconds > CaptureApplyBudgetMs) return;
+            if (!Worker.CaptureResults.TryDequeue(out CaptureResult? result)) return;
+            applied++;
+
             // An evicted section has to come back from disk before capture may merge into
             // it, or the merge writes into an empty section that then overwrites the
             // stored row. That was solved for mip propagation and not here, so this path
@@ -526,7 +658,40 @@ public class LodPipeline
         }
 
         ColumnsCaptured++;
-        if (section.ReplaceColumns(batch))
+
+        int sb = LodSection.SectionBlocks;
+        int colOx = ((result.Cx * ChunkSize) % sb) / LodSection.ColumnStepBlocks;
+        int colOz = ((result.Cz * ChunkSize) % sb) / LodSection.ColumnStepBlocks;
+        int quadrant = LodSection.QuadrantOf(colOx, colOz);
+
+        if (result.Provisional)
+        {
+            // A peek must not replace a column this side already observed for real.
+            int probe = LodSection.ColumnIndex(colOx, colOz);
+            if (section.Captured[probe] && !section.IsProvisionalQuadrant(quadrant))
+                return;
+        }
+
+        bool changed = section.ReplaceColumns(batch);
+
+        if (result.Provisional)
+        {
+            byte mask = (byte)(1 << quadrant);
+            if ((section.ProvisionalQuadrants & mask) == 0)
+            {
+                section.ProvisionalQuadrants |= mask;
+                changed = true;
+            }
+        }
+        else if (section.ClearProvisional(quadrant))
+        {
+            // This side saw the real chunk: a peek or a foreign cache is superseded,
+            // even when the columns came out identical.
+            ProvisionalQuadrantsConfirmed++;
+            changed = true;
+        }
+
+        if (changed)
         {
             World.ClassifySparseL0(result.SectionKey, section);
             World.MarkChanged(result.SectionKey);
@@ -626,6 +791,10 @@ public class LodPipeline
         World.Clear();
         CachedSectionsLoaded = 0;
         ColumnsCaptured = 0;
+        ColumnsSwept = 0;
+        ProvisionalQuadrantsConfirmed = 0;
+        columnsDropped = 0;
+        sweepRow = int.MinValue;
         DbPath = null;
     }
 

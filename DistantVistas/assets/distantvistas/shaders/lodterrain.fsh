@@ -13,6 +13,12 @@ in float dist;
 in float fogAmount;
 in float edgeFade;
 in vec3 tint;
+in vec2 localXZ;
+
+// Gap fill: a coarser parent mesh drawn only inside one child footprint that
+// nothing finer covered this frame (minX, minZ, maxX, maxZ in section-local
+// blocks). Whole-section draws pass a rectangle far larger than any section.
+uniform vec4 clipRect;
 
 uniform float fogDensityIn;
 uniform float fogMinIn;
@@ -67,7 +73,9 @@ layout(location = 3) out vec4 outGPosition;
 
 void main()
 {
-    if (dist < 0.0 || dist > 1.0) discard;
+    if (dist > 1.0) discard;
+    if (localXZ.x < clipRect.x || localXZ.y < clipRect.y
+        || localXZ.x > clipRect.z || localXZ.y > clipRect.w) discard;
 
     // Flat-shaded facet normal from position derivatives - no normals in the mesh.
     vec3 normal = normalize(cross(dFdx(worldPos.xyz), dFdy(worldPos.xyz)));
@@ -88,6 +96,10 @@ void main()
 
     vec3 albedo = vertexColor.rgb * tint;
     float outAlpha = band == 2 ? THIN_ALPHA : (band == 1 ? WATER_ALPHA : 1.0);
+    // Foam / missing-tex water stores near-white and then looks like ice.
+    // Force a water blue so streams stay streams without a remesh.
+    if (band == 1 && (albedo.r + albedo.g + albedo.b) > 1.65)
+        albedo = vec3(0.18, 0.38, 0.50);
 
     if (!translucent) {
         // Alpine overlay only. Winter valleys leave snowLineY disabled so captured

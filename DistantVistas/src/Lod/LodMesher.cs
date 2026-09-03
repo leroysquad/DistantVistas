@@ -38,12 +38,17 @@ public static class LodMesher
     static byte AlphaFor(byte paletteFlags, byte tintSlot, int color)
     {
         byte slot = tintSlot < LodTintRegistry.MaxSlots ? tintSlot : (byte)LodTintRegistry.SlotNone;
-        // Skip live tint only for stored colours that are already brown earth.
-        // Greyscale and dull-olive grass MUST keep the climate slot or far LOD
-        // stays the raw atlas grey. White caps are handled by not sampling the
-        // snow row, not by stripping tint off every mid-luma top.
-        if (LodPaletteRepair.IsRockLikeAlbedo(color)) slot = (byte)LodTintRegistry.SlotNone;
-        if ((paletteFlags & LodPaletteEntry.FlagWater) != 0) return (byte)(WaterBase + slot);
+        // Skip live tint for stored colours that are already brown earth, or
+        // snow/ice that would turn green if a grass high-tint were multiplied
+        // on. Greyscale and dull-olive grass MUST keep the climate slot or far
+        // LOD stays the raw atlas grey. Remesh-only: old caches keep albedo
+        // and only drop the slot.
+        bool water = (paletteFlags & LodPaletteEntry.FlagWater) != 0;
+        // Water keeps its climate slot. Treating pale/foam water as snow/ice
+        // stripped the tint and left a white stream.
+        if (!water && (LodPaletteRepair.IsRockLikeAlbedo(color) || LodPaletteRepair.IsSnowOrIceAlbedo(color)))
+            slot = (byte)LodTintRegistry.SlotNone;
+        if (water) return (byte)(WaterBase + slot);
         if ((paletteFlags & LodPaletteEntry.FlagThin) != 0) return (byte)(ThinBase + slot);
         return slot;
     }
@@ -140,9 +145,12 @@ public static class LodMesher
                         continue;
                     }
 
-                    // Mid-far anti-floater: skip short opaque scraps that hang in air
+                    // Mid-far anti-floater: skip short plant scraps that hang in air
                     // (sparse leaf pixels after mip) unless supported within 1 block.
-                    if (level >= 1 && !isTranslucent)
+                    // Plant only: a short soil or ore run at a cave ceiling is the
+                    // bottom of the terrain above it, and skipping it slit the face.
+                    if (level >= 1 && !isTranslucent
+                        && self.PaletteTintSlots[pid] != LodTintRegistry.SlotNone)
                     {
                         int runH = yTop - yBottom;
                         bool supported = r < runs.Length - 1
@@ -275,6 +283,7 @@ public static class LodMesher
 
             Buffers buf = first.Water ? water : opaque;
             int color = self.PaletteColors[first.Pid];
+            if (first.Water) color = LodPaletteRepair.WaterDrawColor(color);
             byte alpha = AlphaFor(self.PaletteFlags[first.Pid], self.PaletteTintSlots[first.Pid], color);
 
             for (int i = start; i < end; i++)
@@ -374,6 +383,7 @@ public static class LodMesher
 
             Buffers buf = seg.Water ? water : opaque;
             int color = self.PaletteColors[seg.Pid];
+            if (seg.Water) color = LodPaletteRepair.WaterDrawColor(color);
             byte alpha = AlphaFor(self.PaletteFlags[seg.Pid], self.PaletteTintSlots[seg.Pid], color);
 
             // W/E walls run along Z at fixed X; N/S walls run along X at fixed Z.

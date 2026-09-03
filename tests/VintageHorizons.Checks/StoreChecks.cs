@@ -22,6 +22,7 @@ public static class StoreChecks
         DisposingTheOfferReaderReleasesItsFileHandle(c);
         Rejection(c);
         PurgeKeepsMatchingData(c);
+        ProvisionalBitsSurviveReopen(c);
     }
 
     /// <summary>
@@ -82,6 +83,37 @@ public static class StoreChecks
             c.True(staleLogger.Contains("discarding"), "the purge says that it discarded data");
             c.True(staleLogger.Contains("2"), "the purge reports how many sections it took");
             stale.Dispose();
+        }
+        finally
+        {
+            try { Directory.Delete(dir, recursive: true); } catch { /* temp dir */ }
+        }
+    }
+
+    /// <summary>
+    /// 0.7.43 bookkeeping: peek/foreign quadrants live in a column beside the blob,
+    /// not in a format bump that would purge the table. A reopen must still see them
+    /// so QueueColumn recaptures a cold peeked row without loading it.
+    /// </summary>
+    static void ProvisionalBitsSurviveReopen(Check c)
+    {
+        string dir = Path.Combine(Path.GetTempPath(), "vh-prov-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(dir);
+        string path = Path.Combine(dir, "cache.db");
+        try
+        {
+            var store = new LodStore(new CaptureLogger());
+            c.True(store.Open(path), "a new cache file opens for the provisional column");
+            store.SaveBlob(0, 7, 9, new byte[] { 1, 2, 3, 4 }, applyToParent: false, provisional: 0b0101);
+            store.Dispose();
+
+            var reopened = new LodStore(new CaptureLogger());
+            c.True(reopened.Open(path), "the cache reopens with the new column");
+            int seen = -1;
+            int kept = reopened.LoadAllKeys((_, _, _, _, prov) => seen = prov);
+            c.Eq(1, kept, "the row survived");
+            c.Eq(0b0101, seen, "provisional bits survive a reopen without loading the blob");
+            reopened.Dispose();
         }
         finally
         {
@@ -239,6 +271,30 @@ public static class StoreChecks
     {
         c.True(LodPaletteRepair.NeedsColor(unchecked((int)0x00FCFCFC)),
             "unknown.png near-white is treated as missing colour");
+        // Isolated without TrueScale: unknown.png can sample as Farseer slate
+        // (0.26, 0.29, 0.45) or packed 0x001D3954, which is not near-white.
+        int farseerSlate = 66 | (74 << 8) | (115 << 16);
+        c.True(LodPaletteRepair.IsMissingTextureSky(farseerSlate),
+            "Farseer slate-blue is a missing-tex stand-in, not rock");
+        c.True(LodPaletteRepair.NeedsColor(farseerSlate),
+            "slate-blue missing tex is repaired like unknown.png white");
+        c.False(LodPaletteRepair.IsMissingTextureSky(unchecked((int)0xFF336699)),
+            "a real mid-chroma earth/water sample is not treated as sky");
+        int glacier = 170 | (200 << 8) | (220 << 16);
+        c.True(LodPaletteRepair.IsIceLikeAlbedo(glacier),
+            "pale cyan glacier ice is ice, not missing tex");
+        c.False(LodPaletteRepair.IsMissingTextureSky(glacier),
+            "glacier ice is not Farseer slate");
+        c.False(LodPaletteRepair.NeedsColor(glacier),
+            "glacier ice is not repaired into grass");
+        c.True(LodPaletteRepair.IsSnowOrIceAlbedo(unchecked((int)0x00E8E8E8)),
+            "luma-232 snow is a snow/ice albedo");
+        c.Eq(unchecked((int)0x00FCFCFC),
+            LodPaletteRepair.KeepCapturedColor(unchecked((int)0x00FCFCFC), LodPaletteRepair.TerrainFallbackColor, snowOrIceBlock: true),
+            "a known snow block keeps near-white instead of becoming grass");
+        c.Eq(LodPaletteRepair.TerrainFallbackColor,
+            LodPaletteRepair.KeepCapturedColor(farseerSlate, LodPaletteRepair.TerrainFallbackColor, snowOrIceBlock: true),
+            "Farseer slate on a snow-named block is still missing tex");
         c.True(LodPaletteRepair.IsBrightCap(unchecked((int)0xFFFCFCFC)),
             "opaque near-white is a bright cap");
 

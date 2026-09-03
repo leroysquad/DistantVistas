@@ -11,7 +11,8 @@ public static class LodPaletteRepair
     /// <summary>
     /// Never coloured, or near-white from unknown.png (0xFCFCFC). Packing: R in low byte.
     /// </summary>
-    public static bool NeedsColor(int color) => color == 0 || IsMissingTextureWhite(color);
+    public static bool NeedsColor(int color) =>
+        color == 0 || IsMissingTextureWhite(color) || IsMissingTextureSky(color);
 
     /// <summary>True when RGB is near-white (missing/unknown atlas sample).</summary>
     public static bool IsMissingTextureWhite(int color)
@@ -20,6 +21,60 @@ public static class LodPaletteRepair
         int g = (color >> 8) & 0xFF;
         int b = (color >> 16) & 0xFF;
         return r >= 0xF0 && g >= 0xF0 && b >= 0xF0;
+    }
+
+    /// <summary>
+    /// Isolated worlds without TrueScale resolve some leaves to unknown.png
+    /// whose average is Farseer slate (about 0.26, 0.29, 0.45), not white.
+    /// Dusty navy: R and G stay close, B ahead, mid luma. Cyan glacial ice
+    /// is blue-ahead too but G tracks B and luma is higher; do not steal that
+    /// into grass.
+    /// </summary>
+    public static bool IsMissingTextureSky(int color)
+    {
+        if (IsIceLikeAlbedo(color)) return false;
+        Channels(color, out int r, out int g, out int b, out int luma, out int chroma);
+        if (luma < 20 || luma > 130) return false;
+        if (chroma < 12 || chroma > 96) return false;
+        // Dusty slate, not cyan: R and G stay within a step of each other.
+        int rg = r > g ? r - g : g - r;
+        if (rg > 16) return false;
+        return b >= r + 20 && b >= g + 20;
+    }
+
+    /// <summary>
+    /// Pale cyan / glacial ice. G tracks B (not dusty R~G navy, not deep water
+    /// with B far ahead of G). Bright snow is IsBrightCap instead.
+    /// </summary>
+    public static bool IsIceLikeAlbedo(int color)
+    {
+        Channels(color, out int r, out int g, out int b, out int luma, out int chroma);
+        if (luma < 90 || luma > 230) return false;
+        if (chroma < 16 || chroma > 80) return false;
+        if (g < r + 8) return false;
+        if (b < g + 8) return false;
+        if (b > g + 40) return false;
+        return true;
+    }
+
+    /// <summary>
+    /// Stored snow or ice must keep its own colour, never a climate multiply
+    /// that copies valley grass onto a high tint slot (green ice caps).
+    /// </summary>
+    public static bool IsSnowOrIceAlbedo(int color) =>
+        IsBrightCap(color) || IsIceLikeAlbedo(color);
+
+    /// <summary>
+    /// White snow is meant to stay white. unknown.png is the same RGB as some
+    /// snow, so Fill still treats default NeedsColor white as missing. Capture
+    /// of a known snow/ice block passes keepBrightSnow and keeps the sample.
+    /// Sky-missing-tex (Farseer slate) is still replaced.
+    /// </summary>
+    public static int KeepCapturedColor(int color, int fallback, bool snowOrIceBlock)
+    {
+        if (!snowOrIceBlock) return Sanitize(color, fallback);
+        if (color == 0 || IsMissingTextureSky(color)) return Sanitize(color, fallback);
+        return color;
     }
 
     /// <summary>
@@ -160,6 +215,24 @@ public static class LodPaletteRepair
 
     /// <summary>Fallback when a block has no usable atlas colour.</summary>
     public const int TerrainFallbackColor = unchecked((int)0xFF2F6B3A);
+
+    /// <summary>
+    /// Stream / lake blue when the atlas sample is foam-white or missing-tex.
+    /// Packed R in the low byte, same as every other palette colour.
+    /// </summary>
+    public const int WaterFallbackColor = unchecked((int)0xFF785A2E);
+
+    /// <summary>
+    /// Water that stored as snow-white or pale foam draws as ice. Keep real
+    /// mid-chroma water; replace the rest with a lake blue.
+    /// </summary>
+    public static int WaterDrawColor(int color)
+    {
+        if (NeedsColor(color) || IsBrightCap(color)) return WaterFallbackColor;
+        Channels(color, out _, out _, out _, out int luma, out int chroma);
+        if (luma >= 160 && chroma <= 64) return WaterFallbackColor;
+        return color;
+    }
 
     /// <summary>Reject zero / near-white; otherwise return color (or fallback).</summary>
     public static int Sanitize(int color, int fallback = TerrainFallbackColor)

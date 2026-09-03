@@ -170,6 +170,9 @@ public class DistantVistasModSystem : ModSystem
             PastViewHaze = config.PastViewHaze,
             OverdrawStart = config.OverdrawStart,
         };
+        // Real holes (captured land with no mesh at any rung) are reported with
+        // the state of the keys involved, so a screenshot of sky has a log line.
+        renderer.SetHoleLogger(msg => Mod.Logger.Notification(msg));
 
         capi.Event.ChunkDirty += OnChunkDirty;
         capi.Event.LevelFinalize += OnLevelFinalize;
@@ -294,6 +297,11 @@ public class DistantVistasModSystem : ModSystem
         pipeline.Tick();
 
         var pos = capi.World.Player.Entity.Pos;
+        int chunkSize = GlobalConstants.ChunkSize;
+        int sweepCx = (int)Math.Floor(pos.X / chunkSize);
+        int sweepCz = (int)Math.Floor(pos.Z / chunkSize);
+        int sweepRadius = Math.Max(4, (int)Math.Ceiling(renderer.LiveViewDistance / chunkSize) + 2);
+        pipeline.SweepLoadedColumns(sweepCx, sweepCz, sweepRadius);
         if (pipeline.MaybeEvictAround(pos.X, pos.Z))
         {
             LodWorld world = pipeline.World;
@@ -542,7 +550,7 @@ public class DistantVistasModSystem : ModSystem
             color = LodPaletteRepair.Sanitize(sampled, sampled);
             if (!IsUsableAtlasTexture(block.TextureSubIdForBlockColor)
                 || (unknownTextureColor != 0 && color == unknownTextureColor)
-                || LodPaletteRepair.IsMissingTextureWhite(color))
+                || LodPaletteRepair.NeedsColor(color))
             {
                 color = sampled;
             }
@@ -552,8 +560,11 @@ public class DistantVistasModSystem : ModSystem
             color = StableColorOf(block);
         }
 
-        color = LodPaletteRepair.Sanitize(color, terrainFallbackColor);
-        byte slot = LodPaletteRepair.IsRockLikeAlbedo(color) ? (byte)LodTintRegistry.SlotNone : (byte)TintSlotOf(block);
+        color = LodPaletteRepair.KeepCapturedColor(
+            color, terrainFallbackColor, LodBlockPolicy.IsClimateUntinted(block));
+        byte slot = LodPaletteRepair.IsRockLikeAlbedo(color) || LodPaletteRepair.IsSnowOrIceAlbedo(color)
+            ? (byte)LodTintRegistry.SlotNone
+            : (byte)TintSlotOf(block);
         return (color, slot);
     }
 
@@ -593,23 +604,31 @@ public class DistantVistasModSystem : ModSystem
 
         if (!IsUsableAtlasTexture(block.TextureSubIdForBlockColor)
             || (unknownTextureColor != 0 && color == unknownTextureColor)
-            || LodPaletteRepair.IsMissingTextureWhite(color)
+            || LodPaletteRepair.NeedsColor(color)
             || color < 0)
         {
-            color = ColorFromAnyTexture(block, terrainFallbackColor);
-            color = LodPaletteRepair.Sanitize(color, terrainFallbackColor);
-            LogMissingTextureFallback(block);
+            bool keepSnow = LodBlockPolicy.IsClimateUntinted(block) && color > 0
+                && !LodPaletteRepair.IsMissingTextureSky(color);
+            if (!keepSnow)
+            {
+                color = ColorFromAnyTexture(block, terrainFallbackColor);
+                color = LodPaletteRepair.Sanitize(color, terrainFallbackColor);
+                LogMissingTextureFallback(block);
+            }
         }
 
-        color = LodPaletteRepair.Sanitize(color, terrainFallbackColor);
+        color = LodPaletteRepair.KeepCapturedColor(
+            color, terrainFallbackColor, LodBlockPolicy.IsClimateUntinted(block));
         stableColorByBlockId[block.BlockId] = color;
         return color;
     }
 
     int TintSlotOf(Block block) =>
-        tints.SlotFor(block, TryTopSoilColor(block, out _, out LodUntintedShare share)
-            ? share
-            : LodUntintedShare.None);
+        LodBlockPolicy.IsClimateUntinted(block)
+            ? LodTintRegistry.SlotNone
+            : tints.SlotFor(block, TryTopSoilColor(block, out _, out LodUntintedShare share)
+                ? share
+                : LodUntintedShare.None);
 
     /// <summary>
     /// Vanilla chunktopsoil composites brown soil with a colour-mapped grass overlay.
@@ -747,11 +766,17 @@ public class DistantVistasModSystem : ModSystem
         if (LodPaletteRepair.NeedsColor(color)
             || (unknownTextureColor != 0 && color == unknownTextureColor))
         {
-            color = ColorFromAnyTexture(block, terrainFallbackColor);
-            color = LodPaletteRepair.Sanitize(color, terrainFallbackColor);
-            LogMissingTextureFallback(block);
+            if (!(LodBlockPolicy.IsClimateUntinted(block)
+                && color != 0
+                && !LodPaletteRepair.IsMissingTextureSky(color)))
+            {
+                color = ColorFromAnyTexture(block, terrainFallbackColor);
+                color = LodPaletteRepair.Sanitize(color, terrainFallbackColor);
+                LogMissingTextureFallback(block);
+            }
         }
-        return LodPaletteRepair.Sanitize(color, terrainFallbackColor);
+        return LodPaletteRepair.KeepCapturedColor(
+            color, terrainFallbackColor, LodBlockPolicy.IsClimateUntinted(block));
     }
 
     /// <summary>
@@ -816,7 +841,8 @@ public class DistantVistasModSystem : ModSystem
             }
         }
 
-        if (found != 0 && LodPaletteRepair.IsMissingTextureWhite(found)) found = 0;
+        if (found != 0 && LodPaletteRepair.NeedsColor(found)
+            && !LodBlockPolicy.IsClimateUntinted(block)) found = 0;
         missingTextureColorFallback[block.BlockId] = found;
         missingTextureBlocks++;
         if (!loggedMissingTexture)
@@ -828,7 +854,8 @@ public class DistantVistasModSystem : ModSystem
                 block.Code);
         }
         int pick = found != 0 ? found : fallback;
-        return LodPaletteRepair.Sanitize(pick, terrainFallbackColor);
+        return LodPaletteRepair.KeepCapturedColor(
+            pick, fallback, LodBlockPolicy.IsClimateUntinted(block));
     }
 
     void ResolveTerrainFallbackColor()
@@ -1012,13 +1039,16 @@ public class DistantVistasModSystem : ModSystem
 
         Mod.Logger.Notification(
             "{0}: {1} sections resident [{2}] ({3} RAM-evicted, {4} from cache), {5} meshes ({6} evicted), " +
-            "{7} selected [{8}] minus {9} frustum-culled, {10} columns captured, {11} pending, " +
+            "{7} selected [{8}] minus {9} frustum-culled, {19} gap fills, {20} unfilled gaps, {10} columns captured, {11} pending, " +
+            "{21} dropped, {22} swept, {23} peek-confirmed, {24} provisional L0, " +
             "worker: {12} captures / {13} meshes queued / {14}+{15} errors, {16} awaiting mip, {17} render-dirty, {18} unsaved",
             prefix, world.Sections.Count, world.DescribeLevels(), world.EvictedSectionsTotal, pipeline.CachedSectionsLoaded,
             renderer.MeshCount, renderer.EvictedTotal, renderer.LastDrawCount, renderer.DescribeDrawnLevels(),
             renderer.LastCulledCount, pipeline.ColumnsCaptured, pipeline.PendingColumns, worker.PendingCaptures, worker.PendingMeshes,
             worker.CaptureErrors, worker.MeshErrors, world.MipDirty.Count, world.RenderDirty.Count,
-            world.SaveDirty.Count);
+            world.SaveDirty.Count, renderer.LastGapDrawCount, renderer.LastUnfilledGaps,
+            pipeline.ColumnsDropped, pipeline.ColumnsSwept, pipeline.ProvisionalQuadrantsConfirmed,
+            world.ProvisionalL0Keys.Count);
 
         Mod.Logger.Notification("  L0 parity/fill: {0}", renderer.DescribeL0ParityAndFill());
 
@@ -1140,7 +1170,11 @@ public class DistantVistasModSystem : ModSystem
                 $"[distantvistas] sections: {pipeline.World.Sections.Count} [{pipeline.World.DescribeLevels()}] " +
                 $"({pipeline.CachedSectionsLoaded} from cache), meshes: {renderer.MeshCount}, " +
                 $"drawn: {renderer.LastDrawCount} [{renderer.DescribeDrawnLevels()}], " +
+                $"gap fills: {renderer.LastGapDrawCount}, unfilled gaps: {renderer.LastUnfilledGaps}, " +
                 $"columns captured: {pipeline.ColumnsCaptured}, pending: {pipeline.PendingColumns}, " +
+                $"dropped: {pipeline.ColumnsDropped}, swept: {pipeline.ColumnsSwept}, " +
+                $"peek-confirmed: {pipeline.ProvisionalQuadrantsConfirmed}, " +
+                $"provisional L0: {pipeline.World.ProvisionalL0Keys.Count}, " +
                 $"worker: {pipeline.Worker.PendingCaptures}c/{pipeline.Worker.PendingMeshes}m, awaiting mip: {pipeline.World.MipDirty.Count}, " +
                 $"unsaved: {pipeline.World.SaveDirty.Count}, persistence: {(pipeline.Persisting ? "on" : "off")}, " +
                 $"render distance: {(renderer.FarViewDistanceCap > 0 ? renderer.FarViewDistanceCap + " (capped)" : "unlimited")}, " +

@@ -16,12 +16,132 @@ public static class MipChecks
     {
         QuadrantPlacement(c);
         MajorityOccupancy(c);
+        CliffFaceKeepsTheTallColumn(c);
         RunMerging(c);
         PaletteRemap(c);
         NothingToDo(c);
         BrightMinorityDoesNotPaintTheCap(c);
         NearWhiteMinorityDoesNotPaintTheCap(c);
         BrightMajorityKeepsSnow(c);
+        TerrainOverACaveKeepsItsSurface(c);
+        FloatingLeafCrownIsStillDropped(c);
+        SkippedCanopyDoesNotBecomeParentSurface(c);
+    }
+
+    static void SkippedCanopyDoesNotBecomeParentSurface(Check c)
+    {
+        var child = new LodSection();
+        int rock = child.FindOrAddPaletteEntry(blockId: 1, color: 0x00707070, flags: 0);
+        int leaves = child.FindOrAddPaletteEntry(blockId: 2, color: 0x00407040,
+            flags: LodPaletteEntry.FlagSkip, tintSlot: 5);
+        ulong[] col = { LodSection.PackRun(leaves, 40, 28), LodSection.PackRun(rock, 20, 1) };
+        for (int dz = 0; dz < 2; dz++)
+        {
+            for (int dx = 0; dx < 2; dx++) child.SetColumn(LodSection.ColumnIndex(dx, dz), col);
+        }
+        var parent = new LodSection();
+        LodMip.DownsampleIntoParent(child, parent, 0, 0);
+        ulong[] merged = parent.ColumnRuns(LodSection.ColumnIndex(0, 0)).ToArray();
+        c.True(merged.Length > 0, "terrain under a skipped canopy still mips");
+        c.Eq(20, LodSection.RunYTop(merged[0]), "skipped canopy is not the parent surface");
+    }
+
+    /// <summary>
+    /// The mountain-chop bug. Four children share a cave room: rock from bedrock to 44,
+    /// air to 48, rock and soil up to a surface at 88. The merged column has the same
+    /// air gap, and the old anti-floater treated everything above it as unsupported and
+    /// threw it away, so the parent's surface was the cave floor - 44 blocks down.
+    /// Measured on a real cache that was one L1 column in six. Terrain over a cave is
+    /// terrain; only plant scraps may float away.
+    /// </summary>
+    static void TerrainOverACaveKeepsItsSurface(Check c)
+    {
+        var child = new LodSection();
+        int rock = child.FindOrAddPaletteEntry(blockId: 1, color: 0x00707070, flags: 0);
+        int soil = child.FindOrAddPaletteEntry(blockId: 2, color: 0x00305070, flags: 0);
+        int grass = child.FindOrAddPaletteEntry(blockId: 3, color: 0x00509050, flags: 0, tintSlot: 3);
+        ulong[] overCave =
+        {
+            LodSection.PackRun(grass, 88, 87),
+            LodSection.PackRun(soil, 87, 84),
+            LodSection.PackRun(rock, 84, 48),
+            LodSection.PackRun(rock, 44, 1),
+        };
+        for (int dz = 0; dz < 2; dz++)
+        {
+            for (int dx = 0; dx < 2; dx++) child.SetColumn(LodSection.ColumnIndex(dx, dz), overCave);
+        }
+
+        var parent = new LodSection();
+        LodMip.DownsampleIntoParent(child, parent, 0, 0);
+        ulong[] merged = parent.ColumnRuns(LodSection.ColumnIndex(0, 0)).ToArray();
+
+        c.True(merged.Length >= 2, "the merged column keeps runs on both sides of the cave");
+        c.Eq(88, LodSection.RunYTop(merged[0]), "the parent surface is the real surface, not the cave floor");
+        c.Eq(3, parent.Palette[LodSection.RunPaletteId(merged[0])].BlockId, "the grass top survives the mip");
+        c.Eq(1, LodSection.RunYBottom(merged[^1]), "the rock under the cave is still there");
+        bool caveKept = false;
+        for (int i = 0; i + 1 < merged.Length; i++)
+        {
+            if (LodSection.RunYBottom(merged[i]) == 48 && LodSection.RunYTop(merged[i + 1]) == 44) caveKept = true;
+        }
+        c.True(caveKept, "the cave itself stays an air gap rather than being filled");
+
+        // A one-block soil roof is still terrain: thickness is not the test, plant matter is.
+        var thinRoof = new LodSection();
+        int soil2 = thinRoof.FindOrAddPaletteEntry(blockId: 2, color: 0x00305070, flags: 0);
+        int rock2 = thinRoof.FindOrAddPaletteEntry(blockId: 1, color: 0x00707070, flags: 0);
+        ulong[] roof = { LodSection.PackRun(soil2, 60, 59), LodSection.PackRun(rock2, 50, 1) };
+        for (int dz = 0; dz < 2; dz++)
+        {
+            for (int dx = 0; dx < 2; dx++) thinRoof.SetColumn(LodSection.ColumnIndex(dx, dz), roof);
+        }
+        var roofParent = new LodSection();
+        LodMip.DownsampleIntoParent(thinRoof, roofParent, 0, 0);
+        ulong[] roofMerged = roofParent.ColumnRuns(LodSection.ColumnIndex(0, 0)).ToArray();
+        c.Eq(60, LodSection.RunYTop(roofMerged[0]), "a thin untinted roof over a cavern is kept");
+    }
+
+    /// <summary>
+    /// What the anti-floater is for: a leaf crown whose trunk lost the 2-of-4 vote hangs
+    /// in the air above the ground and must go, snow cap and all. A crown that touches
+    /// the ground (within the one-block crack) is a bush and stays.
+    /// </summary>
+    static void FloatingLeafCrownIsStillDropped(Check c)
+    {
+        var child = new LodSection();
+        int rock = child.FindOrAddPaletteEntry(blockId: 1, color: 0x00707070, flags: 0);
+        int leaves = child.FindOrAddPaletteEntry(blockId: 2, color: 0x00407040, flags: 0, tintSlot: 5);
+        int snow = child.FindOrAddPaletteEntry(blockId: 3, color: unchecked((int)0x00FAFAFA), flags: 0);
+        ulong[] crownInAir =
+        {
+            LodSection.PackRun(snow, 33, 32),
+            LodSection.PackRun(leaves, 32, 28),
+            LodSection.PackRun(rock, 20, 1),
+        };
+        for (int dz = 0; dz < 2; dz++)
+        {
+            for (int dx = 0; dx < 2; dx++) child.SetColumn(LodSection.ColumnIndex(dx, dz), crownInAir);
+        }
+
+        var parent = new LodSection();
+        LodMip.DownsampleIntoParent(child, parent, 0, 0);
+        ulong[] merged = parent.ColumnRuns(LodSection.ColumnIndex(0, 0)).ToArray();
+        c.Eq(1, merged.Length, "a snow-capped leaf crown floating over the ground is dropped whole");
+        c.Eq(20, LodSection.RunYTop(merged[0]), "the ground under the dropped crown is the surface");
+
+        var bush = new LodSection();
+        int rock2 = bush.FindOrAddPaletteEntry(blockId: 1, color: 0x00707070, flags: 0);
+        int leaves2 = bush.FindOrAddPaletteEntry(blockId: 2, color: 0x00407040, flags: 0, tintSlot: 5);
+        ulong[] grounded = { LodSection.PackRun(leaves2, 24, 21), LodSection.PackRun(rock2, 20, 1) };
+        for (int dz = 0; dz < 2; dz++)
+        {
+            for (int dx = 0; dx < 2; dx++) bush.SetColumn(LodSection.ColumnIndex(dx, dz), grounded);
+        }
+        var bushParent = new LodSection();
+        LodMip.DownsampleIntoParent(bush, bushParent, 0, 0);
+        ulong[] bushMerged = bushParent.ColumnRuns(LodSection.ColumnIndex(0, 0)).ToArray();
+        c.Eq(24, LodSection.RunYTop(bushMerged[0]), "leaves within a one-block crack of the ground are kept");
     }
 
     /// <summary>A child section fills exactly one quadrant of its parent, and only that one.</summary>
@@ -85,9 +205,9 @@ public static class MipChecks
         LodMip.DownsampleIntoParent(child, parent, 0, 0);
 
         ulong[] merged = parent.ColumnRuns(LodSection.ColumnIndex(0, 0)).ToArray();
-        c.Eq(1, merged.Length, "a minority spire does not survive as its own run");
-        c.Eq(10, LodSection.RunYTop(merged[0]), "the parent takes the height the majority agreed on");
-        c.Eq(0, LodSection.RunYBottom(merged[0]), "the merged run keeps the shared floor");
+        c.Eq(20, LodSection.RunYTop(merged[0]),
+            "the tall column is a cliff face, not a scrap - L1 keeps it or the mountain is a sky hole");
+        c.Eq(0, LodSection.RunYBottom(merged[^1]), "the merged run keeps the shared floor");
 
         // A single captured column has no majority to lose to.
         var lonely = new LodSection();
@@ -100,6 +220,26 @@ public static class MipChecks
         ulong[] survived = lonelyParent.ColumnRuns(LodSection.ColumnIndex(0, 0)).ToArray();
         c.Eq(1, survived.Length, "a lone captured column still produces a run");
         c.Eq(20, LodSection.RunYTop(survived[0]), "the lone column keeps its full height");
+    }
+
+    /// <summary>
+    /// Spawn-hill cliffs: one column of the 2x2 is the face, the other three are the
+    /// ground below. 2-of-4 dropped that face, so backing away from spawn punched a
+    /// vertical sky slit exactly where L1 took over. 1-of-4 solid keeps it.
+    /// </summary>
+    static void CliffFaceKeepsTheTallColumn(Check c)
+    {
+        var child = new LodSection();
+        int rock = child.FindOrAddPaletteEntry(blockId: 1, color: 0x00707070, flags: 0);
+        child.SetColumn(LodSection.ColumnIndex(0, 0), new[] { LodSection.PackRun(rock, 80, 1) });
+        child.SetColumn(LodSection.ColumnIndex(1, 0), new[] { LodSection.PackRun(rock, 40, 1) });
+        child.SetColumn(LodSection.ColumnIndex(0, 1), new[] { LodSection.PackRun(rock, 40, 1) });
+        child.SetColumn(LodSection.ColumnIndex(1, 1), new[] { LodSection.PackRun(rock, 40, 1) });
+
+        var parent = new LodSection();
+        LodMip.DownsampleIntoParent(child, parent, 0, 0);
+        ulong[] merged = parent.ColumnRuns(LodSection.ColumnIndex(0, 0)).ToArray();
+        c.Eq(80, LodSection.RunYTop(merged[0]), "the cliff top survives the 2x2 merge");
     }
 
     /// <summary>
