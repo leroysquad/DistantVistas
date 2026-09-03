@@ -23,6 +23,7 @@ public static class StoreChecks
         Rejection(c);
         PurgeKeepsMatchingData(c);
         ProvisionalBitsSurviveReopen(c);
+        CapturePolicyStamp(c);
     }
 
     /// <summary>
@@ -480,6 +481,24 @@ public static class StoreChecks
         c.NoThrow(() => store.DeserializeForeign(garbage, null), "a corrupted blob does not throw");
 
         c.True(store.DeserializeForeign(good, null) != null, "a good blob still deserializes");
+    }
+
+    /// <summary>
+    /// 0.7.51 skip-leaves captures poison a zip rollback. Missing stamp is current
+    /// (do not wipe a good world). Only the known skip-leaves value purges.
+    /// </summary>
+    static void CapturePolicyStamp(Check c)
+    {
+        c.False(LodStore.MustPurgeSkipLeavesStamp(null),
+            "a missing CapturePolicyVersion is current — do not wipe a fresh world");
+        c.False(LodStore.MustPurgeSkipLeavesStamp(""),
+            "an empty stamp is not a skip-leaves cache");
+        c.False(LodStore.MustPurgeSkipLeavesStamp(LodStore.CapturePolicyLeavesSolid),
+            "leaves-solid is current");
+        c.True(LodStore.MustPurgeSkipLeavesStamp(LodStore.CapturePolicyLeavesSkipped),
+            "leaves-skipped is the only stamp that purges");
+        c.False(LodStore.MustPurgeSkipLeavesStamp("unknown-policy"),
+            "an unknown stamp is not treated as skip-leaves");
     }
 
     static LodSection Restore(Check c, LodSection section, string[]? codes = null)

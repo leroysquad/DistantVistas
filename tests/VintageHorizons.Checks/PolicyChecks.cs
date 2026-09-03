@@ -44,11 +44,11 @@ public static class PolicyChecks
         c.Eq((byte)0, Flags(EnumBlockMaterial.Soil, "soil-medium-normal"), "soil is ordinary opaque terrain");
         c.Eq((byte)0, Flags(EnumBlockMaterial.Wood, "log-grown-pine-ud"), "wood is ordinary opaque terrain");
         c.Eq((byte)0, Flags(EnumBlockMaterial.Plant, "leaves-grown-birch-green"),
-            "birch canopy stays solid terrain");
+            "birch canopy stays solid terrain — never FlagSkip to hide spawn plates");
         c.Eq((byte)0, Flags(EnumBlockMaterial.Plant, "needles-grown-pine-ud"),
-            "pine needles stay solid terrain");
+            "pine needles stay solid terrain — never FlagSkip to hide spawn plates");
         c.Eq((byte)0, Flags(EnumBlockMaterial.Plant, "leavesbranchy-grown-oak"),
-            "branchy oak canopy stays solid terrain");
+            "branchy oak canopy stays solid terrain — never FlagSkip to hide spawn plates");
     }
 
     /// <summary>

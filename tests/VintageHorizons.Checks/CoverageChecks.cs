@@ -270,6 +270,7 @@ public static class CoverageChecks
 
         SkipDiscOwnsWholeTileOnly(c);
         VanillaOwnsOnlyLoadedChunks(c);
+        SpawnCoarseWhole(c);
     }
 
     /// <summary>
@@ -459,6 +460,43 @@ public static class CoverageChecks
         c.True(LodCoveragePolicy.AllMapChunksLoaded(
                 0, 64, 0, 64, 32, (cx, cz) => have.Contains(K(cx, cz))),
             "all four chunks of the L0: vanilla may own it");
+    }
+
+    /// <summary>
+    /// Spawn plates: you stand inside an L2/L3 whose farthest corner is past
+    /// view distance, so VanillaOwnsKey is false, and the walk used to Submit
+    /// the whole parent. Dual invariant: that parent must not paint whole, and
+    /// a far L2 past the coverage radius still may (0.7.51 hole).
+    /// Never "fix" this by skipping leaves or a shader disc — those are other checks.
+    /// </summary>
+    static void SpawnCoarseWhole(Check c)
+    {
+        const double coverage = 256 * 0.55;
+        c.True(LodCoveragePolicy.MaySubmitCoarseWhole(0, 0, coverage),
+            "L0 is never a coarse whole-plate");
+        c.False(LodCoveragePolicy.MaySubmitCoarseWhole(2, 0, coverage),
+            "spawn L2 underfoot does not paint whole");
+        c.False(LodCoveragePolicy.MaySubmitCoarseWhole(3, 0, coverage),
+            "spawn L3 underfoot does not paint whole");
+        c.False(LodCoveragePolicy.MaySubmitCoarseWhole(1, coverage * 0.5, coverage),
+            "an L1 whose near edge is inside the coverage radius does not SubmitMeshedGaps");
+        c.True(LodCoveragePolicy.MaySubmitCoarseWhole(2, coverage, coverage),
+            "far L2 at the coverage radius may still draw whole (no 0.7.51 hole)");
+        c.True(LodCoveragePolicy.MaySubmitCoarseWhole(2, coverage + 64, coverage),
+            "far L2 past the coverage radius may still draw whole");
+        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, true, true, true, true, 0f, true),
+            "children of a spawn parent still walk when drawFullDetail");
+        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(1, 2, false, true, true, true, 0f, true),
+            "L1 children outside vanilla still visit so the far half of the tile draws");
+
+        c.False(LodCoveragePolicy.ShouldRemeshWhileIdle(false, true, false),
+            "standing still on a finished mesh does not remesh");
+        c.True(LodCoveragePolicy.ShouldRemeshWhileIdle(false, true, true),
+            "peek / provisional remeshes while you stand at spawn");
+        c.True(LodCoveragePolicy.ShouldRemeshWhileIdle(false, false, false),
+            "unmeshed dirty land still schedules idle");
+        c.True(LodCoveragePolicy.ShouldRemeshWhileIdle(true, true, false),
+            "a 64-block origin shift remeshes capture-dirty land");
     }
 
     const double TrailAnchor = 512;

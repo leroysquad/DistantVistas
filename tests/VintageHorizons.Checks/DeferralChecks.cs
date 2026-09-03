@@ -42,17 +42,18 @@ public static class DeferralChecks
         c.False(new DistantVistasConfig().IgnoreOtherLodMods,
             "an upgraded config defers rather than overriding");
 
-        // The shapes, as the reader sees them after LoadModConfig has had its turn.
-        c.Eq("farseer", Drawing(Only("farseer"), _ => true), "an explicit true defers");
-        c.True(Drawing(Only("farseer"), _ => false) is null, "an explicit false draws");
-        c.Eq("farseer", Drawing(Only("farseer"), _ => null),
-            "a file that could not be read at all defers");
+        // Farseer is a companion: on/missing/corrupt never idles us.
+        c.True(Drawing(Only("farseer"), _ => true) is null, "Farseer on still lets us draw");
+        c.True(Drawing(Only("farseer"), _ => false) is null, "Farseer off still lets us draw");
+        c.True(Drawing(Only("farseer"), _ => null) is null,
+            "a missing Farseer config still lets us draw");
+        c.True(Drawing(Only("farseer"), _ => null) is null,
+            "a corrupt Farseer file still lets us draw");
 
-        // A parse failure reaches the decision as null, never as a thrown exception and
-        // never as false: ReadOtherModSwitch catches and returns null. If that ever
-        // changed to a rethrow, StartClientSide would die and take the whole mod with it.
-        c.Eq("farseer", Drawing(Only("farseer"), _ => null),
-            "a corrupt file defers rather than deciding for the player");
+        // ChunkLOD has no switch we can read. Cannot tell, so defer.
+        c.Eq("chunklod", Drawing(Only("chunklod"), _ => true), "chunklod still defers");
+        c.Eq("chunklod", Drawing(Only("chunklod"), _ => null),
+            "a file that could not be read at all defers for non-companions");
     }
 
     static void Table(Check c)
@@ -93,16 +94,24 @@ public static class DeferralChecks
         c.True(Drawing(loaded: None, switches: AllOn) is null,
             "nothing installed means nothing to defer to");
 
-        c.Eq("farseer", Drawing(loaded: Only("farseer"), switches: AllOn),
-            "an installed and switched-on mod stops us");
+        c.True(Drawing(loaded: Only("farseer"), switches: AllOn) is null,
+            "Farseer is a companion: it does not idle us");
+        c.True(OtherLodMods.IsCompanion("farseer"), "farseer is the background companion");
+        c.False(OtherLodMods.IsCompanion("chunklod"), "chunklod is not a companion");
+
+        var farseerOn = OtherLodMods.Inspect(Only("farseer"), AllOn);
+        c.Eq("farseer", farseerOn.Companions.FirstOrDefault(), "on Farseer is reported as companion");
+        c.True(farseerOn.Drawing is null, "companion Farseer is not a defer target");
 
         // The reported defect, and the reason for the whole change.
         c.True(Drawing(loaded: Only("farseer"), switches: AllOff) is null,
             "an installed mod that is switched off does not stop us");
 
-        // A player who has never run Farseer has no file for it. Cannot tell, so defer.
-        c.Eq("farseer", Drawing(loaded: Only("farseer"), switches: _ => null),
-            "a missing config file counts as switched on");
+        // Missing Farseer config counts as on, but Farseer still does not idle us.
+        var farseerMissing = OtherLodMods.Inspect(Only("farseer"), _ => null);
+        c.True(farseerMissing.Drawing is null, "a missing Farseer config does not idle us");
+        c.Eq("farseer", farseerMissing.Companions.FirstOrDefault(),
+            "a missing Farseer config still counts as a companion");
 
         // Same rule for a file we could read but that carries no verdict.
         c.Eq("chunklod", Drawing(loaded: Only("chunklod"), switches: AllOff),
@@ -132,20 +141,22 @@ public static class DeferralChecks
     {
         // The log line that tells a player we noticed their setting. Without it, a player
         // whose other mod is off has no way to tell this rule from the old behaviour.
-        (string? drawing, string[] off) = OtherLodMods.Inspect(Only("farseer"), AllOff);
+        (string? drawing, string[] off, string[] offCompanions) = OtherLodMods.Inspect(Only("farseer"), AllOff);
         c.True(drawing is null, "the switched-off mod does not stop us");
         c.Eq(1, off.Length, "the switched-off mod is reported");
         // Indexed only after the length holds: a regression here empties the array, and a
         // crashing check reports nothing about the other cases behind it.
         c.Eq("farseer", off.FirstOrDefault(), "and it is named");
+        c.Eq(0, offCompanions.Length, "a switched-off Farseer is not a companion");
 
-        (string? stillDrawing, string[] noneOff) = OtherLodMods.Inspect(Only("farseer"), AllOn);
-        c.Eq("farseer", stillDrawing, "a switched-on mod stops us");
+        (string? stillDrawing, string[] noneOff, string[] onCompanions) = OtherLodMods.Inspect(Only("farseer"), AllOn);
+        c.True(stillDrawing is null, "a switched-on Farseer does not idle us");
         c.Eq(0, noneOff.Length, "and nothing is reported as switched off");
+        c.Eq("farseer", onCompanions.FirstOrDefault(), "on Farseer is the companion");
 
         // A mod with no readable switch is not reported as switched off, because we never
         // established that it was.
-        (_, string[] unknownOff) = OtherLodMods.Inspect(Only("chunklod"), AllOff);
+        (_, string[] unknownOff, _) = OtherLodMods.Inspect(Only("chunklod"), AllOff);
         c.Eq(0, unknownOff.Length, "a mod with no readable switch is never reported as off");
     }
 
