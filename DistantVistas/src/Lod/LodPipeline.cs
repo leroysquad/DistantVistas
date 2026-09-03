@@ -52,7 +52,7 @@ public class LodPipeline
     const int CaptureBusyThreshold = 4;
 
     const int PropagationsPerTick = 4;
-    const int CatchUpPropagationsPerTick = 48;
+    const int CatchUpPropagationsPerTick = 8;
     const int CatchUpPropagationThreshold = 16;
     const int SectionSavesPerTick = 2;
     const int ChunkSize = GlobalConstants.ChunkSize;

@@ -24,6 +24,12 @@ public class LodTerrainRenderer : IRenderer
     const int MeshSchedulesPerFrame = 12;
     const int MeshUploadsPerFrame = 8;
     /// <summary>
+    /// Worker finishes faster than the 8-upload cap. PendingMeshes stays low,
+    /// meshJobInFlight and MeshResults pile up (3500+ on a cached MP join),
+    /// and each result holds vertex buffers until the driver takes them.
+    /// </summary>
+    const int MaxMeshJobsInFlight = 48;
+    /// <summary>
     /// Wall clock a single frame may spend handing finished meshes to the driver. Each
     /// upload allocates a buffer and blocks until the driver takes it, so a full backlog
     /// of eight in one frame is long enough to be felt. What does not fit keeps its place
@@ -492,9 +498,12 @@ public class LodTerrainRenderer : IRenderer
         bool childFarther = childHasData && childLevel <= LodCoveragePolicy.VisitedKeepMaxLevel
             && IsFartherLoaded(childKey);
         bool childInCone = inLeadCone || (childFarther && InLeadCone(childKey));
+        bool holdFine = LodCoveragePolicy.HoldVisitedFine(
+            Math.Sqrt(NearestDistanceSqTo(childKey)), liveViewDistance);
         return LodCoveragePolicy.ShouldVisitChildForDraw(
             childLevel, parentWanted, parentDrawFullDetail, parentHasMesh,
-            parentLandLike, childInCone, lookDown01, childHasData, childFarther);
+            parentLandLike, childInCone, lookDown01, childHasData, childFarther,
+            holdFine);
     }
 
     bool IsFartherLoaded(long key) =>
@@ -504,6 +513,13 @@ public class LodTerrainRenderer : IRenderer
 
     void Submit(long key)
     {
+        if (LodWorld.KeyLevel(key) == 0
+            && !LodCoveragePolicy.HoldVisitedFine(
+                Math.Sqrt(NearestDistanceSqTo(key)), liveViewDistance))
+        {
+            lastSelectedFrame[key] = frameCounter;
+            return;
+        }
         drawList.Add(key);
         drawnThisFrame.Add(key);
         lastSelectedFrame[key] = frameCounter;
@@ -734,7 +750,8 @@ public class LodTerrainRenderer : IRenderer
         return dx * dx + dz * dz < radius * radius;
     }
 
-    bool VanillaOwnsKey(long key, LodSection? bounds, double hideRadius)
+    void VanillaClaimState(long key, LodSection? bounds, double hideRadius,
+        out bool mapClaimed, out bool vanillaReady)
     {
         // Farthest corner still inside view distance: vanilla should be drawing
         // the whole tile. Nearest-point hide chopped a moving ring (0.7.38).
@@ -743,10 +760,16 @@ public class LodTerrainRenderer : IRenderer
             : FarthestXzInsideViewDistance(key, hideRadius);
         // Every map-chunk covering this tile must be present. One of four
         // left plates on the loaded trees; zero of four is grow-VD / walk-away.
-        // World-chunks too: map-chunk-only is not-yet-drawn sky.
         bool allLoaded = AllMapChunksLoadedForKey(key);
         bool worldReady = AllWorldChunksReadyForKey(key);
-        return LodCoveragePolicy.VanillaOwnsFootprint(inside3d, allLoaded, worldReady);
+        mapClaimed = LodCoveragePolicy.VanillaMapClaimed(inside3d, allLoaded);
+        vanillaReady = LodCoveragePolicy.VanillaOwnsFootprint(inside3d, allLoaded, worldReady);
+    }
+
+    bool VanillaOwnsKey(long key, LodSection? bounds, double hideRadius)
+    {
+        VanillaClaimState(key, bounds, hideRadius, out bool mapClaimed, out _);
+        return mapClaimed;
     }
 
     bool ChildHasVisitedSurface(long key)
@@ -835,7 +858,10 @@ public class LodTerrainRenderer : IRenderer
         // Whole AABB inside view distance, and every map-chunk covering this
         // tile is loaded. A circle alone punches sky when you raise VD.
         world.Sections.TryGetValue(key, out LodSection? coverageSection);
-        bool insideVanilla = VanillaOwnsKey(key, coverageSection, liveViewDistance);
+        VanillaClaimState(key, coverageSection, liveViewDistance,
+            out bool mapClaimed, out bool vanillaReady);
+        // Map-claim hides the far disc. World-ready is the standing-hole gate.
+        bool insideVanilla = mapClaimed;
 
         bool landLike = ComputeLandLike(level, coverageSection, key);
         bool inLeadCone = InLeadCone(key);
@@ -870,7 +896,8 @@ public class LodTerrainRenderer : IRenderer
         bool fartherLoaded = LodCoveragePolicy.IsFartherLoaded(
                 nearDist, LodWorld.KeyFootprintBlocks(key), FarthestKnownDistance)
             && (!hasData || !inLeadCone || CapturedBeyond(key));
-        bool mustCover = !insideVanilla
+        bool holdFine = LodCoveragePolicy.HoldVisitedFine(nearDist, liveViewDistance);
+        bool mustCover = !insideVanilla && holdFine
             && LodCoveragePolicy.MustCoverIntervening(level, hasData, inLeadCone, fartherLoaded);
         // Gaps appended by this node's subtree start here; see gaps.
         int gapStart = gaps.Count;
@@ -880,23 +907,28 @@ public class LodTerrainRenderer : IRenderer
         // Do not request a parent just so we can paint a giant square over a hole.
         if (!hasMesh)
         {
-            if (inLeadCone && !insideVanilla)
+            bool keepNear = LodCoveragePolicy.RequestStreamingKeep(
+                level, hasMesh, hasData, nearDist);
+            if (inLeadCone && !insideVanilla && (level >= 1 || holdFine))
                 RequestMesh(key);
             else if (handoff && level <= 1)
                 RequestMesh(key);
-            else if (LodCoveragePolicy.RequestVisitedKeepMesh(
+            else if ((!insideVanilla || keepNear) && (holdFine || level >= 1)
+                     && LodCoveragePolicy.RequestVisitedKeepMesh(
                          level, hasMesh, hasData, insideVanilla,
                          nearDist, liveViewDistance, inLeadCone, fartherLoaded))
                 RequestMesh(key);
-            else if (!insideVanilla && (level == wanted || level == wanted + 1))
+            else if (!insideVanilla && (level == wanted || level == wanted + 1)
+                     && (level >= 1 || holdFine))
                 RequestMesh(key);
             else if (!insideVanilla && level <= wanted + 1
-                     && nearDist < liveViewDistance + LodSection.SectionBlocks * 4)
+                     && nearDist < liveViewDistance + LodSection.SectionBlocks * 4
+                     && (level >= 1 || holdFine))
                 RequestMesh(key);
-            else if (insideVanilla && level == 0)
+            else if (keepNear)
                 RequestMesh(key);
-            else if (hasData && LodCoveragePolicy.KeepVisitedSurface(level, true)
-                     && LodCoveragePolicy.IsNearVisitedTrail(nearDist, liveViewDistance))
+            else if (!insideVanilla && hasData && LodCoveragePolicy.KeepVisitedSurface(level, true)
+                     && holdFine)
                 RequestMesh(key);
         }
 
@@ -948,9 +980,11 @@ public class LodTerrainRenderer : IRenderer
         bool drawableCoarse = hasMesh && LodCoveragePolicy.MayDrawCoarseParent(
             level, insideVanilla, landLike, inLeadCone, lookDown01);
 
-        // L1 used to stop here and hide the L0 the player already walked. That
-        // is the "I had data, it vanished when I backed up" hole.
-        bool walkCapturedL0 = level == 1;
+        // Walk L0 under this L1 only where we still draw fine, or the
+        // parent cannot cover. The whole keep-circle as L0 is a GPU bomb.
+        bool walkCapturedL0 = level == 1
+            && (drawFullDetail || keepVisited || mustCover
+                || LodCoveragePolicy.HoldVisitedFine(nearDist, liveViewDistance));
 
         if ((walkCapturedL0 || !stopAtThisRung) && level > 0 && (walkCapturedL0 || forcedDetail || (level > wanted && AllChildrenCovered(key)) || !drawableCoarse
             || (holdVisitedL0 && wanted == 0) || keepVisited || drawFullDetail))
@@ -1030,6 +1064,14 @@ public class LodTerrainRenderer : IRenderer
             // does not remesh from scratch. Do not draw it on top of chunks.
             if (insideVanilla && level == 0)
             {
+                // Map-chunk is here, world-chunk is not: draw the captured L0
+                // under your feet so standing is not sky. The rest of the disc
+                // stays hidden. 0.7.57 drew every L0 in view on MP join.
+                if (!vanillaReady && LodCoveragePolicy.DrawStreamingCover(hasMesh, nearDist))
+                {
+                    Submit(key);
+                    return true;
+                }
                 lastSelectedFrame[key] = frameCounter;
                 return false;
             }
@@ -1108,6 +1150,17 @@ public class LodTerrainRenderer : IRenderer
                 if (!insideVanilla) AddGap(key);
                 return false;
             }
+            // Hard gate: far L0 stays on the GPU for walk-back but does not
+            // submit. No parent mesh used to force a draw here and that is
+            // how 3200 L0 still landed after 0.7.59.
+            if (level == 0 && !insideVanilla && !holdFine && !mustCover)
+            {
+                lastSelectedFrame[key] = frameCounter;
+                long parent = LodWorld.ParentKey(key);
+                if (!HasAnyMesh(parent)) RequestMesh(parent);
+                AddGap(key);
+                return false;
+            }
             Submit(key);
             return true;
         }
@@ -1136,6 +1189,10 @@ public class LodTerrainRenderer : IRenderer
             long gap = gaps[i];
             int level = LodWorld.KeyLevel(gap);
             if (!LodCoveragePolicy.KeepVisitedSurface(level, world.HasDataSet.Contains(gap)))
+                continue;
+            if (level == 0
+                && !LodCoveragePolicy.HoldVisitedFine(
+                    Math.Sqrt(NearestDistanceSqTo(gap)), liveViewDistance))
                 continue;
             RequestMesh(gap);
             gaps.RemoveAt(i);
@@ -1364,6 +1421,13 @@ public class LodTerrainRenderer : IRenderer
         {
             long key = tooFineDeferred[i];
             if (!HasAnyMesh(key)) continue;
+            if (LodWorld.KeyLevel(key) == 0
+                && !LodCoveragePolicy.HoldVisitedFine(
+                    Math.Sqrt(NearestDistanceSqTo(key)), liveViewDistance))
+            {
+                AddGap(key);
+                continue;
+            }
             Submit(key);
             drew = true;
         }
@@ -1570,9 +1634,10 @@ public class LodTerrainRenderer : IRenderer
         world.RenderDirty.Add(key);
         walkRequested.Add(key);
 
-        // Start reload / server-assist wanted-by-view now, not only when a mesh slot
-        // opens. Otherwise remote-only keys sit pending while the worker idles.
-        if (!world.Sections.ContainsKey(key))
+        // Start a reload only while the in-flight set is small. The walk used
+        // to kick every dirty key on the first frame (6000+ on a cached MP
+        // join). The scheduler still loads the nearest when a slot opens.
+        if (!world.Sections.ContainsKey(key) && world.LoadsInFlight.Count < 64)
             world.TryGetForRender(key, out _);
     }
 
@@ -1914,6 +1979,8 @@ public class LodTerrainRenderer : IRenderer
     void ScheduleMeshJobs()
     {
         if (world.RenderDirty.Count == 0 || worker.PendingMeshes >= maxWorkerMeshBacklog) return;
+        if (meshJobInFlight.Count >= MaxMeshJobsInFlight) return;
+        if (worker.MeshResults.Count >= MaxMeshJobsInFlight) return;
 
         // Two budgets. Starting a background reload costs this thread almost nothing
         // (enqueue a key), whereas building a mesh snapshot is real work, so charging a
