@@ -1,4 +1,4 @@
-using Vintagestory.API.Client;
+﻿using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
@@ -97,14 +97,12 @@ public class LodTerrainRenderer : IRenderer
     long frameCounter;
 
     /// <summary>
-    /// Outside the keep-circle, retire the oldest GPU meshes a couple at a time, every
-    /// frame. Disposing a MeshRef is a driver-side buffer delete, so the old once-a-second
-    /// sweep of 24 put a whole second of deletes into a single frame: the average frame
-    /// stayed fine while p95 spiked. Same meshes, same order, same work per second, spread
-    /// across the second instead of piled into one frame.
+    /// Under real FPS/RAM pressure only: retire a few oldest L0/L1 GPU meshes outside
+    /// 2× view distance per frame. Never dump for mesh-count alone. Spread deletes so
+    /// p95 does not spike.
     /// </summary>
     const int EvictOldestPerFrame = 2;
-    const int EvictOldestPerFrameOverBudget = 4;
+    const int EvictOldestPerFrameUnderPressure = 8;
 
     /// <summary>
     /// Frames between rebuilds of the oldest-first candidate list. Choosing candidates
@@ -115,6 +113,28 @@ public class LodTerrainRenderer : IRenderer
     const int EvictScanInterval = 60;
 
     public int EvictedTotal { get; private set; }
+
+    /// <summary>Evictions that actually freed a mesh outside the 2× keep ring.</summary>
+    public int EvictedOutside2xTotal { get; private set; }
+
+    /// <summary>Candidates skipped because they sat inside 2× view distance.</summary>
+    public int EvictBlockedInside2xTotal { get; private set; }
+
+    /// <summary>True when UpdateMeshPressure saw sustained bad frame time and/or high managed memory.</summary>
+    public bool MeshPressureActive { get; private set; }
+
+    // Rolling frame-time samples for pressure (ms). Mesh count alone never opens pressure.
+    const int FrameSampleCount = 64;
+    readonly double[] frameMsSamples = new double[FrameSampleCount];
+    int frameSampleAt;
+    int frameSampleFilled;
+    double pressureAvgFrameMs;
+    double pressureP95FrameMs;
+    long pressureManagedMb;
+    int fineHorizonRequestsThisFrame;
+    const int FineHorizonRequestsPerFrame = 3;
+    float lookYaw;
+
     readonly Matrixf modelMat = new();
     readonly List<long> drawList = new();
     IShaderProgram? prog;
@@ -122,6 +142,7 @@ public class LodTerrainRenderer : IRenderer
     float appliedZFar;
     Vec3d camPos = new();
     float lookDown01;
+    float lookY;
 
     /// <summary>Dev/testing: keep the game unpaused even without window focus.</summary>
     public bool AutoUnpause;
@@ -209,6 +230,7 @@ public class LodTerrainRenderer : IRenderer
 
     /// <summary>Keys submitted to drawList this frame. Never evicted while drawn.</summary>
     readonly HashSet<long> drawnThisFrame = new();
+    readonly Dictionary<long, bool> realSurfaceMemo = new();
 
     /// <summary>
     /// Captured footprints nothing has drawn yet this frame, as the walk
@@ -260,8 +282,23 @@ public class LodTerrainRenderer : IRenderer
     public int MeshCount => sectionMeshes.Count;
     public int LastDrawCount { get; private set; }
 
+    /// <summary>Walk nodes handed to Farseer this frame (peek or past vanilla view distance).</summary>
+    public int LastCompanionYieldCount { get; private set; }
+
+    /// <summary>Walked tiles past view distance handed to Farseer this frame.</summary>
+    public int LastPressureYieldCount { get; private set; }
+
+    public bool PressureYieldActive =>
+        DrawAfterCompanion && MeshPressureActive;
+
     /// <summary>Sections selected by the walk but skipped this frame as off-screen.</summary>
     public int LastCulledCount { get; private set; }
+
+    /// <summary>L0/L1 meshes skipped this frame by heightfield FOV occlusion (draw skip only).</summary>
+    public int LastOccludedCount { get; private set; }
+
+    /// <summary>Potato FOV occlusion against resident section SurfaceYMax. Configured from DistantVistasConfig.</summary>
+    public readonly LodHeightfieldOcclusion HeightOcclusion = new();
 
     readonly LodFrustum frustum = new();
     int worldHeight = 1024;
@@ -491,9 +528,11 @@ public class LodTerrainRenderer : IRenderer
         bool childFarther = childHasData && childLevel <= LodCoveragePolicy.VisitedKeepMaxLevel
             && IsFartherLoaded(childKey);
         bool childInCone = inLeadCone || (childFarther && InLeadCone(childKey));
+        double childNear = Math.Sqrt(NearestDistanceSqTo(childKey));
         return LodCoveragePolicy.ShouldVisitChildForDraw(
             childLevel, parentWanted, parentDrawFullDetail, parentHasMesh,
-            parentLandLike, childInCone, lookDown01, childHasData, childFarther);
+            parentLandLike, childInCone, lookDown01, childHasData, childFarther,
+            childNear, liveViewDistance, DrawAfterCompanion);
     }
 
     bool IsFartherLoaded(long key) =>
@@ -503,9 +542,18 @@ public class LodTerrainRenderer : IRenderer
 
     void Submit(long key)
     {
+        // Keep the mesh pinned even when occlusion skips the draw — cache stays.
+        lastSelectedFrame[key] = frameCounter;
+        if (HeightOcclusion.Enabled
+            && LodWorld.KeyLevel(key) <= HeightOcclusion.MaxLevel
+            && HeightOcclusion.IsOccluded(
+                world, key, camPos.X, camPos.Y, camPos.Z, lookY, out _))
+        {
+            LastOccludedCount++;
+            return;
+        }
         drawList.Add(key);
         drawnThisFrame.Add(key);
-        lastSelectedFrame[key] = frameCounter;
     }
 
     bool HasAnyMesh(long key) =>
@@ -516,6 +564,62 @@ public class LodTerrainRenderer : IRenderer
         if (world.ProvisionalL0Keys.Contains(key)) return true;
         return world.Sections.TryGetValue(key, out LodSection? section)
             && section.ProvisionalQuadrants != 0;
+    }
+
+    /// <summary>
+    /// Land this client actually walked (or a parent of that land).
+    /// </summary>
+    bool HasRealSurface(long key)
+    {
+        if (realSurfaceMemo.TryGetValue(key, out bool cached)) return cached;
+        int level = LodWorld.KeyLevel(key);
+        bool result;
+        if (level == 0)
+        {
+            result = IsRealL0(key);
+        }
+        else
+        {
+            result = false;
+            for (int qz = 0; qz < 2 && !result; qz++)
+            {
+                for (int qx = 0; qx < 2; qx++)
+                {
+                    long ck = LodWorld.ChildKey(key, qx, qz);
+                    if (world.HasDataSet.Contains(ck) && HasRealSurface(ck))
+                    {
+                        result = true;
+                        break;
+                    }
+                }
+            }
+        }
+        realSurfaceMemo[key] = result;
+        return result;
+    }
+
+    bool IsRealL0(long key)
+    {
+        if (!world.HasDataSet.Contains(key)) return false;
+        if (!world.ProvisionalL0Keys.Contains(key)) return true;
+        if (world.Sections.TryGetValue(key, out LodSection? section))
+            return !section.IsPeekOnly();
+        return false;
+    }
+
+    bool YieldToCompanion(long key, bool count = false)
+    {
+        double near = Math.Sqrt(NearestDistanceSqTo(key));
+        bool yield = LodCoveragePolicy.YieldFootprintToCompanion(
+            DrawAfterCompanion, HasRealSurface(key),
+            sectionMeshes.Count, LodMemoryBudget.MaxResidentMeshes,
+            near, liveViewDistance);
+        if (yield && count)
+        {
+            LastCompanionYieldCount++;
+            if (HasRealSurface(key)) LastPressureYieldCount++;
+        }
+        return yield;
     }
 
     bool HasDrawableMesh(long key) =>
@@ -795,10 +899,26 @@ public class LodTerrainRenderer : IRenderer
         double nearDistSq = NearestDistanceSqTo(key);
         double nearDist = Math.Sqrt(nearDistSq);
 
-        // Optional extra ceiling. 0 means keep drawing the whole visited landscape
-        // (cheap coarse rungs far out). GPU L0/L1 still pages outside the keep-circle.
+        // Optional extra ceiling. Returning false used to make the L6 parent
+        // paint a giant square over the cap. Treat it as covered fog instead.
         if (FarViewDistanceCap > 0 && nearDist > FarViewDistanceCap + LodSection.SectionBlocks)
-            return false;
+            return true;
+
+        if (YieldToCompanion(key, count: true))
+        {
+            if (level == 0) return false;
+            bool yieldedChild = false;
+            for (int qz = 0; qz < 2; qz++)
+            {
+                for (int qx = 0; qx < 2; qx++)
+                {
+                    long ck = LodWorld.ChildKey(key, qx, qz);
+                    if (world.HasDataSet.Contains(ck))
+                        yieldedChild |= CollectDrawNodes(ck);
+                }
+            }
+            return yieldedChild;
+        }
 
         // Near-cull must not abort quadtree descent; only skip *drawing* sections
         // whose nearest edge is inside the vanilla bubble. Top-level L6 sections are
@@ -813,6 +933,19 @@ public class LodTerrainRenderer : IRenderer
 
         bool landLike = ComputeLandLike(level, coverageSection, key);
         bool inLeadCone = InLeadCone(key);
+        bool horizonCone = LodCoveragePolicy.HorizonLeadCone(inLeadCone, lookDown01);
+        bool fineHorizon = LodCoveragePolicy.HorizonLeadConeFine(
+            inLeadCone, lookDown01, nearDist, liveViewDistance);
+
+        // Past 3x view distance in front: stop only when a companion is
+        // actually drawing that band. Farseer off means empty sky if we stop,
+        // so keep DV land-like cover instead.
+        if (horizonCone && LodCoveragePolicy.PastHorizonEmptyStop(
+                nearDist, liveViewDistance, DrawAfterCompanion))
+        {
+            if (hasMesh) lastSelectedFrame[key] = frameCounter;
+            return true;
+        }
 
         int wanted = LodWorld.WantedLevelForSq(nearDistSq);
 
@@ -845,17 +978,23 @@ public class LodTerrainRenderer : IRenderer
                 nearDist, LodWorld.KeyFootprintBlocks(key), FarthestKnownDistance)
             && (!hasData || !inLeadCone || CapturedBeyond(key));
         bool mustCover = !insideVanilla
-            && LodCoveragePolicy.MustCoverIntervening(level, hasData, inLeadCone, fartherLoaded);
+            && LodCoveragePolicy.MustCoverIntervening(
+                level, hasData, inLeadCone, fartherLoaded, nearDist, liveViewDistance);
         // Gaps appended by this node's subtree start here; see gaps.
         int gapStart = gaps.Count;
 
         // Mesh the surface we will actually draw. L0/L1 at the 1.0x ring and
         // handoff; wanted-level further out, including mip parents of visited L0.
         // Do not request a parent just so we can paint a giant square over a hole.
-        if (!hasMesh)
+        if (!hasMesh && !(horizonCone && level > LodCoveragePolicy.LeadConeMaxDrawLevel))
         {
-            if (inLeadCone && !insideVanilla)
+            // Cap lead-cone L0 promote per frame so a small yaw does not remesh storm.
+            if (fineHorizon && !insideVanilla
+                && fineHorizonRequestsThisFrame < FineHorizonRequestsPerFrame)
+            {
+                fineHorizonRequestsThisFrame++;
                 RequestMesh(key);
+            }
             else if (handoff && level <= 1)
                 RequestMesh(key);
             else if (LodCoveragePolicy.RequestVisitedKeepMesh(
@@ -902,26 +1041,32 @@ public class LodTerrainRenderer : IRenderer
         bool keepVisited = LodCoveragePolicy.DescendForVisitedKeep(
             level, ChildHasVisitedSurface(key), nearDist, liveViewDistance, inLeadCone, fartherLoaded);
 
-        if (!insideVanilla && !drawFullDetail && wanted >= 2)
+        if (!insideVanilla && !drawFullDetail && wanted >= 2 && !horizonCone)
             RequestCoarseFill(key, wanted);
 
-        // In the lead cone never stop or draw L2+: only L0 and land-like L1
-        // in front. A plate in the lead cone (including at the coarsen ring)
-        // also does not stop: walk children so real L0/L1 land still covers
-        // the hills. Behind the lead cone L2+ (even a plate) may stop as a
-        // cheap stand-in.
+        // PreferParentCoverage: until every child can replace this parent, a
+        // land-like mesh here is cover, not a license to punch sky by refusing
+        // L2+ in the lead cone with nothing underneath.
+        bool preferParent = level >= 1
+            && LodCoveragePolicy.PreferParentCoverage(hasMesh, AllChildrenCovered(key));
+
+        // In the lead cone prefer L0/L1, but a land-like parent may stop when
+        // PreferParentCoverage says children are not ready, or land-like L2
+        // past the fine ring. Plates still never stop in front.
         bool stopAtThisRung = LodCoveragePolicy.StopDescentAtAvailableRung(
-            level, wanted, drawFullDetail, hasMesh, landLike, inLeadCone, lookDown01)
+            level, wanted, drawFullDetail, hasMesh, landLike, inLeadCone, lookDown01,
+            nearDist, liveViewDistance, preferParent)
             && LodCoveragePolicy.MaySubmitCoarseWhole(level, nearDist, vanillaCoverageRadius);
-        if (stopAtThisRung && level < wanted)
+        if (stopAtThisRung && level < wanted && !horizonCone)
             RequestCoarseFill(key, wanted);
 
         bool drawableCoarse = hasMesh && LodCoveragePolicy.MayDrawCoarseParent(
-            level, insideVanilla, landLike, inLeadCone, lookDown01);
+            level, insideVanilla, landLike, inLeadCone, lookDown01, nearDist, liveViewDistance,
+            preferParent);
 
         // L1 used to stop here and hide the L0 the player already walked. That
         // is the "I had data, it vanished when I backed up" hole.
-        bool walkCapturedL0 = level == 1;
+        bool walkCapturedL0 = level == 1 && (drawFullDetail || fineHorizon);
 
         if ((walkCapturedL0 || !stopAtThisRung) && level > 0 && (walkCapturedL0 || forcedDetail || (level > wanted && AllChildrenCovered(key)) || !drawableCoarse
             || (holdVisitedL0 && wanted == 0) || keepVisited || drawFullDetail))
@@ -940,9 +1085,14 @@ public class LodTerrainRenderer : IRenderer
                         // uncovered footprints (or parked itself in tooFineDeferred).
                         if (CollectDrawNodes(ck)) anyChildDrew = true;
                     }
-                    else
+                    else if (!horizonCone
+                             && !LodCoveragePolicy.PastHorizonEmptyStop(
+                                 Math.Sqrt(NearestDistanceSqTo(ck)), liveViewDistance,
+                                 DrawAfterCompanion))
                     {
                         // Not walked at all this frame: nothing under it can draw.
+                        // In the lead cone a skipped L2+ used to be left as sky;
+                        // register the gap so a land-like ancestor can clip-fill.
                         AddGap(ck);
                     }
                 }
@@ -959,8 +1109,14 @@ public class LodTerrainRenderer : IRenderer
             // loaded chunks, and painting over them put L1 mip pillars beside
             // the player in freshly captured land.
             bool touchesVanilla = nearDist < vanillaCoverageRadius;
-            if (!LodCoveragePolicy.MayPaintWholeAfterDescent(
-                    anyChildDrew, drawableCoarse, forcedDetail, holdVisitedL0, touchesVanilla))
+            // PreferParent whole paint caps at L2 in the cone (LeadConeMaxCoverLevel).
+            // L3+ never paints the whole footprint in front  -  that is cake plates.
+            bool paintWhole = LodCoveragePolicy.MayPaintWholeAfterDescent(
+                    anyChildDrew, drawableCoarse, forcedDetail, holdVisitedL0, touchesVanilla)
+                && (!(horizonCone && level > LodCoveragePolicy.LeadConeMaxDrawLevel)
+                    || (landLike && preferParent
+                        && level <= LodCoveragePolicy.LeadConeMaxCoverLevel));
+            if (!paintWhole)
             {
                 if (hasMesh) lastSelectedFrame[key] = frameCounter;
                 // This parent is not drawing whole. Children that stepped aside
@@ -975,7 +1131,7 @@ public class LodTerrainRenderer : IRenderer
                     {
                         anyChildDrew |= FillGaps(key, gapStart, liveViewDistance);
                     }
-                    else if (!hasMesh)
+                    else if (!hasMesh && !(horizonCone && level > LodCoveragePolicy.LeadConeMaxDrawLevel))
                     {
                         // Nothing here to fill with: hand the gaps up, as one
                         // footprint when the whole subtree is missing, and get a
@@ -1002,13 +1158,27 @@ public class LodTerrainRenderer : IRenderer
                 return false;
             }
 
-            if (level == 0 && world.IncompleteL0Keys.Contains(key))
+            if (level == 0 && (world.IncompleteL0Keys.Contains(key) || world.SparseL0Keys.Contains(key)))
             {
-                // Its captured quadrants are the finest picture of them we hold;
-                // the parent mip has no more there. Draw them. The quadrants that
-                // were never captured are not a gap either: no rung has them.
+                // Thin / incomplete L0 alone is a hole next to real hills when a
+                // land-like parent can cover the footprint. PreferParentCoverage
+                // keeps the parent until remesh fills the missing quadrants.
                 if (LodCoveragePolicy.DrawIncompleteL0(hasMesh, insideVanilla))
                 {
+                    long parentKey = LodWorld.ParentKey(key);
+                    bool parentHasMesh = HasAnyMesh(parentKey);
+                    world.Sections.TryGetValue(parentKey, out LodSection? parentSec);
+                    bool parentLandLike = ComputeLandLike(
+                        LodWorld.KeyLevel(parentKey), parentSec, parentKey);
+                    if (parentLandLike
+                        && LodCoveragePolicy.PreferParentCoverage(
+                            parentHasMesh, AllChildrenCovered(parentKey)))
+                    {
+                        lastSelectedFrame[key] = frameCounter;
+                        if (!insideVanilla) AddGap(key);
+                        RequestMesh(key);
+                        return false;
+                    }
                     Submit(key);
                     return true;
                 }
@@ -1016,13 +1186,24 @@ public class LodTerrainRenderer : IRenderer
                 return false;
             }
 
-            if (!LodCoveragePolicy.MayDrawCoarseParent(level, insideVanilla, landLike, inLeadCone, lookDown01))
+            bool preferHere = level >= 1
+                && LodCoveragePolicy.PreferParentCoverage(hasMesh, AllChildrenCovered(key));
+            if (!LodCoveragePolicy.MayDrawCoarseParent(
+                    level, insideVanilla, landLike, inLeadCone, lookDown01, nearDist, liveViewDistance,
+                    preferHere))
             {
-                // Refused as a whole plate (horizon rules) without having walked
-                // its children. Far away, a meshed L1 is still land. Next to the
-                // player it is the brown cubes over vanilla — do not Submit.
+                // Refused as a whole plate (horizon / L2+ / non-land). Land-like
+                // L1/L2 may still cover via MayLeadConeCoarseCover when children
+                // are not ready. L3+ never whole-submits here  -  AddGap so an
+                // ancestor can clip-fill. Silent refuse with no AddGap was the
+                // giant sky vanish on yaw.
                 lastSelectedFrame[key] = frameCounter;
-                if (!insideVanilla && HasDrawableMesh(key)
+                if (!insideVanilla
+                    && landLike
+                    && preferHere
+                    && LodCoveragePolicy.MayLeadConeCoarseCover(
+                        level, landLike, inLeadCone, lookDown01, nearDist, liveViewDistance,
+                        preferHere)
                     && LodCoveragePolicy.MaySubmitCoarseWhole(level, nearDist, vanillaCoverageRadius))
                 {
                     Submit(key);
@@ -1045,7 +1226,7 @@ public class LodTerrainRenderer : IRenderer
                 bool parentLandLike = ComputeLandLike(LodWorld.KeyLevel(parentKey), parentSec, parentKey);
                 if (LodCoveragePolicy.SkipDrawTooFine(
                         level, wanted, drawFullDetail, parentHasMesh, parentLandLike, inLeadCone, lookDown01,
-                        mustCover))
+                        mustCover, nearDist, liveViewDistance))
                 {
                     // Only valid if the parent really draws. The parent decides
                     // after all its children, so park this one until then.
@@ -1142,9 +1323,25 @@ public class LodTerrainRenderer : IRenderer
 
         float overdraw = GameMath.Clamp(OverdrawStart, 0.15f, 0.95f);
         double coverageRadius = liveViewDistance * overdraw;
+        int fillerLevel = LodWorld.KeyLevel(key);
+        bool fillerLandLike = ComputeLandLike(fillerLevel, fillerBounds, key);
+        bool coneCoarse = LodCoveragePolicy.HorizonLeadCone(InLeadCone(key), lookDown01)
+            && fillerLevel > LodCoveragePolicy.LeadConeMaxDrawLevel;
+        // In the cone: land-like L2 may whole-fill; L3+ never (cake plates).
+        // Flat / non-land plates still may not  -  those stay clipped or discarded.
+        // L3+ wholeFootprint falls through to clipped gap draws below.
         bool mayWhole = wholeFootprint
             && LodCoveragePolicy.MaySubmitCoarseWhole(
-                LodWorld.KeyLevel(key), Math.Sqrt(NearestDistanceSqTo(key)), coverageRadius);
+                fillerLevel, Math.Sqrt(NearestDistanceSqTo(key)), coverageRadius)
+            && (!coneCoarse
+                || (fillerLandLike && fillerLevel <= LodCoveragePolicy.LeadConeMaxCoverLevel));
+
+        if (wholeFootprint && coneCoarse && !fillerLandLike)
+        {
+            // Four L1 holes filled with one flat plate is still one giant square.
+            DiscardGaps(start);
+            return false;
+        }
 
         if (mayWhole)
         {
@@ -1161,7 +1358,12 @@ public class LodTerrainRenderer : IRenderer
             {
                 long gap = gaps[i];
                 if (GapInsideVanilla(gap, fillerBounds, vanillaCoverageRadius)) continue;
-                if (gapDraws.Count >= LodCoveragePolicy.MaxGapDrawsPerFrame) break;
+                if (gapDraws.Count >= LodCoveragePolicy.MaxGapDrawsPerFrame)
+                {
+                    if (holeLog != null && frameCounter - lastUnfilledLogFrame >= UnfilledLogIntervalFrames)
+                        holeLog($"gap budget capped at {LodCoveragePolicy.MaxGapDrawsPerFrame}; nearest gaps kept, rest wait a frame");
+                    break;
+                }
                 int gapFootprint = LodWorld.KeyFootprintBlocks(gap);
                 double gx = LodWorld.KeySx(gap) * (double)gapFootprint - originX;
                 double gz = LodWorld.KeySz(gap) * (double)gapFootprint - originZ;
@@ -1209,6 +1411,15 @@ public class LodTerrainRenderer : IRenderer
             if (!HasDrawableMesh(key)) continue;
             world.Sections.TryGetValue(key, out LodSection? gapSec);
             if (VanillaOwnsKey(key, gapSec, liveViewDistance)) continue;
+            int gapLevel = LodWorld.KeyLevel(key);
+            if (gapLevel > LodCoveragePolicy.LeadConeMaxDrawLevel
+                && LodCoveragePolicy.HorizonLeadCone(InLeadCone(key), lookDown01))
+            {
+                // Land-like L2 meshed gaps may submit; flat plates and L3+
+                // whole plates stay skipped (clip-fill handles L3+ holes).
+                if (gapLevel > LodCoveragePolicy.LeadConeMaxCoverLevel) continue;
+                if (!ComputeLandLike(gapLevel, gapSec, key)) continue;
+            }
             float overdraw = GameMath.Clamp(OverdrawStart, 0.15f, 0.95f);
             if (!LodCoveragePolicy.MaySubmitCoarseWhole(
                     LodWorld.KeyLevel(key), Math.Sqrt(NearestDistanceSqTo(key)),
@@ -1493,6 +1704,8 @@ public class LodTerrainRenderer : IRenderer
     /// <summary>Demand-driven (re)meshing: the selection walk is the load queue (Voxy's idea, CPU-side).</summary>
     void RequestMesh(long key)
     {
+        if (YieldToCompanion(key))
+            return;
         if (meshJobInFlight.Contains(key)) return;
 
         // RAM-evicted sections still count: HasDataSet says whether the subtree has
@@ -1564,35 +1777,112 @@ public class LodTerrainRenderer : IRenderer
         return LodCoveragePolicy.IsNearVisitedTrail(dist, liveViewDistance);
     }
 
+    bool OutsidePressureKeepRing(long key)
+    {
+        double dist = Math.Sqrt(NearestDistanceSqTo(key));
+        return dist >= liveViewDistance * LodMemoryBudget.PressureKeepScale;
+    }
+
+    void UpdateMeshPressure(float deltaTime)
+    {
+        double ms = deltaTime > 0 && deltaTime < 2.0 ? deltaTime * 1000.0 : pressureAvgFrameMs;
+        if (ms < 1.0) ms = 1.0;
+        frameMsSamples[frameSampleAt] = ms;
+        frameSampleAt = (frameSampleAt + 1) % FrameSampleCount;
+        if (frameSampleFilled < FrameSampleCount) frameSampleFilled++;
+
+        double sum = 0;
+        int n = frameSampleFilled;
+        for (int i = 0; i < n; i++) sum += frameMsSamples[i];
+        pressureAvgFrameMs = n == 0 ? ms : sum / n;
+
+        // Cheap p95: copy + partial sort of the small ring.
+        double p95 = pressureAvgFrameMs;
+        if (n >= 8)
+        {
+            Span<double> tmp = stackalloc double[FrameSampleCount];
+            for (int i = 0; i < n; i++) tmp[i] = frameMsSamples[i];
+            tmp.Slice(0, n).Sort();
+            int idx = (int)((n - 1) * 0.95);
+            if (idx < 0) idx = 0;
+            if (idx >= n) idx = n - 1;
+            p95 = tmp[idx];
+        }
+        pressureP95FrameMs = p95;
+
+        try { pressureManagedMb = GC.GetTotalMemory(false) / (1024 * 1024); }
+        catch { /* keep prior */ }
+
+        MeshPressureActive = LodMemoryBudget.IsUnderPressure(
+            pressureAvgFrameMs, pressureP95FrameMs, pressureManagedMb, sectionMeshes.Count);
+
+        // Soft mesh hint only AFTER frame time is already bad: dense far sets under hitch.
+        if (!MeshPressureActive
+            && (pressureP95FrameMs >= LodMemoryBudget.FramePressureMs)
+            && sectionMeshes.Count > LodMemoryBudget.MaxResidentMeshes)
+            MeshPressureActive = true;
+    }
+
     void EvictStaleMeshes()
     {
+        // Never drop meshes for count alone. Only when the player is actually hurting.
+        if (!MeshPressureActive) return;
+
         bool drained = evictCursor >= evictBatch.Count;
         if (frameCounter - lastEvictScanFrame >= EvictScanInterval || (drained && evictBatchFull))
             ScanEvictionCandidates();
 
-        int budget = sectionMeshes.Count > LodMemoryBudget.MaxResidentMeshes
-            ? EvictOldestPerFrameOverBudget
-            : EvictOldestPerFrame;
+        int budget = EvictOldestPerFrameUnderPressure;
 
         while (budget > 0 && evictCursor < evictBatch.Count)
         {
             long key = evictBatch[evictCursor++];
 
-            // The list can be a whole scan old, so the keep-circle is checked again here:
-            // a key the player has turned back toward is inside it now and stays.
-            if (InJustLeftRing(key)) continue;
+            bool farseerFill = YieldToCompanion(key);
 
-            // A mesh on screen this frame is not stale, whatever the keep-circle
-            // says: dropping it while a sibling still draws is next frame's hole.
+            // Re-check 2× ring: turning back toward land must keep it.
+            if (!farseerFill && !OutsidePressureKeepRing(key))
+            {
+                EvictBlockedInside2xTotal++;
+                continue;
+            }
+            if (!farseerFill && InJustLeftRing(key))
+            {
+                EvictBlockedInside2xTotal++;
+                continue;
+            }
+
             if (drawnThisFrame.Contains(key)) continue;
 
-            // No hole then pop: if this mesh was selected this frame and the coarser
-            // parent is not drawable yet, leave it. Tiles that have left the keep-circle
-            // and are no longer selected may go.
             if (lastSelectedFrame.TryGetValue(key, out long selected) && selected == frameCounter)
             {
+                int lvl = LodWorld.KeyLevel(key);
                 long parent = LodWorld.ParentKey(key);
-                if (LodWorld.KeyLevel(key) < LodWorld.MaxLevel && !HasAnyMesh(parent))
+                if (lvl < LodWorld.MaxLevel && !HasAnyMesh(parent))
+                    continue;
+                if (lvl <= 1 && lvl < LodWorld.MaxLevel)
+                {
+                    world.Sections.TryGetValue(parent, out LodSection? psec);
+                    bool parentLandLike = ComputeLandLike(LodWorld.KeyLevel(parent), psec, parent);
+                    bool parentPrefer = LodCoveragePolicy.PreferParentCoverage(
+                        HasAnyMesh(parent), AllChildrenCovered(parent));
+                    if (!LodCoveragePolicy.MayDrawCoarseParent(
+                            LodWorld.KeyLevel(parent), false, parentLandLike,
+                            InLeadCone(parent), lookDown01,
+                            Math.Sqrt(NearestDistanceSqTo(parent)), liveViewDistance,
+                            parentPrefer))
+                        continue;
+                }
+            }
+            if (LodWorld.KeyLevel(key) <= 1)
+            {
+                bool pinData = world.HasDataSet.Contains(key);
+                double pinDist = Math.Sqrt(NearestDistanceSqTo(key));
+                bool pinFarther = LodCoveragePolicy.IsFartherLoaded(
+                    pinDist, LodWorld.KeyFootprintBlocks(key), FarthestKnownDistance);
+                if (LodCoveragePolicy.MustCoverIntervening(
+                        LodWorld.KeyLevel(key), pinData, InLeadCone(key), pinFarther,
+                        pinDist, liveViewDistance))
                     continue;
             }
 
@@ -1600,20 +1890,18 @@ public class LodTerrainRenderer : IRenderer
             if (sectionMeshes.Remove(key, out MeshRef? mesh)) { mesh.Dispose(); freed = true; }
             if (waterMeshes.Remove(key, out MeshRef? water)) { water.Dispose(); freed = true; }
 
-            // Nothing was holding GPU memory for this key any more, so it does not spend
-            // the frame's budget. Move on to the next candidate instead.
             if (!freed) continue;
 
             lastSelectedFrame.Remove(key);
             meshBornFrame.Remove(key);
             EvictedTotal++;
+            EvictedOutside2xTotal++;
             budget--;
         }
     }
 
     /// <summary>
-    /// Rebuild the oldest-first eviction list. Selection is unchanged: L0/L1 only, never
-    /// inside the RAM-scaled keep-circle or the just-left ring, oldest mesh first.
+    /// Oldest-first L0/L1 outside 2× view distance. Disk cache stays; only GPU meshes go.
     /// </summary>
     void ScanEvictionCandidates()
     {
@@ -1622,9 +1910,7 @@ public class LodTerrainRenderer : IRenderer
 
         LodCoveragePolicy.KeepCircleScale = LodMemoryBudget.LiveKeepScale(sectionMeshes.Count);
 
-        int want = (sectionMeshes.Count > LodMemoryBudget.MaxResidentMeshes
-            ? EvictOldestPerFrameOverBudget
-            : EvictOldestPerFrame) * EvictScanInterval;
+        int want = EvictOldestPerFrameUnderPressure * EvictScanInterval;
 
         evictBatch.Clear();
         evictBorn.Clear();
@@ -1635,25 +1921,36 @@ public class LodTerrainRenderer : IRenderer
             ConsiderForEviction(key, want);
         }
 
-        // A list that filled up means there is more to retire than this window holds, so
-        // draining it early earns a fresh scan rather than an idle wait.
         evictBatchFull = evictBatch.Count >= want;
     }
 
     /// <summary>
-    /// Place one candidate in the oldest-first list, keeping at most <paramref name="want"/>
-    /// of them. Coarse far meshes are the giant landscape, so only the expensive L0/L1
-    /// outside the keep-circle is eligible, same idea as DH's clipmap.
+    /// Pressure candidates: expensive L0/L1 outside the 2× keep ring, oldest first.
+    /// Fail toward keeping meshes when unsure.
     /// </summary>
     void ConsiderForEviction(long key, int want)
     {
-        if (LodWorld.KeyLevel(key) > 1) return;
-        if (InJustLeftRing(key)) return;
+        bool farseerFill = YieldToCompanion(key);
+        if (!farseerFill)
+        {
+            if (LodWorld.KeyLevel(key) > 1) return;
+            if (!OutsidePressureKeepRing(key)) return;
+            if (InJustLeftRing(key)) return;
+            bool pinData = world.HasDataSet.Contains(key);
+            double pinDist = Math.Sqrt(NearestDistanceSqTo(key));
+            bool pinFarther = LodCoveragePolicy.IsFartherLoaded(
+                pinDist, LodWorld.KeyFootprintBlocks(key), FarthestKnownDistance);
+            if (LodCoveragePolicy.MustCoverIntervening(
+                    LodWorld.KeyLevel(key), pinData, InLeadCone(key), pinFarther,
+                    pinDist, liveViewDistance))
+                return;
+            long parent = LodWorld.ParentKey(key);
+            if (LodWorld.KeyLevel(key) < LodWorld.MaxLevel && !HasAnyMesh(parent))
+                return;
+        }
 
         long born = meshBornFrame.TryGetValue(key, out long b) ? b : 0;
 
-        // Younger than everything already held, with no room left: it would fall off the
-        // end of the list anyway, so skip the insert.
         if (evictBatch.Count >= want && born >= evictBorn[evictBorn.Count - 1]) return;
 
         int at = evictBorn.Count;
@@ -1698,6 +1995,11 @@ public class LodTerrainRenderer : IRenderer
         dirtyPrune.Clear();
         foreach (long key in world.RenderDirty)
         {
+            if (YieldToCompanion(key))
+            {
+                dirtyPrune.Add(key);
+                continue;
+            }
             int dirtyLevel = LodWorld.KeyLevel(key);
             double pruneDist = Math.Sqrt(NearestDistanceSqTo(key));
             float overdrawP = GameMath.Clamp(OverdrawStart, 0.15f, 0.95f);
@@ -1759,6 +2061,8 @@ public class LodTerrainRenderer : IRenderer
             // Skip anything already being meshed or reloaded, so the per-frame budget
             // goes to sections that can actually start work now.
             if (meshJobInFlight.Contains(key) || world.LoadsInFlight.Contains(key)) continue;
+            if (YieldToCompanion(key))
+                continue;
             // Idle: already-meshed land waits for a tile of travel, except peek
             // cubes that have to remesh when the real chunk lands at spawn.
             if (!LodCoveragePolicy.ShouldRemeshWhileIdle(
@@ -1813,6 +2117,8 @@ public class LodTerrainRenderer : IRenderer
         foreach (long key in world.RenderDirty)
         {
             if (meshJobInFlight.Contains(key) || world.LoadsInFlight.Contains(key)) continue;
+            if (YieldToCompanion(key))
+                continue;
             int level = LodWorld.KeyLevel(key);
             if (!LodCoveragePolicy.KeepVisitedSurface(level, world.HasDataSet.Contains(key))) continue;
             if (HasAnyMesh(key)) continue;
@@ -2022,8 +2328,13 @@ public class LodTerrainRenderer : IRenderer
 
         camPos = capi.World.Player.Entity.CameraPos;
         Vec3f look = capi.World.Player.Entity.Pos.GetViewVector();
+        lookY = look.Y;
+        lookYaw = MathF.Atan2(look.X, look.Z);
         lookDown01 = LodCoveragePolicy.LookDownAmount(look.Y);
         UpdateKeepOrigin();
+        UpdateMeshPressure(deltaTime);
+        HeightOcclusion.BeginFrame(camPos.X, camPos.Z, lookYaw);
+        fineHorizonRequestsThisFrame = 0;
         frameCounter++;
 
         // Timed apart, not together. Lumped into one counter they cannot be told apart,
@@ -2031,20 +2342,21 @@ public class LodTerrainRenderer : IRenderer
         // while scheduling picks a bounded number of jobs out of it. A spike in the pair
         // was being read as a spike in scheduling.
         long phaseStart = LodPhaseCost.Start();
+        realSurfaceMemo.Clear();
         PruneRenderDirty();
         PruneCost.Add(phaseStart);
 
         // View distance / far distance first so CollectDrawNodes can RequestMesh from
         // cache before ScheduleMeshJobs runs (same-frame schedule of those requests).
         // Empty sectionMeshes is normal on first frames after join while the dirty
-        // queue fills â€” do not early-return solely because meshes are empty.
+        // queue fills Ã¢â‚¬â€ do not early-return solely because meshes are empty.
         var playerData = capi.World.Player.WorldData;
         float viewDistance = playerData.DesiredViewDistance;
         if (playerData.LastApprovedViewDistance > 0)
         {
             viewDistance = Math.Min(viewDistance, playerData.LastApprovedViewDistance);
         }
-        // Keep LOD ladder glued to the live graphics setting (e.g. 256 â†’ 1000).
+        // Keep LOD ladder glued to the live graphics setting (e.g. 256 Ã¢â€ â€™ 1000).
         liveViewDistance = Math.Max(64f, viewDistance);
         LodWorld.ViewDistanceAnchor = liveViewDistance;
         LodWorld.OverdrawStart = GameMath.Clamp(OverdrawStart, 0.15f, 0.95f);
@@ -2060,6 +2372,9 @@ public class LodTerrainRenderer : IRenderer
 
         phaseStart = LodPhaseCost.Start();
         drawList.Clear();
+        LastCompanionYieldCount = 0;
+        LastPressureYieldCount = 0;
+        LastOccludedCount = 0;
         drawnThisFrame.Clear();
         tooFineDeferred.Clear();
         gaps.Clear();
@@ -2077,9 +2392,8 @@ public class LodTerrainRenderer : IRenderer
         ScheduleCost.Add(phaseStart);
 
         UploadFinishedMeshes();
-        // Window does not move while idle, so nothing leaves the keep-circle and
-        // nothing is disposed. Same meshes stay on the GPU until XZ actually shifts.
-        if (windowMovedThisFrame)
+        // Pressure-only: idle turning with a fat cache must not punch mid-land holes.
+        if (MeshPressureActive)
             EvictStaleMeshes();
         RefreshSeasonalState();
 
@@ -2134,7 +2448,7 @@ public class LodTerrainRenderer : IRenderer
 
         prog.Uniform("viewDistance", viewDistance);
         prog.Uniform("overdrawStart", GameMath.Clamp(OverdrawStart, 0.15f, 0.95f));
-        prog.Uniform("lookDown", lookDown01);
+        prog.Uniform("lookDown", LodCoveragePolicy.LookDownSteepAmount(lookDown01));
         prog.Uniform("farViewDistance", EffectiveFarDistance);
         prog.Uniform("skyFadeStart", SkyFadeStart);
         prog.Uniform("pastViewHaze", DisableLodFog ? 0f : PastViewHaze);
@@ -2426,6 +2740,9 @@ public class LodTerrainRenderer : IRenderer
         capi.Event.UnregisterRenderer(this, EnumRenderStage.Opaque);
     }
 }
+
+
+
 
 
 

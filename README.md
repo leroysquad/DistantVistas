@@ -60,8 +60,10 @@ in advance.
 
 **Farseer:** this mod used to go idle whenever Farseer was installed, which is why
 people said Distant Vistas did not render. From 0.7.55 we draw with Farseer behind us.
-Our tiles sit on top where we have them. Farseer still paints fog-colored hills in the
-leftover distance. It should not crash. I am not sure the mix looks right for everyone.
+Our tiles sit on top where we have them. From 0.7.57 we overlay their region shaders
+(no Harmony): the sky-ring disc starts 24 blocks out instead of 0.785 of view
+distance, SkyTint is clamped, and their heightmap is not mixed into cloudless sky.
+Keep SkyTint around 0.4 in Ctrl+Shift+F. 5-10 bleaches their hills into the sky.
 
 **ChunkLOD and TopoHorizon:** we still sit out while those draw. `.dvdefer off` makes
 this mod draw anyway. Then switch the other one off as well, or they fight.

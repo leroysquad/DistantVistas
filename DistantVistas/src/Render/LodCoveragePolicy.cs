@@ -17,15 +17,15 @@ public static class LodCoveragePolicy
     public static bool IsVisitedKeepLevel(int level) => level <= VisitedKeepMaxLevel;
 
     /// <summary>
-    /// Keep-circle is vanilla view distance times this scale (2x on a typical 16 GB
-    /// box, smaller on 8 GB, larger on 32 GB). LodMemoryBudget sets it at startup
-    /// and may shrink it when live GPU meshes go over budget.
+    /// Keep-circle is vanilla view distance times this scale (2× on big RAM so
+    /// visited land stays). LodMemoryBudget sets it at startup. Mesh count alone
+    /// never shrinks it; pressure eviction only drops outside PressureKeepScale.
     /// </summary>
     public static float KeepCircleScale = LodMemoryBudget.DefaultKeepScale;
 
     /// <summary>
     /// Inside this circle, visited L0/L1 stays on the GPU and skips frustum cull.
-    /// Outside it, oldest meshes un-render first; disk rows stay so walking back remeshes.
+    /// Outside it, under pressure only, oldest meshes may un-render; disk stays.
     /// </summary>
     public static bool IsNearVisitedTrail(double distance, double viewDistanceAnchor) =>
         distance < viewDistanceAnchor * KeepCircleScale;
@@ -105,10 +105,13 @@ public static class LodCoveragePolicy
         // tile you are standing on. That drew LOD on loaded ice and the two
         // meshes flickered. Only uncover when the camera is high enough that
         // vanilla often dropped that column; at your feet the 3D sphere wins.
+        // Mild pitch still has skyline in frame (0.55 is ~33 deg). Do not
+        // shrink until LookDownSteepAmount, same gate as coarse fill.
         double aboveSurface = Math.Max(0, cameraY - surfaceYMax);
-        if (aboveSurface >= radius * 0.45)
+        float steep = LookDownSteepAmount(lookDown01);
+        if (aboveSurface >= radius * 0.45 && steep > 0)
         {
-            double scale = 1.0 - lookDown01;
+            double scale = 1.0 - steep;
             groundReachSq *= scale * scale;
         }
         return horizontalDistanceSq < groundReachSq;
@@ -229,9 +232,12 @@ public static class LodCoveragePolicy
     /// middle of terrain that is otherwise there. Bounded to the lead cone so
     /// the 360-degree map does not explode into L0 draws nobody can see, and
     /// to tiles we have data for; incomplete L0 is still the renderer's skip.
+    /// Past LeadConeFineScale the coarse parent is the picture.
     /// </summary>
-    public static bool MustCoverIntervening(int level, bool hasData, bool inLeadCone, bool fartherLoaded) =>
-        KeepVisitedSurface(level, hasData) && inLeadCone && fartherLoaded;
+    public static bool MustCoverIntervening(int level, bool hasData, bool inLeadCone, bool fartherLoaded,
+        double nearDist = 0, double viewDistance = 0) =>
+        KeepVisitedSurface(level, hasData) && inLeadCone && fartherLoaded
+        && (viewDistance <= 0 || nearDist <= viewDistance * LeadConeFineScale);
 
     /// <summary>
     /// A tile's far corner lies short of the farthest mesh we hold: land is
@@ -278,7 +284,7 @@ public static class LodCoveragePolicy
     /// Never paint a coarse (L1+) WHOLE footprint when the camera is inside it.
     /// Descend and draw children; clip-fill only gaps that fail VanillaOwnsKey.
     /// Far L1/L2 whose near edge is past the coverage radius may still draw whole.
-    /// Not a blanket "nearDist &lt; view distance" ban — that hid far children of
+    /// Not a blanket "nearDist &lt; view distance" ban  -  that hid far children of
     /// a tile you are standing in (0.7.51 rectangle / chunkster).
     /// </summary>
     public static bool MaySubmitCoarseWhole(
@@ -309,7 +315,7 @@ public static class LodCoveragePolicy
     /// past the cap the farthest gaps wait a frame, which is still land next
     /// frame rather than sky.
     /// </summary>
-    public const int MaxGapDrawsPerFrame = 384;
+    public const int MaxGapDrawsPerFrame = 1024;
 
     /// <summary>
     /// Ask for the same-quality GPU mesh of visited L0/L1 inside the 1.0x draw
@@ -324,7 +330,8 @@ public static class LodCoveragePolicy
         bool inLeadCone = false, bool fartherLoaded = false) =>
         !hasMesh && !insideVanilla && KeepVisitedSurface(level, hasData)
         && (IsDrawFullDetail(distance, viewDistanceAnchor)
-            || MustCoverIntervening(level, hasData, inLeadCone, fartherLoaded));
+            || MustCoverIntervening(level, hasData, inLeadCone, fartherLoaded,
+                distance, viewDistanceAnchor));
 
     /// <summary>
     /// Walk into children that already hold captured land inside the 1.0x draw
@@ -337,7 +344,39 @@ public static class LodCoveragePolicy
         int level, bool childHasVisitedSurface, double distance, double viewDistanceAnchor,
         bool inLeadCone = false, bool fartherLoaded = false) =>
         level > 0 && childHasVisitedSurface
-        && (IsDrawFullDetail(distance, viewDistanceAnchor) || (inLeadCone && fartherLoaded));
+        && (IsDrawFullDetail(distance, viewDistanceAnchor)
+            || (inLeadCone && fartherLoaded
+                && (viewDistanceAnchor <= 0 || distance <= viewDistanceAnchor * LeadConeFineScale)));
+
+    /// <summary>
+    /// Lead-cone L0/L1 preference only inside this scale of view distance.
+    /// Past it, turning would promote every behind-camera L2 plate into a
+    /// field of 64x64 meshes (opaque 20-38ms, tick 50-117ms on 0.7.67).
+    /// </summary>
+    public const float LeadConeFineScale = 1.5f;
+
+    /// <summary>
+    /// Farthest we hand off in the lead cone when a companion is actually
+    /// drawing past us, as a multiple of view distance. 3x is our L1 hills
+    /// through the fog band. Past it Farseer's heightmaps are the cheap
+    /// silhouettes. When the companion is off we keep DV land-like cover
+    /// instead of stopping into empty sky.
+    /// </summary>
+    public const float HorizonDrawScale = 3f;
+
+    public static double HorizonDrawDistance(double viewDistance) =>
+        viewDistance <= 0 ? 0 : viewDistance * HorizonDrawScale;
+
+    public static bool PastHorizonDraw(double nearDist, double viewDistance) =>
+        viewDistance > 0 && nearDist > HorizonDrawDistance(viewDistance);
+
+    /// <summary>
+    /// Empty-stop past HorizonDrawScale only when a companion is drawing that
+    /// band. Farseer off means DrawAfterCompanion is false: keep our cover.
+    /// </summary>
+    public static bool PastHorizonEmptyStop(
+        double nearDist, double viewDistance, bool companionDrawing) =>
+        companionDrawing && PastHorizonDraw(nearDist, viewDistance);
 
     /// <summary>
     /// Degrees past each frustum edge that still count as in front: never draw
@@ -358,13 +397,38 @@ public static class LodCoveragePolicy
     public const int LeadConeMaxDrawLevel = 1;
 
     /// <summary>
-    /// Pitch below the horizon (LookDownAmount) at which the lead cone is
-    /// the ground, not the skyline. Horizon bans L2+ so a 256-block shelf
-    /// does not sit on the hills; looking down that same ban left 64x64
-    /// sky squares wherever an L0 was incomplete or unmeshed. At or above
-    /// this pitch, a parent mesh is coverage.
+    /// Coarsest rung that may whole-cover a hole in the lead cone while
+    /// children remesh. L1 is always fine (LeadConeMaxDrawLevel). Land-like
+    /// L2 may temporary-cover when PreferParentCoverage says children are
+    /// not ready. L3+ never whole-submits in the cone  -  that is the cake
+    /// plate / stacked slab look. Holes that only have an L3+ ancestor use
+    /// AddGap + clipped fill, or wait for L1 remesh.
     /// </summary>
-    public const float LookDownCoarseFill = 0.55f;
+    public const int LeadConeMaxCoverLevel = 2;
+
+    /// <summary>
+    /// Pitch below the horizon (LookDownAmount) at which the lead cone is
+    /// the ground, not the skyline. 0.55 is ~33 deg and 0.82 is ~55 deg:
+    /// both still leave a strip of sky in frame, and the hills in front
+    /// already turned into blocks. 0.92 is ~67 deg: skyline is gone on a
+    /// typical FOV, not yet nadir. Horizon bans L2+ so a 256-block shelf
+    /// does not sit on the hills; looking straight down that same ban left
+    /// 64x64 sky squares wherever an L0 was incomplete or unmeshed. At or
+    /// above this pitch, a parent mesh is coverage.
+    /// </summary>
+    public const float LookDownCoarseFill = 0.92f;
+
+    /// <summary>
+    /// 0 until LookDownCoarseFill, 1 looking straight down. Skip-disc
+    /// shrink and the shader near-sink use this so a skyline pan does not
+    /// already drop to cubes.
+    /// </summary>
+    public static float LookDownSteepAmount(double lookDown01)
+    {
+        lookDown01 = Math.Clamp(lookDown01, 0, 1);
+        if (lookDown01 <= LookDownCoarseFill) return 0f;
+        return (float)((lookDown01 - LookDownCoarseFill) / (1.0 - LookDownCoarseFill));
+    }
 
     /// <summary>
     /// True when the lead-cone shelf ban still applies. Looking down is
@@ -373,6 +437,16 @@ public static class LodCoveragePolicy
     /// </summary>
     public static bool HorizonLeadCone(bool inLeadCone, float lookDown01 = 0) =>
         inLeadCone && lookDown01 < LookDownCoarseFill;
+
+    /// <summary>
+    /// L0 walk inside the lead cone. Past LeadConeFineScale we still ban L2
+    /// shelves on the skyline, but we stop at L1 instead of promoting every
+    /// 64x64. That was the turn hitch.
+    /// </summary>
+    public static bool HorizonLeadConeFine(bool inLeadCone, float lookDown01,
+        double nearDist, double viewDistance) =>
+        HorizonLeadCone(inLeadCone, lookDown01)
+        && (viewDistance <= 0 || nearDist <= viewDistance * LeadConeFineScale);
 
     /// <summary>
     /// Captured columns at or below this (one quadrant of a 64x64 grid) is a
@@ -424,19 +498,26 @@ public static class LodCoveragePolicy
     public static bool ShouldVisitChildForDraw(
         int childLevel, int wanted, bool drawFullDetail, bool parentHasMesh,
         bool parentLandLike = true, bool inLeadCone = false, float lookDown01 = 0,
-        bool childHasData = false, bool fartherLoaded = false)
+        bool childHasData = false, bool fartherLoaded = false,
+        double nearDist = 0, double viewDistance = 0,
+        bool companionDrawing = false)
     {
         if (drawFullDetail) return true;
-        // Land you already captured stays in the walk. Wanted-level used to stop
-        // at L1/L2 and hide that mesh; backing away then punched 64x64 / 128x128
-        // sky rectangles through hills that were on the GPU a second ago.
-        if (childHasData && childLevel <= 1) return true;
-        if (MustCoverIntervening(childLevel, childHasData, inLeadCone, fartherLoaded)) return true;
         if (HorizonLeadCone(inLeadCone, lookDown01)
-            && (!parentLandLike || childLevel >= LeadConeMaxDrawLevel)) return true;
+            && PastHorizonEmptyStop(nearDist, viewDistance, companionDrawing))
+            return false;
+        if (MustCoverIntervening(childLevel, childHasData, inLeadCone, fartherLoaded,
+                nearDist, viewDistance)) return true;
+        // Fine ring: L0/L1 in front, or any child under a plate.
+        if (HorizonLeadConeFine(inLeadCone, lookDown01, nearDist, viewDistance)
+            && (childLevel <= LeadConeMaxDrawLevel || !parentLandLike)) return true;
+        // Past that, still walk to L1 on the skyline so L2/L3 do not sit as shelves.
+        if (HorizonLeadCone(inLeadCone, lookDown01)
+            && (childLevel == 1 || !parentLandLike)) return true;
         if (childLevel >= wanted) return true;
         // Hole-fill of one rung. Missing L2 visits L1; it does not visit L0.
         if (!parentHasMesh && childLevel >= Math.Max(0, wanted - 1)) return true;
+        if (childHasData && childLevel <= 1 && !parentHasMesh) return true;
         return false;
     }
 
@@ -450,34 +531,63 @@ public static class LodCoveragePolicy
     /// </summary>
     public static bool StopDescentAtAvailableRung(
         int level, int wanted, bool drawFullDetail, bool hasMesh,
-        bool landLike, bool inLeadCone, float lookDown01 = 0) =>
+        bool landLike, bool inLeadCone, float lookDown01 = 0,
+        double nearDist = 0, double viewDistance = 0,
+        bool preferParentCoverage = false) =>
         hasMesh && !drawFullDetail && level >= 1 && level <= Math.Max(wanted, 1)
-        && !(HorizonLeadCone(inLeadCone, lookDown01) && level > LeadConeMaxDrawLevel)
-        // A plate in front does not stop: walk to the L0 under it and let the
-        // plate fill only the L0 that are missing (MayFillGapWithParent).
+        && !(HorizonLeadCone(inLeadCone, lookDown01) && level > LeadConeMaxDrawLevel
+            && !MayLeadConeCoarseCover(level, landLike, inLeadCone, lookDown01,
+                nearDist, viewDistance, preferParentCoverage))
         && (landLike || !HorizonLeadCone(inLeadCone, lookDown01));
 
     /// <summary>
+    /// Lead-cone exception for a land-like coarse parent that must cover until
+    /// its children can replace it. PreferParentCoverage is the completeness
+    /// gate for L1/L2 only. Past the fine ring, land-like L2 alone may also
+    /// cover so turning does not leave sky while L0/L1 are still meshing.
+    /// Non-land plates stay banned. L3+ never whole-covers in the cone  -  that
+    /// was the 0.7.72 cake-plate regression; those holes use AddGap + clipRect.
+    /// </summary>
+    public static bool MayLeadConeCoarseCover(
+        int level, bool landLike, bool inLeadCone, float lookDown01,
+        double nearDist, double viewDistance, bool preferParentCoverage)
+    {
+        if (!landLike || !HorizonLeadCone(inLeadCone, lookDown01)) return false;
+        if (level <= LeadConeMaxDrawLevel) return true;
+        // Hard ban: never whole L3+ plates in the lead/view cone.
+        if (level > LeadConeMaxCoverLevel) return false;
+        // L2 only from here. PreferParentCoverage = children not ready.
+        if (preferParentCoverage) return true;
+        // Soften past the fine ring: land-like L2 only.
+        return level == 2
+            && !HorizonLeadConeFine(inLeadCone, lookDown01, nearDist, viewDistance);
+    }
+
+    /// <summary>
     /// Whether CollectDrawNodes may add this L1+ mesh to the draw list.
-    /// Never over vanilla-owned ground. Never L2+ inside the lead cone at
-    /// horizon pitch (a land-like L2 is still a shelf from that camera).
-    /// Looking down, L2+ and even a plains plate may cover so incomplete
-    /// L0 does not punch sky. Never a plate inside the horizon lead cone.
-    /// Behind the cone a plate may stay as a cheap stand-in. L0 is not a
-    /// coarse parent; IncompleteL0 is a separate rule (DrawIncompleteL0).
-    /// This decides only the standalone draw of a whole footprint. A refused
-    /// parent still fills the gaps its children leave (MayFillGapWithParent),
-    /// so the in-front horizon keeps L0/L1 fidelity where those exist and is
-    /// coarse land, not sky, where they do not.
+    /// Never over vanilla-owned ground. Never a flat plate in the lead cone.
+    /// L2+ in the lead cone is refused unless MayLeadConeCoarseCover says the
+    /// land-like L2 parent is temporary cover (PreferParentCoverage, or
+    /// land-like L2 past the fine ring). L3+ never qualifies. Looking down, L2+ and even a plains plate may
+    /// cover so incomplete L0 does not punch sky. Behind the cone a plate may
+    /// stay as a cheap stand-in. L0 is not a coarse parent; IncompleteL0 is a
+    /// separate rule (DrawIncompleteL0). A refused parent must still register
+    /// a gap so ancestors can clip-fill.
     /// </summary>
     public static bool MayDrawCoarseParent(
         int level, bool insideVanilla, bool landLike, bool inLeadCone,
-        float lookDown01 = 0)
+        float lookDown01 = 0, double nearDist = 0, double viewDistance = 0,
+        bool preferParentCoverage = false)
     {
         if (level < 1) return true;
         if (insideVanilla) return false;
         if (HorizonLeadCone(inLeadCone, lookDown01) && level > LeadConeMaxDrawLevel)
+        {
+            if (MayLeadConeCoarseCover(level, landLike, inLeadCone, lookDown01,
+                    nearDist, viewDistance, preferParentCoverage))
+                return true;
             return false;
+        }
         if (!landLike && HorizonLeadCone(inLeadCone, lookDown01)) return false;
         return true;
     }
@@ -513,16 +623,39 @@ public static class LodCoveragePolicy
     public static bool SkipDrawTooFine(
         int level, int wanted, bool drawFullDetail, bool parentHasMesh,
         bool parentLandLike = true, bool inLeadCone = false, float lookDown01 = 0,
-        bool mustCover = false)
+        bool mustCover = false, double nearDist = 0, double viewDistance = 0)
     {
         if (level == 0) return false;
         if (drawFullDetail || level >= wanted || !parentHasMesh) return false;
         if (mustCover) return false;
         if (HorizonLeadCone(inLeadCone, lookDown01) && !parentLandLike) return false;
-        // Current L1+ means the parent is L2+. That parent cannot stand in
-        // on the horizon. Looking down it can: the missing child is a sky square.
         if (HorizonLeadCone(inLeadCone, lookDown01) && level >= LeadConeMaxDrawLevel)
             return false;
         return true;
+    }
+
+    /// <summary>
+    /// 0.7.66 yielded past 1.5x view distance so Farseer could occupy that band.
+    /// Farseer did not fill it. We punched 33 holes in our own draw (31 walked)
+    /// and the far band was sky. Do not yield. Draw everything we have.
+    /// </summary>
+    public static bool YieldFootprintToCompanion(bool companionOn, bool hasRealSurface) =>
+        YieldFootprintToCompanion(companionOn, hasRealSurface, 0, int.MaxValue, 0, 0);
+
+    public static bool YieldFootprintToCompanion(
+        bool companionOn,
+        bool hasRealSurface,
+        int liveMeshes,
+        int maxMeshes,
+        double nearestEdge,
+        double viewDistance)
+    {
+        _ = companionOn;
+        _ = hasRealSurface;
+        _ = liveMeshes;
+        _ = maxMeshes;
+        _ = nearestEdge;
+        _ = viewDistance;
+        return false;
     }
 }

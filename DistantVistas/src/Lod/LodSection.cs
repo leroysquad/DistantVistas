@@ -217,6 +217,22 @@ public class LodSection
     }
 
     /// <summary>
+    /// True when every captured column in this L0 came from a peek / sweep /
+    /// foreign cache. Mixed tiles (a real visit next to a peek) are not peek-only:
+    /// Distant Vistas still owns the visited half.
+    /// </summary>
+    public bool IsPeekOnly()
+    {
+        if (ProvisionalQuadrants == 0) return false;
+        for (int q = 0; q < QuadrantCount; q++)
+        {
+            if (IsProvisionalQuadrant(q)) continue;
+            if (QuadrantCapturedCount(q) > 0) return false;
+        }
+        return true;
+    }
+
+    /// <summary>
     /// Flag every quadrant that holds a captured column, for a section that arrived
     /// from somewhere other than local capture. Empty quadrants stay clear: there is
     /// nothing in them for a real capture to correct, and QueueColumn already treats

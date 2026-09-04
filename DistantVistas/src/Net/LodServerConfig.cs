@@ -123,8 +123,24 @@ public class LodServerConfig
     /// </summary>
     public bool AutoGenerateOnJoin = true;
 
+    /// <summary>Auto-join never starts a bigger disk than this, whatever the json says.</summary>
+    public const int AutoJoinMaxRadiusChunks = 24;
+
+    /// <summary>Auto-join peeks per second. Low so spawn chunks keep the worldgen thread.</summary>
+    public const int AutoJoinMaxColumnsPerSecond = 4;
+
+    /// <summary>Auto-join peeks in flight. 24 in-flight is what wedged a new world.</summary>
+    public const int AutoJoinMaxInFlight = 4;
+
     /// <summary>
-    /// Radius in chunks for AutoGenerateOnJoin. 0 means use GenerateDefaultRadiusChunks.
+    /// Auto-join peeks start at this ring. 14 chunks is 448 blocks, past a 196-block
+    /// view distance, so the fog cut stayed empty for the first minute. 7 is 224.
+    /// </summary>
+    public const int AutoJoinHorizonStartChunks = 7;
+
+    /// <summary>
+    /// Radius in chunks for AutoGenerateOnJoin. 0 means use GenerateDefaultRadiusChunks,
+    /// then clamp to AutoJoinMaxRadiusChunks.
     /// </summary>
     public int AutoGenerateRadiusChunks = 0;
 
@@ -157,7 +173,7 @@ public class LodServerConfig
         // 256 chunks is a 4096-block radius. Past that the disk cost stops being something
         // an admin can absorb by accident.
         PregenRadiusChunks = Math.Clamp(PregenRadiusChunks, 0, 256);
-        AutoGenerateRadiusChunks = Math.Clamp(AutoGenerateRadiusChunks, 0, 256);
+        AutoGenerateRadiusChunks = Math.Clamp(AutoGenerateRadiusChunks, 0, AutoJoinMaxRadiusChunks);
         PregenColumnsPerSecond = Math.Clamp(PregenColumnsPerSecond, 1, 64);
         // A wider ceiling than pregen's, because the cost scales with terrain that exists
         // rather than with the radius: examining a position that was never generated is an
@@ -187,6 +203,30 @@ public class LodServerConfig
 
     /// <summary>True when /dvgen is configured to accept a start.</summary>
     public bool GenerateEnabled => EnableGenerateCommand && GenerateMaxRadiusChunks > 0;
+
+    /// <summary>
+    /// Auto-join peeks fill a new world. Farseer being on is not a reason to
+    /// skip that: their hills still do not show, and skipping it is vanilla fog.
+    /// </summary>
+    public bool ShouldAutoGenerateOnJoin(bool farseerDrawing)
+    {
+        _ = farseerDrawing;
+        return AutoGenerateOnJoin;
+    }
+
+    public int LiveAutoJoinRadiusChunks()
+    {
+        int r = AutoGenerateRadiusChunks > 0 ? AutoGenerateRadiusChunks : GenerateDefaultRadiusChunks;
+        return Math.Clamp(r, 0, AutoJoinMaxRadiusChunks);
+    }
+
+    public int LiveAutoJoinHorizonStartChunks()
+    {
+        int start = GenerateHorizonStartChunks <= 0
+            ? AutoJoinHorizonStartChunks
+            : Math.Min(GenerateHorizonStartChunks, AutoJoinHorizonStartChunks);
+        return Math.Clamp(start, 0, LiveAutoJoinRadiusChunks());
+    }
 
     public string Describe() =>
         $"capture {(EnableCapture ? "on" : "off")}, serving {(EnableServing ? "on" : "off")}, "

@@ -152,7 +152,8 @@ public class LodPlayerPregen
     /// </param>
     public LodPlayerPregen(ICoreServerAPI sapi, ILogger logger, LodPipeline pipeline,
         int centreCx, int centreCz, int radiusChunks, LodServerConfig config, string startedBy,
-        int? columnsPerSecond = null, bool skipExistingLoads = true)
+        int? columnsPerSecond = null, bool skipExistingLoads = true, int? maxInFlightOverride = null,
+        int? horizonStartOverride = null)
     {
         this.sapi = sapi;
         this.logger = logger;
@@ -161,11 +162,10 @@ public class LodPlayerPregen
         this.centreCz = centreCz;
         this.radiusChunks = radiusChunks;
         perSecond = Math.Max(1, columnsPerSecond ?? config.GenerateColumnsPerSecond);
-        maxInFlight = Math.Max(1, config.GenerateMaxInFlight);
+        maxInFlight = Math.Max(1, maxInFlightOverride ?? config.GenerateMaxInFlight);
         this.skipExistingLoads = skipExistingLoads;
-        // Clamp into the run's radius. 14 chunks (~448 blocks) sits just past common
-        // VD settings so the near LOD ring fills before the multi-hour disk sweep.
-        horizonStartChunks = Math.Clamp(config.GenerateHorizonStartChunks, 0, radiusChunks);
+        int start = horizonStartOverride ?? config.GenerateHorizonStartChunks;
+        horizonStartChunks = Math.Clamp(start, 0, radiusChunks);
         StartedBy = startedBy;
     }
 

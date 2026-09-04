@@ -1,4 +1,4 @@
-using Vintagestory.API.Client;
+﻿using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
@@ -57,6 +57,17 @@ public class DistantVistasConfig
     /// future toggle that can skip shipping or hot-swap.
     /// </summary>
     public bool PatchVanillaEdgeFade = true;
+    /// <summary>Potato FOV heightfield occlusion at draw-submit (L0/L1). Default on.</summary>
+    public bool FovOcclusion = true;
+
+    /// <summary>Samples along camera-to-tile XZ ray for FOV occlusion (4..16). Default 6 for turn cost.</summary>
+    public int FovOcclusionSamples = 6;
+
+    /// <summary>Height slack (blocks) so peaks/towers that clear a ridge still draw.</summary>
+    public int FovOcclusionPeekMargin = 32;
+
+    /// <summary>Fresh occlusion ray tests per frame (cached results free). Default 48.</summary>
+    public int FovOcclusionMaxTestsPerFrame = 48;
 }
 
 /// <summary>
@@ -76,6 +87,7 @@ public class DistantVistasModSystem : ModSystem
     /// <summary>Block -> live tint slot; shared by capture, cache loads and the renderer.</summary>
     readonly LodTintRegistry tints = new();
     long tickListenerId;
+    SessionTelemetry? sessionTelemetry;
 
     readonly BlockPos paletteSamplePos = new(0, 0, 0);
     readonly BlockPos colorProbePos = new(0, 0, 0);
@@ -92,18 +104,44 @@ public class DistantVistasModSystem : ModSystem
 
     public override bool ShouldLoad(EnumAppSide forSide) => forSide == EnumAppSide.Client;
 
+    /// <summary>
+    /// After Farseer's default 0.1 so AssetsLoaded can patch region.vsh before they
+    /// compile, and StartClientSide can log the marker after that compile.
+    /// </summary>
+    public override double ExecuteOrder() => 0.6;
+
     /// <summary>Everything the config file holds, so a partial save cannot drop a setting.</summary>
     DistantVistasConfig config = new();
 
     /// <summary>Set when another LOD mod is drawing; we then stay out of its way.</summary>
     string? deferringTo;
 
+    /// <summary>Farseer is loaded and switched on: unvisited land is their silhouette.</summary>
+    bool farseerCompanion;
+
     /// <summary>
-    /// Optional server assist (DESIGN.md Â§10). Created even while deferring, because the
+    /// Optional server assist (DESIGN.md Ã‚Â§10). Created even while deferring, because the
     /// channel has to be registered before the handshake either way; it simply never
     /// greets, so it stays silent.
     /// </summary>
     LodAssistClient? assist;
+
+    public override void AssetsLoaded(ICoreAPI api)
+    {
+        if (api.Side != EnumAppSide.Client) return;
+        if (!FarseerShaderOverlay.OverlayActive) return;
+        if (!api.ModLoader.IsModEnabled("farseer")) return;
+        if (FarseerShaderOverlay.ApplyBytes(api, Mod.Logger))
+        {
+            Mod.Logger.Notification("Farseer overlay bytes written. {0}",
+                FarseerShaderOverlay.Describe(api));
+        }
+        else
+        {
+            Mod.Logger.Warning("Farseer overlay did not apply. {0}",
+                FarseerShaderOverlay.Describe(api));
+        }
+    }
 
     public override void StartClientSide(ICoreClientAPI api)
     {
@@ -147,6 +185,7 @@ public class DistantVistasModSystem : ModSystem
             // is wired straight to the event here. Without it the matrix cannot drive
             // '.dvdefer off' from the state that command exists for.
             capi.Event.LevelFinalize += RegisterAutoCommand;
+            FinishFarseerOverlay();
             return;
         }
 
@@ -160,7 +199,6 @@ public class DistantVistasModSystem : ModSystem
         // Refreshes old stable colours as well as empty server colours. Client-side only:
         // this needs the texture atlas and topsoil textures; a server stores 0 on purpose.
         pipeline.RepairUncoloredPalette = RefreshStoredPalette;
-        bool farseerBehind = capi.ModLoader.IsModEnabled("farseer");
         renderer = new LodTerrainRenderer(capi, pipeline.World, pipeline.Worker, tints)
         {
             AutoUnpause = Environment.GetEnvironmentVariable("VINTAGEHORIZONS_AUTOUNPAUSE") == "1",
@@ -170,8 +208,12 @@ public class DistantVistasModSystem : ModSystem
             SkyFadeStart = config.SkyFadeStart,
             PastViewHaze = config.PastViewHaze,
             OverdrawStart = config.OverdrawStart,
-            DrawAfterCompanion = farseerBehind,
+            DrawAfterCompanion = farseerCompanion,
         };
+        renderer.HeightOcclusion.Enabled = config.FovOcclusion;
+        renderer.HeightOcclusion.SampleCount = config.FovOcclusionSamples;
+        renderer.HeightOcclusion.PeekMarginBlocks = config.FovOcclusionPeekMargin;
+        renderer.HeightOcclusion.MaxTestsPerFrame = config.FovOcclusionMaxTestsPerFrame;
         // Real holes (captured land with no mesh at any rung) are reported with
         // the state of the keys involved, so a screenshot of sky has a log line.
         renderer.SetHoleLogger(msg => Mod.Logger.Notification(msg));
@@ -181,10 +223,38 @@ public class DistantVistasModSystem : ModSystem
         capi.Event.LeaveWorld += OnLeaveWorld;
 
         tickListenerId = capi.Event.RegisterGameTickListener(OnGameTick, 50);
+        sessionTelemetry = new SessionTelemetry(capi);
 
         RegisterCommands();
 
+        FinishFarseerOverlay();
+        if (!FarseerShaderOverlay.OverlayActive)
+        {
+            Mod.Logger.Notification(
+                "Farseer overlay is off. We draw the hills. Their heightmaps are the far silhouettes.");
+        }
         Mod.Logger.Notification("DistantVistas {0} loaded (client-only)", Mod.Info.Version);
+    }
+
+    /// <summary>
+    /// AssetsLoaded already wrote the bytes. Do not re-register Farseer's region
+    /// program. ReloadShader re-apply is FarseerOverlayEarlyHook (0.05).
+    /// </summary>
+    void FinishFarseerOverlay()
+    {
+        if (!FarseerShaderOverlay.OverlayActive) return;
+        if (!capi.ModLoader.IsModEnabled("farseer")) return;
+        FarseerShaderOverlay.ApplyBytes(capi, Mod.Logger);
+        if (FarseerShaderOverlay.MarkerPresent(capi))
+        {
+            Mod.Logger.Notification("Farseer overlay in place (no region re-register). {0}",
+                FarseerShaderOverlay.Describe(capi));
+        }
+        else
+        {
+            Mod.Logger.Warning("Farseer overlay marker MISSING after ApplyBytes. {0}",
+                FarseerShaderOverlay.Describe(capi));
+        }
     }
 
     /// <summary>
@@ -247,6 +317,7 @@ public class DistantVistasModSystem : ModSystem
     {
         (string? drawing, string[] switchedOff, string[] companions) =
             OtherLodMods.Inspect(capi.ModLoader.IsModEnabled, ReadOtherModSwitch);
+        farseerCompanion = false;
 
         if (switchedOff.Length > 0)
         {
@@ -257,9 +328,11 @@ public class DistantVistasModSystem : ModSystem
 
         if (companions.Length > 0)
         {
+            farseerCompanion = companions.Any(id =>
+                string.Equals(id, "farseer", StringComparison.OrdinalIgnoreCase));
             Mod.Logger.Notification(
-                "Drawing with background LOD (Farseer stays behind; Distant Vistas takes "
-                + "any tile it has): {0}", string.Join(", ", companions));
+                "Drawing our land. Companion LOD sits behind for far silhouettes: {0}",
+                string.Join(", ", companions));
         }
 
         if (drawing != null && config.IgnoreOtherLodMods)
@@ -300,6 +373,8 @@ public class DistantVistasModSystem : ModSystem
     {
         if (!pipeline.Active) return;
 
+        sessionTelemetry?.Tick(pipeline, renderer, deferringTo, Mod.Info.Version);
+
         ReportFillIn();
         PumpServerAssist();
         PumpLocalOffers();
@@ -311,7 +386,8 @@ public class DistantVistasModSystem : ModSystem
         int sweepCz = (int)Math.Floor(pos.Z / chunkSize);
         int sweepRadius = Math.Max(4, (int)Math.Ceiling(renderer.LiveViewDistance / chunkSize) + 2);
         pipeline.SweepLoadedColumns(sweepCx, sweepCz, sweepRadius);
-        if (pipeline.MaybeEvictAround(pos.X, pos.Z))
+        // Cold RAM section spill only under mesh pressure — never distance-alone.
+        if (renderer.MeshPressureActive && pipeline.MaybeEvictAround(pos.X, pos.Z))
         {
             LodWorld world = pipeline.World;
             Mod.Logger.Notification("Evict sweep at {0},{1}: checked {2}, pinned {3}, cold {4}, total evicted {5}",
@@ -486,7 +562,7 @@ public class DistantVistasModSystem : ModSystem
 
     /// <summary>
     /// Fill in palette colours for a section captured by a server, which had no texture
-    /// atlas and stored 0 for every one of them (DESIGN.md Â§10.4). Block ids are already
+    /// atlas and stored 0 for every one of them (DESIGN.md Ã‚Â§10.4). Block ids are already
     /// resolved from codes by the deserializer, so this only needs the atlas.
     /// </summary>
     void RecolorForeignSection(LodSection section)
@@ -541,7 +617,7 @@ public class DistantVistasModSystem : ModSystem
     /// The client half of palette registration: the untinted average colour from the
     /// texture atlas, plus which live tint applies. Stored untinted on purpose, so the
     /// shader can follow the calendar instead of freezing the season it was captured in.
-    /// A server has no atlas and cannot answer this at all (DESIGN.md Â§10.4).
+    /// A server has no atlas and cannot answer this at all (DESIGN.md Ã‚Â§10.4).
     ///
     /// The position is used ONLY for blocks whose colour depends on a block entity
     /// (chisels). Everything else is a stable atlas mean so the near LOD ring does not
@@ -1048,7 +1124,7 @@ public class DistantVistasModSystem : ModSystem
 
         Mod.Logger.Notification(
             "{0}: {1} sections resident [{2}] ({3} RAM-evicted, {4} from cache), {5} meshes ({6} evicted), " +
-            "{7} selected [{8}] minus {9} frustum-culled, {19} gap fills, {20} unfilled gaps, {10} columns captured, {11} pending, " +
+            "{7} selected [{8}] minus {9} frustum-culled, {25} occCull, {19} gap fills, {20} unfilled gaps, {10} columns captured, {11} pending, " +
             "{21} dropped, {22} swept, {23} peek-confirmed, {24} provisional L0, " +
             "worker: {12} captures / {13} meshes queued / {14}+{15} errors, {16} awaiting mip, {17} render-dirty, {18} unsaved",
             prefix, world.Sections.Count, world.DescribeLevels(), world.EvictedSectionsTotal, pipeline.CachedSectionsLoaded,
@@ -1057,7 +1133,16 @@ public class DistantVistasModSystem : ModSystem
             worker.CaptureErrors, worker.MeshErrors, world.MipDirty.Count, world.RenderDirty.Count,
             world.SaveDirty.Count, renderer.LastGapDrawCount, renderer.LastUnfilledGaps,
             pipeline.ColumnsDropped, pipeline.ColumnsSwept, pipeline.ProvisionalQuadrantsConfirmed,
-            world.ProvisionalL0Keys.Count);
+            world.ProvisionalL0Keys.Count, renderer.LastOccludedCount);
+
+        if (renderer.DrawAfterCompanion)
+        {
+            Mod.Logger.Notification(
+                "  farseer yield: meshes {0}/{1}{2}, handed off {3} ({4} far walked)",
+                renderer.MeshCount, LodMemoryBudget.MaxResidentMeshes,
+                renderer.MeshPressureActive ? ", mesh pressure on" : (renderer.PressureYieldActive ? ", pressure yield on" : ""),
+                renderer.LastCompanionYieldCount, renderer.LastPressureYieldCount);
+        }
 
         Mod.Logger.Notification("  L0 parity/fill: {0}", renderer.DescribeL0ParityAndFill());
 
@@ -1179,6 +1264,7 @@ public class DistantVistasModSystem : ModSystem
                 $"[distantvistas] sections: {pipeline.World.Sections.Count} [{pipeline.World.DescribeLevels()}] " +
                 $"({pipeline.CachedSectionsLoaded} from cache), meshes: {renderer.MeshCount}, " +
                 $"drawn: {renderer.LastDrawCount} [{renderer.DescribeDrawnLevels()}], " +
+                $"occCull: {renderer.LastOccludedCount}, " +
                 $"gap fills: {renderer.LastGapDrawCount}, unfilled gaps: {renderer.LastUnfilledGaps}, " +
                 $"columns captured: {pipeline.ColumnsCaptured}, pending: {pipeline.PendingColumns}, " +
                 $"dropped: {pipeline.ColumnsDropped}, swept: {pipeline.ColumnsSwept}, " +
@@ -1190,6 +1276,11 @@ public class DistantVistasModSystem : ModSystem
                 $"current far edge: {(int)renderer.EffectiveFarDistance}, " +
                 $"detail distance: {(int)LodWorld.DetailDistance} (.dvdetail to change), " +
                 $"coarsest visible: L{LodWorld.MaxVisualLevel} ({LodWorld.ColumnStepBlocks(LodWorld.MaxVisualLevel)} blocks/column), " +
+                $"farseer: meshes {renderer.MeshCount}/{LodMemoryBudget.MaxResidentMeshes}" +
+                (renderer.DrawAfterCompanion
+                    ? (renderer.MeshPressureActive ? ", mesh pressure on" : ", mesh pressure off")
+                      + $", handed off {renderer.LastCompanionYieldCount} ({renderer.LastPressureYieldCount} far walked)"
+                    : ", off") + ", " +
                 $"server assist: {assist?.Status ?? "off"}" +
                 (assist != null && assist.RemoteKeys.Count > 0
                     ? $", server offers {assist.RemoteKeys.Count} sections " +
@@ -1200,6 +1291,11 @@ public class DistantVistasModSystem : ModSystem
 
         // Registered in both states on purpose: the player who most needs this one is the
         // player we are currently idle for.
+        capi.ChatCommands.Create("dvfarseer")
+            .WithDescription("Show whether Distant Vistas overwrote Farseer's region shaders")
+            .HandleWith(_ => TextCommandResult.Success(
+                "[distantvistas] " + FarseerShaderOverlay.Describe(capi)));
+
         capi.ChatCommands.Create("dvdefer")
             .WithDescription("Stay idle when another LOD mod draws. Default on. Off draws anyway.")
             .WithArgs(capi.ChatCommands.Parsers.OptionalBool("on"))
@@ -1335,6 +1431,9 @@ public class DistantVistasModSystem : ModSystem
         }
     }
 }
+
+
+
 
 
 
