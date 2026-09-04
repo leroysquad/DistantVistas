@@ -103,6 +103,9 @@ public class LodPipeline
     /// <summary>Repaint baked palette colours for the current calendar month.</summary>
     public System.Func<LodSection, long, int>? RebakeSeasonPalette;
 
+    /// <summary>Drop resident GPU mesh after a season palette change so idle remesh runs.</summary>
+    public System.Action<long>? InvalidateGpuMesh;
+
     public int SeasonSectionsRepainted { get; private set; }
 
     readonly ConcurrentDictionary<long, byte> queuedColumns = new();
@@ -742,11 +745,19 @@ public class LodPipeline
             if (baked)
             {
                 LodPaletteEntry e = section.Palette[i];
-                e.Color = color;
-                e.Flags = (byte)(e.Flags | LodPaletteEntry.FlagBaked);
-                e.TintSlot = LodTintRegistry.SlotNone;
-                section.Palette[i] = e;
-                section.InvalidatePaletteSnapshot();
+                // Keep the higher sample so mountain canopy climate wins over valley.
+                bool replace = true;
+                if ((e.Flags & LodPaletteEntry.FlagBaked) != 0
+                    && section.TryFindPaletteTop(sectionKey, i, out _, out int ey, out _))
+                    replace = y >= ey;
+                if (replace)
+                {
+                    e.Color = color;
+                    e.Flags = (byte)(e.Flags | LodPaletteEntry.FlagBaked);
+                    e.TintSlot = (byte)LodTintRegistry.SlotNone;
+                    section.Palette[i] = e;
+                    section.InvalidatePaletteSnapshot();
+                }
             }
             return i;
         }
@@ -792,6 +803,7 @@ public class LodPipeline
             if (changed > 0)
             {
                 World.MarkChanged(key);
+                InvalidateGpuMesh?.Invoke(key);
                 World.RenderDirty.Add(key);
                 SeasonSectionsRepainted++;
             }

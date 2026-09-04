@@ -2885,7 +2885,18 @@ public class LodTerrainRenderer : IRenderer
     bool HasNeighbourData(long key, int dx, int dz) =>
         world.HasDataSet.Contains(LodWorld.NeighborKey(key, dx, dz));
 
-    public void ClearMeshes()
+    /// <summary>Drop resident GPU mesh so a season palette rebake can remesh while idle.</summary>
+    public void InvalidateGpuMesh(long key)
+    {
+        if (sectionMeshes.Remove(key, out MeshRef? mesh)) mesh.Dispose();
+        if (waterMeshes.Remove(key, out MeshRef? water)) water.Dispose();
+        emptyMeshKeys.Remove(key);
+        meshJobInFlight.Remove(key);
+        lastSelectedFrame.Remove(key);
+        meshBornFrame.Remove(key);
+    }
+
+        public void ClearMeshes()
     {
         foreach (MeshRef meshRef in sectionMeshes.Values) meshRef.Dispose();
         foreach (MeshRef meshRef in waterMeshes.Values) meshRef.Dispose();

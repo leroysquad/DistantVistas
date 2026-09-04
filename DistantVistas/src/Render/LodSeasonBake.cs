@@ -71,18 +71,36 @@ public static class LodSeasonBake
             return;
         }
 
-        int rgba = world.ApplyColorMapOnRgba(
-            climate, season,
-            unchecked((int)0xFFFFFFFF), x, y, z);
+        SampleMaps(world, climate, season, x, y, z, out r, out g, out b);
 
-        r = ((rgba >> 16) & 0xFF) / 255f;
-        g = ((rgba >> 8) & 0xFF) / 255f;
-        b = (rgba & 0xFF) / 255f;
-        LodTintRegistry.ClampTintAwayFromWhite(ref r, ref g, ref b);
+        // High Y can land in the snow band of the colour map and bleach foliage.
+        // Prefer sea-level climate when the peak sample is snow-like (same idea as
+        // LodTintRegistry.ProtectHighTintFromSnow for live slots).
+        if (LodTintRegistry.IsSnowLikeTint(r, g, b) && y > world.SeaLevel + 8)
+        {
+            SampleMaps(world, climate, season, x, world.SeaLevel, z, out float lr, out float lg, out float lb);
+            if (!LodTintRegistry.IsSnowLikeTint(lr, lg, lb))
+            {
+                r = lr; g = lg; b = lb;
+            }
+        }
 
         r = LodTopSoil.Dilute(share.R, r);
         g = LodTopSoil.Dilute(share.G, g);
         b = LodTopSoil.Dilute(share.B, b);
+    }
+
+    static void SampleMaps(
+        IClientWorldAccessor world, string? climate, string? season,
+        int x, int y, int z, out float r, out float g, out float b)
+    {
+        int rgba = world.ApplyColorMapOnRgba(
+            climate, season,
+            unchecked((int)0xFFFFFFFF), x, y, z);
+        r = ((rgba >> 16) & 0xFF) / 255f;
+        g = ((rgba >> 8) & 0xFF) / 255f;
+        b = (rgba & 0xFF) / 255f;
+        LodTintRegistry.ClampTintAwayFromWhite(ref r, ref g, ref b);
     }
 
     public static int MultiplyRgb(int color, float tr, float tg, float tb)

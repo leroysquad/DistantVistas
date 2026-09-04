@@ -359,7 +359,7 @@ public class LodSection
         snapPaletteCount = n;
     }
 
-  public void InvalidatePaletteSnapshot() => snapPaletteCount = -1;
+    public void InvalidatePaletteSnapshot() => snapPaletteCount = -1;
 
     /// <summary>
     /// World position of the top block of the first run that uses <paramref name="paletteId"/>.

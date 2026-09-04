@@ -215,6 +215,7 @@ public class DistantVistasModSystem : ModSystem
         renderer.HeightOcclusion.SampleCount = config.FovOcclusionSamples;
         renderer.HeightOcclusion.PeekMarginBlocks = config.FovOcclusionPeekMargin;
         renderer.HeightOcclusion.MaxTestsPerFrame = config.FovOcclusionMaxTestsPerFrame;
+        pipeline.InvalidateGpuMesh = renderer.InvalidateGpuMesh;
         // Real holes (captured land with no mesh at any rung) are reported with
         // the state of the keys involved, so a screenshot of sky has a log line.
         renderer.SetHoleLogger(msg => Mod.Logger.Notification(msg));
