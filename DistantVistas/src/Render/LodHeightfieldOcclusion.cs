@@ -33,8 +33,8 @@ public sealed class LodHeightfieldOcclusion
     /// <summary>Hard cap on fresh ray tests per frame. Cached results do not count.</summary>
     public int MaxTestsPerFrame = 48;
 
-    /// <summary>Yaw change (radians) that invalidates the temporal cache.</summary>
-    public float YawInvalidateRadians = 0.12f; // ~7 deg
+    /// <summary>Per-entry yaw slack (radians) before a cached ray result is discarded.</summary>
+    public float YawInvalidateRadians = 0.18f; // ~10 deg; lazy per-key, not a full clear
 
     /// <summary>Camera XZ move (blocks) that invalidates the temporal cache.</summary>
     public double MoveInvalidateBlocks = 24.0;
@@ -57,7 +57,6 @@ public sealed class LodHeightfieldOcclusion
     readonly Dictionary<long, CacheEntry> cache = new();
     float cacheYaw;
     double cacheCamX, cacheCamZ;
-    bool cachePoseValid;
     int testsLeft;
 
     /// <summary>Call once per render frame before Submit walks.</summary>
@@ -66,30 +65,9 @@ public sealed class LodHeightfieldOcclusion
         TestsThisFrame = 0;
         CacheHitsThisFrame = 0;
         testsLeft = MaxTestsPerFrame < 8 ? 8 : MaxTestsPerFrame;
-
-        if (!cachePoseValid)
-        {
-            cacheYaw = yawRadians;
-            cacheCamX = camX;
-            cacheCamZ = camZ;
-            cachePoseValid = true;
-            return;
-        }
-
-        float dyaw = yawRadians - cacheYaw;
-        if (dyaw > MathF.PI) dyaw -= MathF.Tau;
-        if (dyaw < -MathF.PI) dyaw += MathF.Tau;
-        double dx = camX - cacheCamX;
-        double dz = camZ - cacheCamZ;
-        bool moved = dx * dx + dz * dz >= MoveInvalidateBlocks * MoveInvalidateBlocks;
-        bool turned = MathF.Abs(dyaw) >= YawInvalidateRadians;
-        if (moved || turned)
-        {
-            cache.Clear();
-            cacheYaw = yawRadians;
-            cacheCamX = camX;
-            cacheCamZ = camZ;
-        }
+        cacheYaw = yawRadians;
+        cacheCamX = camX;
+        cacheCamZ = camZ;
     }
 
     /// <summary>
@@ -111,7 +89,7 @@ public sealed class LodHeightfieldOcclusion
         int level = LodWorld.KeyLevel(key);
         if (level > MaxLevel || level < 0) return false;
 
-        if (cache.TryGetValue(key, out CacheEntry hit))
+        if (cache.TryGetValue(key, out CacheEntry hit) && EntryStillValid(hit, camX, camZ, yawRadians: cacheYaw))
         {
             CacheHitsThisFrame++;
             occluderMaxY = 0;
@@ -206,6 +184,17 @@ public sealed class LodHeightfieldOcclusion
         return occluded;
     }
 
+    bool EntryStillValid(CacheEntry hit, double camX, double camZ, float yawRadians)
+    {
+        float dyaw = yawRadians - hit.Yaw;
+        if (dyaw > MathF.PI) dyaw -= MathF.Tau;
+        if (dyaw < -MathF.PI) dyaw += MathF.Tau;
+        if (MathF.Abs(dyaw) >= YawInvalidateRadians) return false;
+        double dx = camX - hit.CamX;
+        double dz = camZ - hit.CamZ;
+        return dx * dx + dz * dz < MoveInvalidateBlocks * MoveInvalidateBlocks;
+    }
+
     void Remember(long key, bool occluded)
     {
         cache[key] = new CacheEntry
@@ -216,8 +205,18 @@ public sealed class LodHeightfieldOcclusion
             CamZ = cacheCamZ,
             Frame = 0
         };
-        // Bound cache size — drop all on next pose invalidate if it grows huge.
-        if (cache.Count > 4096) cache.Clear();
+        // Bound cache size — evict stale entries first, then clear if still huge.
+        if (cache.Count > 4096)
+        {
+            var stale = new List<long>();
+            foreach (var kv in cache)
+            {
+                if (!EntryStillValid(kv.Value, cacheCamX, cacheCamZ, cacheYaw))
+                    stale.Add(kv.Key);
+            }
+            foreach (long k in stale) cache.Remove(k);
+            if (cache.Count > 4096) cache.Clear();
+        }
     }
 
     /// <summary>

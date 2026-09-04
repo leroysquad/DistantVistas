@@ -147,7 +147,9 @@ public class LodTerrainRenderer : IRenderer
     double pressureClearAccumMs;
     long lastPressureEvictFrame = -9999;
     int fineHorizonRequestsThisFrame;
-    const int FineHorizonRequestsPerFrame = 3;
+    const int FineHorizonRequestsPerFrame = 2;
+    /// <summary>Frames between full RenderDirty prunes while standing still (look-only).</summary>
+    const int PruneIdleIntervalFrames = 4;
     float lookYaw;
 
     readonly Matrixf modelMat = new();
@@ -246,6 +248,10 @@ public class LodTerrainRenderer : IRenderer
     /// <summary>Keys submitted to drawList this frame. Never evicted while drawn.</summary>
     readonly HashSet<long> drawnThisFrame = new();
     readonly Dictionary<long, bool> realSurfaceMemo = new();
+    readonly Dictionary<long, bool> leadConeMemo = new();
+    readonly Dictionary<long, bool> landLikeMemo = new();
+    readonly Dictionary<long, bool> capturedBeyondMemo = new();
+    readonly Dictionary<long, bool> boxInViewMemo = new();
 
     /// <summary>
     /// Captured footprints nothing has drawn yet this frame, as the walk
@@ -642,6 +648,7 @@ public class LodTerrainRenderer : IRenderer
 
     bool InLeadCone(long key)
     {
+        if (leadConeMemo.TryGetValue(key, out bool cached)) return cached;
         int footprint = LodWorld.KeyFootprintBlocks(key);
         double originX = LodWorld.KeySx(key) * (double)footprint;
         double originZ = LodWorld.KeySz(key) * (double)footprint;
@@ -655,7 +662,79 @@ public class LodTerrainRenderer : IRenderer
             minY = bounds.SurfaceYMin - pad - camPos.Y;
             maxY = bounds.SurfaceYMax + pad - camPos.Y;
         }
-        return frustum.BoxInLeadCone(relX, minY, relZ, relX + footprint, maxY, relZ + footprint);
+        bool result = frustum.BoxInLeadCone(relX, minY, relZ, relX + footprint, maxY, relZ + footprint);
+        leadConeMemo[key] = result;
+        return result;
+    }
+
+    /// <summary>
+    /// Tight frustum test for the section AABB (camera-relative). Visited-keep
+    /// tiles inside the 2× ring skip cull so fast flight does not punch holes.
+    /// </summary>
+    bool SectionBoxInView(long key)
+    {
+        if (boxInViewMemo.TryGetValue(key, out bool cached)) return cached;
+        int footprint = LodWorld.KeyFootprintBlocks(key);
+        double originX = LodWorld.KeySx(key) * (double)footprint;
+        double originZ = LodWorld.KeySz(key) * (double)footprint;
+        int level = LodWorld.KeyLevel(key);
+        double drawDist = Math.Sqrt(
+            (originX + footprint / 2.0 - camPos.X) * (originX + footprint / 2.0 - camPos.X)
+            + (originZ + footprint / 2.0 - camPos.Z) * (originZ + footprint / 2.0 - camPos.Z));
+        bool keepVisited = LodCoveragePolicy.ShouldKeepVisitedDraw(
+            level, world.HasDataSet.Contains(key), drawDist, liveViewDistance);
+        bool result;
+        if (keepVisited)
+        {
+            result = true;
+        }
+        else
+        {
+            double relX = originX - camPos.X;
+            double relZ = originZ - camPos.Z;
+            double minY = -camPos.Y;
+            double maxY = worldHeight - camPos.Y;
+            if (world.Sections.TryGetValue(key, out LodSection? bounds) && bounds.HasSurfaceBounds)
+            {
+                const int pad = 48;
+                minY = bounds.SurfaceYMin - pad - camPos.Y;
+                maxY = bounds.SurfaceYMax + pad - camPos.Y;
+            }
+            result = frustum.BoxInView(relX, minY, relZ, relX + footprint, maxY, relZ + footprint);
+        }
+        boxInViewMemo[key] = result;
+        return result;
+    }
+
+    /// <summary>
+    /// Standing still: do not walk or mesh-request tiles entirely behind the camera
+    /// and outside the lead cone. GPU meshes stay pinned via lastSelectedFrame.
+    /// </summary>
+    bool TrySkipTurnOnlyOffscreen(long key, bool insideVanilla, bool drawFullDetail, bool inLeadCone, bool hasMesh)
+    {
+        if (windowMovedThisFrame || insideVanilla || drawFullDetail || inLeadCone)
+            return false;
+        if (SectionBoxInView(key)) return false;
+        if (hasMesh) lastSelectedFrame[key] = frameCounter;
+        return true;
+    }
+
+    /// <summary>
+    /// Defer mesh jobs for off-screen tiles while look-only so ScheduleMeshJobs
+    /// does not scan thousands of dirty keys every yaw tick.
+    /// </summary>
+    bool ShouldDeferMeshRequest(long key)
+    {
+        if (windowMovedThisFrame) return false;
+        if (InLeadCone(key)) return false;
+        if (SectionBoxInView(key)) return false;
+        int level = LodWorld.KeyLevel(key);
+        double dist = Math.Sqrt(NearestDistanceSqTo(key));
+        if (LodCoveragePolicy.ShouldKeepVisitedDraw(
+                level, world.HasDataSet.Contains(key), dist, liveViewDistance)
+            && LodCoveragePolicy.IsDrawFullDetail(dist, liveViewDistance))
+            return false;
+        return true;
     }
 
     bool ChildSurfaceUnion(long key, out int yMin, out int yMax)
@@ -681,16 +760,21 @@ public class LodTerrainRenderer : IRenderer
 
     bool ComputeLandLike(int level, LodSection? section, long key)
     {
-        if (level < 1) return true;
-        if (section == null) return false;
-        if (!LodCoveragePolicy.IsLandLikeCoarseMesh(
+        if (landLikeMemo.TryGetValue(key, out bool cached)) return cached;
+        bool result;
+        if (level < 1) result = true;
+        else if (section == null) result = false;
+        else if (!LodCoveragePolicy.IsLandLikeCoarseMesh(
                 level, section.HasSurfaceBounds, section.SurfaceRelief, section.CapturedColumns))
-            return false;
-        if (!ChildSurfaceUnion(key, out int childYMin, out int childYMax))
-            return false;
-        return LodCoveragePolicy.ParentFollowsChildSurface(
-            section.HasSurfaceBounds, section.SurfaceYMin, section.SurfaceYMax,
-            true, childYMin, childYMax);
+            result = false;
+        else if (!ChildSurfaceUnion(key, out int childYMin, out int childYMax))
+            result = false;
+        else
+            result = LodCoveragePolicy.ParentFollowsChildSurface(
+                section.HasSurfaceBounds, section.SurfaceYMin, section.SurfaceYMax,
+                true, childYMin, childYMax);
+        landLikeMemo[key] = result;
+        return result;
     }
 
     /// <summary>
@@ -983,6 +1067,8 @@ public class LodTerrainRenderer : IRenderer
         // Draw full L0/L1 only inside live view distance and the vanilla seam.
         // The keep-circle is larger and only holds GPU meshes.
         bool drawFullDetail = LodCoveragePolicy.IsDrawFullDetail(nearDist, liveViewDistance) || handoff;
+        if (TrySkipTurnOnlyOffscreen(key, insideVanilla, drawFullDetail, inLeadCone, hasMesh))
+            return false;
 
         // Intervening span: visited L0/L1 in front of the camera with land
         // already drawn past it. Coarsening is fine when a parent mesh takes
@@ -1601,29 +1687,34 @@ public class LodTerrainRenderer : IRenderer
     /// </summary>
     bool CapturedBeyond(long key)
     {
+        if (capturedBeyondMemo.TryGetValue(key, out bool cached)) return cached;
         int footprint = LodWorld.KeyFootprintBlocks(key);
         double cx = LodWorld.KeySx(key) * (double)footprint + footprint / 2.0;
         double cz = LodWorld.KeySz(key) * (double)footprint + footprint / 2.0;
         double dx = cx - camPos.X;
         double dz = cz - camPos.Z;
         double len = Math.Sqrt(dx * dx + dz * dz);
-        if (len < 1) return false;
-        dx /= len;
-        dz /= len;
-
-        const int probeLevel = 3;
-        int probe = LodSection.SectionBlocks << probeLevel;
-        double start = footprint / 2.0;
-        for (int step = 1; step <= 2; step++)
+        bool result = false;
+        if (len >= 1)
         {
-            double px = cx + dx * (start + probe * step);
-            double pz = cz + dz * (start + probe * step);
-            if (px < 0 || pz < 0) continue;
-            long pk = LodWorld.SectionKey(probeLevel,
-                (int)Math.Floor(px / probe), (int)Math.Floor(pz / probe));
-            if (world.HasDataSet.Contains(pk)) return true;
+            dx /= len;
+            dz /= len;
+
+            const int probeLevel = 3;
+            int probe = LodSection.SectionBlocks << probeLevel;
+            double start = footprint / 2.0;
+            for (int step = 1; step <= 2 && !result; step++)
+            {
+                double px = cx + dx * (start + probe * step);
+                double pz = cz + dz * (start + probe * step);
+                if (px < 0 || pz < 0) continue;
+                long pk = LodWorld.SectionKey(probeLevel,
+                    (int)Math.Floor(px / probe), (int)Math.Floor(pz / probe));
+                if (world.HasDataSet.Contains(pk)) result = true;
+            }
         }
-        return false;
+        capturedBeyondMemo[key] = result;
+        return result;
     }
 
     int CountOpenSides(long key)
@@ -1720,6 +1811,8 @@ public class LodTerrainRenderer : IRenderer
     void RequestMesh(long key)
     {
         if (YieldToCompanion(key))
+            return;
+        if (ShouldDeferMeshRequest(key))
             return;
         if (meshJobInFlight.Contains(key)) return;
 
@@ -2053,6 +2146,16 @@ public class LodTerrainRenderer : IRenderer
     void PruneRenderDirty()
     {
         if (world.RenderDirty.Count == 0)
+        {
+            walkRequested.Clear();
+            return;
+        }
+
+        // Look-only: pruning walks every dirty key with a sqrt; spread it out so
+        // a small yaw does not stack prune + walk + schedule in one frame.
+        if (!windowMovedThisFrame
+            && world.RenderDirty.Count < 8000
+            && frameCounter % PruneIdleIntervalFrames != 0)
         {
             walkRequested.Clear();
             return;
@@ -2409,6 +2512,10 @@ public class LodTerrainRenderer : IRenderer
         // was being read as a spike in scheduling.
         long phaseStart = LodPhaseCost.Start();
         realSurfaceMemo.Clear();
+        leadConeMemo.Clear();
+        landLikeMemo.Clear();
+        capturedBeyondMemo.Clear();
+        boxInViewMemo.Clear();
         PruneRenderDirty();
         PruneCost.Add(phaseStart);
 

@@ -26,6 +26,7 @@ public static class Program
         ("pure", "snow overlay", SnowOverlayChecks.Run),
         ("pure", "server config", ConfigChecks.Run),
         ("pure", "lod mod deferral", DeferralChecks.Run),
+        ("pure", "fov occlusion", OcclusionChecks.Run),
         ("fixture", "blob format", StoreChecks.Run),
         ("fixture", "frustum", FrustumChecks.Run),
         ("pure", "visited keep", VisitedKeepChecks.Run),
