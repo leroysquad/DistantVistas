@@ -241,7 +241,9 @@ public static class SectionChecks
         c.False(s.IsProvisionalQuadrant(2), "an empty NW quadrant is not marked");
         c.False(s.IsProvisionalQuadrant(3), "an empty NE quadrant is not marked");
 
+        c.True(s.IsPeekOnly(), "all captured quadrants provisional is peek-only");
         c.True(s.ClearProvisional(0), "clearing a set bit reports a change");
+        c.False(s.IsPeekOnly(), "a real quadrant next to a peek is not peek-only");
         c.False(s.IsProvisionalQuadrant(0), "the bit is gone");
         c.False(s.ClearProvisional(0), "clearing it again is a no-op");
         c.True(s.IsProvisionalQuadrant(1), "sibling bits stay");

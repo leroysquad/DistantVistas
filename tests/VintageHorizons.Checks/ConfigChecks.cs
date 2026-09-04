@@ -29,7 +29,7 @@ public static class ConfigChecks
         // But the radius is deliberately bounded rather than unlimited: sections come from
         // wherever players have collectively been, so an uncapped default would let a new
         // player pull a survey of the whole explored world without travelling.
-        c.Eq(8192, config.ServeRadiusBlocks, "the default radius is bounded, not unlimited");
+        c.Eq(32768, config.ServeRadiusBlocks, "the default radius is bounded, not unlimited");
 
         // Generating terrain nobody has visited is opt-in.
         c.Eq(0, config.PregenRadiusChunks, "pre-generation is off by default");
@@ -53,18 +53,33 @@ public static class ConfigChecks
         // with the controlserver privilege asks, and peeks write nothing to the savegame.
         c.True(config.EnableGenerateCommand, "the generate command is enabled by default");
         c.True(config.GenerateEnabled, "the defaults leave generation available");
-        c.Eq(128, config.GenerateMaxRadiusChunks, "the generate ceiling is 128 chunks");
-        c.Eq(32, config.GenerateDefaultRadiusChunks, "the no-argument radius is 32 chunks");
-        c.Eq(16, config.GenerateColumnsPerSecond, "the generate rate default is 16 columns/s");
-        c.Eq(64, config.GenerateMaxInFlight, "the in-flight cap default is TopoHorizon's measured 64");
+        c.Eq(256, config.GenerateMaxRadiusChunks, "the generate ceiling is 256 chunks");
+        c.Eq(128, config.GenerateDefaultRadiusChunks, "the no-argument radius is 128 chunks");
+        c.Eq(1, config.GenerateColumnsPerSecond, "the generate rate default is 1 column/s");
+        c.Eq(4, config.GenerateMaxInFlight, "the in-flight cap default is 4 (spawn-safe)");
         c.False(new LodServerConfig { EnableGenerateCommand = false }.GenerateEnabled,
             "clearing the flag disables generation");
         c.False(new LodServerConfig { GenerateMaxRadiusChunks = 0 }.GenerateEnabled,
             "a zero ceiling disables generation as surely as the flag does");
 
+        c.True(new LodServerConfig().ShouldAutoGenerateOnJoin(false),
+            "auto-join peeks when Farseer is absent");
+        c.True(new LodServerConfig().ShouldAutoGenerateOnJoin(true),
+            "auto-join still peeks when Farseer is on (new worlds need our fill)");
+        c.False(new LodServerConfig { AutoGenerateOnJoin = false }.ShouldAutoGenerateOnJoin(false),
+            "the flag still turns auto-join off");
+        c.Eq(24, Sanitized(cfg => cfg.AutoGenerateRadiusChunks = 256).AutoGenerateRadiusChunks,
+            "auto-join cannot start a 256-chunk worldgen job on join");
+        c.Eq(24, new LodServerConfig { AutoGenerateRadiusChunks = 256, GenerateDefaultRadiusChunks = 256 }.LiveAutoJoinRadiusChunks(),
+            "live auto-join radius is capped even before sanitize");
+        c.Eq(7, new LodServerConfig { GenerateHorizonStartChunks = 14 }.LiveAutoJoinHorizonStartChunks(),
+            "auto-join horizon starts at 7 chunks so the fog cut fills first (json 14 is 448 blocks)");
+        c.Eq(4, LodServerConfig.AutoJoinMaxColumnsPerSecond, "auto-join peeks at 4/s so spawn keeps the worldgen thread");
+        c.Eq(4, LodServerConfig.AutoJoinMaxInFlight, "auto-join in-flight is 4, not the 24 that wedged spawn");
+
         var untouched = new LodServerConfig();
         untouched.Sanitize();
-        c.Eq(8192, untouched.ServeRadiusBlocks, "sanitizing the defaults changes nothing");
+        c.Eq(32768, untouched.ServeRadiusBlocks, "sanitizing the defaults changes nothing");
         c.Eq(LodAssist.MaxSectionsPerSecondTotal, untouched.MaxSectionsPerSecondTotal,
             "sanitizing leaves in-range values alone");
     }
@@ -160,7 +175,7 @@ public static class ConfigChecks
         string text = new LodServerConfig().Describe();
         c.True(text.Contains("capture on"), "the description reports capture state");
         c.True(text.Contains("serving on"), "the description reports serving state");
-        c.True(text.Contains("8192 blocks"), "the description reports the radius in blocks");
+        c.True(text.Contains("32768 blocks"), "the description reports the radius in blocks");
 
         var unlimited = new LodServerConfig { ServeRadiusBlocks = 0 };
         c.True(unlimited.Describe().Contains("unlimited"), "a zero radius is described as unlimited");
@@ -173,7 +188,7 @@ public static class ConfigChecks
         c.True(new LodServerConfig { SweepSavegame = false }.Describe().Contains("sweep off"),
             "a disabled sweep is described as off");
 
-        c.True(text.Contains("generate on request up to 128 chunks"),
+        c.True(text.Contains("generate on request up to 256 chunks"),
             "the description reports the generate ceiling");
         c.True(new LodServerConfig { EnableGenerateCommand = false }.Describe().Contains("generate off"),
             "disabled generation is described as off");

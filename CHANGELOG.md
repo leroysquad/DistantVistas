@@ -1,4 +1,10 @@
-﻿## 0.7.75
+## 0.7.77
+- **Pressure thrash hysteresis.** Enter mesh pressure only after ~1.5s of sustained bad frames (enter at ~40ms p95 / ~37ms avg), and clear only after ~2.5s under a lower bar (~25ms p95 and ~28ms avg). Stops the 0.7.75/0.7.76 feedback loop where whole-client ~33ms deltaTime permanently latched pressure, eviction/remesh made frames worse, and FPS bounced 15–48. Eviction under pressure capped at 2 meshes/frame with a short cooldown so eviction itself cannot spike walk/draw. Mesh count alone still never opens pressure. Telemetry: `pressureEnter`, `pressureClear`, `pressureActiveMs`. Cake ban, FOV occlusion, fail-open unchanged.
+- **Linux zip paths.** Packaging still forces forward-slash (`/`) entry names in the mod zip (from 0.7.76). Windows pack must not leave `\\` in nested asset paths or Linux clients/servers miss shaders and assets.
+
+## 0.7.76
+- **Linux zip paths.** Packaging now forces forward-slash (/) entry names in the mod zip. Windows pack used to leave `\` in nested asset paths, so Linux clients/servers could miss shaders and assets. Same game build; packaging fix only.
+## 0.7.75
 - **Pressure-only mesh eviction.** GPU meshes are never dropped just because there are "too many" or they sit past some distance. Eviction runs only when you are actually hurting: sustained bad frame time (~33ms+ p95/avg), and/or truly high managed memory (with hitch spikes). When pressure is on, only the oldest L0/L1 outside **2× view distance** may go; inside that ring visited land stays drawn. Disk cache stays. Soft mesh-count hint may reinforce pressure only after frame time is already bad. Telemetry: `meshPressure`, `evictOutside2x`, `evictBlockedInside2x`.
 - **Turn hitch soften.** FOV occlusion (0.7.74) now uses a temporal cache, 6 samples by default, and a hard per-frame ray budget (48). Small yaw no longer re-rays every L0/L1 every frame; out of budget fails open (draw). Lead-cone L0 promote is capped to a few requests per frame so turning does not remesh-storm plates into full L0 (keeps the 0.7.69 lesson). Cake-plate ban (0.7.73) and occlusion fail-open stay.
 

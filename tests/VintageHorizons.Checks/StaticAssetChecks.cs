@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using DistantVistas;
 
 namespace DistantVistas.Checks;
 
@@ -16,6 +17,8 @@ public static class StaticAssetChecks
         VersionAgreement(c);
         LiveSeasonClock(c);
         NoCameraLockedNearDiscard(c);
+        FarseerOverlay(c);
+        NoFakeOptionalDependencies(c);
     }
 
     /// <summary>
@@ -200,5 +203,71 @@ public static class StaticAssetChecks
             "lodterrain.fsh receives localXZ and the clipRect uniform");
         c.True(Regex.IsMatch(fsh, @"localXZ\.x\s*<\s*clipRect\.x") && Regex.IsMatch(fsh, @"localXZ\.y\s*>\s*clipRect\.w"),
             "lodterrain.fsh discards outside the clip rectangle (minX, minZ, maxX, maxZ)");
+    }
+
+    /// <summary>
+    /// We overlay Farseer's region shaders so their sky cylinder and
+    /// bleach-to-sky tint are not in the player's view. No Harmony.
+    /// </summary>
+    static void FarseerOverlay(Check c)
+    {
+        string vsh = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "assets", "farseer", "shaders", "region.vsh"));
+        string fsh = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "assets", "farseer", "shaders", "region.fsh"));
+        c.False(FarseerShaderOverlay.OverlayActive,
+            "Farseer overlay inject is off (stock SkyTint bleaches; yield punched our holes)");
+        c.True(vsh.Contains("distStart = viewDistance * 0.785"),
+            "farseer overlay inner disc is stock so the spawn 512-block region can rasterize");
+        c.False(vsh.Contains("distStart = 24.0"),
+            "farseer overlay inner disc is not a 24-block hole under the player");
+        c.False(vsh.Contains("distStart = viewDistance * 1.5"),
+            "farseer overlay does not start at 1.5x (that discarded the spawn region)");
+        c.False(vsh.Contains("distStart = viewDistance * 0.92"),
+            "farseer overlay does not use the 0.92 inner start");
+        c.False(Regex.IsMatch(vsh, @"farViewDistance\s*-\s*distStart\s*-\s*512"),
+            "farseer overlay dist == 1 is the real far rim, not 512 blocks inside the hills");
+        c.False(fsh.Contains("applySpheresFog"),
+            "farseer overlay does not run sphere fog (sky ring)");
+        c.True(fsh.Contains("clamp(skyTint, 0.0, 0.4)"),
+            "farseer overlay clamps SkyTint so 5-10 cannot bleach the heightmap");
+        c.True(fsh.Contains("min(colorTint.a, 0.12)"),
+            "farseer overlay clamps ColorTint so slate wash cannot hide relief");
+        c.True(fsh.Contains("smoothstep(0.88, 1.0, dist)"),
+            "farseer overlay only mixes sky at the far rim");
+        c.True(vsh.Contains("DV_FARSEER_OVERLAY") && fsh.Contains("DV_FARSEER_OVERLAY"),
+            "farseer overlay carries a marker the boot log can see");
+        c.False(vsh.Contains("yLevel > 340.0"),
+            "farseer overlay does not sink heightmaps (that buried the silhouette)");
+        c.False(fsh.Contains("0.35 * radial"),
+            "farseer overlay does not discard overhead (that ate the heightmap disc)");
+        c.True(fsh.Contains("terraColor.rgb *= 0.78"),
+            "farseer overlay darkens sky-sampled heightmaps so hills read against sky");
+
+        string overlayCs = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "DistantVistasModSystem.cs"));
+        c.False(overlayCs.Contains("capi.Shader.ReloadShaders"),
+            "client system does not ReloadShaders after overlay (that reloads Farseer's zip)");
+        c.False(overlayCs.Contains("RegisterFileShaderProgram"),
+            "client system does not re-register Farseer's region program");
+        c.False(overlayCs.Contains("RecompileRegion"),
+            "client system does not Compile Farseer's live region program");
+
+        string srcVsh = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "assets", "distantvistas", "shaders", "farseer-region.vsh"));
+        string srcFsh = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "assets", "distantvistas", "shaders", "farseer-region.fsh"));
+        c.Eq(vsh, srcVsh, "distantvistas domain vsh is the same overlay we inject");
+        c.Eq(fsh, srcFsh, "distantvistas domain fsh is the same overlay we inject");
+    }
+
+    static void NoFakeOptionalDependencies(Check c)
+    {
+        string json = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "modinfo.json"));
+        c.False(json.Contains("optionaldependencies"),
+            "modinfo does not lie about optionaldependencies (VS has no such field)");
+        c.False(json.Contains("\"farseer\":"),
+            "modinfo does not require Farseer (companion only)");
     }
 }

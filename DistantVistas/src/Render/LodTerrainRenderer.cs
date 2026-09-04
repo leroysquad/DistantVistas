@@ -102,7 +102,10 @@ public class LodTerrainRenderer : IRenderer
     /// p95 does not spike.
     /// </summary>
     const int EvictOldestPerFrame = 2;
-    const int EvictOldestPerFrameUnderPressure = 8;
+    /// <summary>Hard cap under pressure — eviction itself must not spike walk/draw.</summary>
+    const int EvictOldestPerFrameUnderPressure = 2;
+    /// <summary>Frames to wait after a pressure eviction burst before scanning again.</summary>
+    const int EvictPressureCooldownFrames = 20;
 
     /// <summary>
     /// Frames between rebuilds of the oldest-first candidate list. Choosing candidates
@@ -123,6 +126,15 @@ public class LodTerrainRenderer : IRenderer
     /// <summary>True when UpdateMeshPressure saw sustained bad frame time and/or high managed memory.</summary>
     public bool MeshPressureActive { get; private set; }
 
+    /// <summary>Times pressure latched on this session (hysteresis enter).</summary>
+    public int PressureEnterCount { get; private set; }
+
+    /// <summary>Times pressure cleared this session (hysteresis exit).</summary>
+    public int PressureClearCount { get; private set; }
+
+    /// <summary>Milliseconds spent with MeshPressureActive true this session.</summary>
+    public double PressureActiveMsTotal { get; private set; }
+
     // Rolling frame-time samples for pressure (ms). Mesh count alone never opens pressure.
     const int FrameSampleCount = 64;
     readonly double[] frameMsSamples = new double[FrameSampleCount];
@@ -131,6 +143,9 @@ public class LodTerrainRenderer : IRenderer
     double pressureAvgFrameMs;
     double pressureP95FrameMs;
     long pressureManagedMb;
+    double pressureEnterAccumMs;
+    double pressureClearAccumMs;
+    long lastPressureEvictFrame = -9999;
     int fineHorizonRequestsThisFrame;
     const int FineHorizonRequestsPerFrame = 3;
     float lookYaw;
@@ -1813,20 +1828,70 @@ public class LodTerrainRenderer : IRenderer
         try { pressureManagedMb = GC.GetTotalMemory(false) / (1024 * 1024); }
         catch { /* keep prior */ }
 
-        MeshPressureActive = LodMemoryBudget.IsUnderPressure(
-            pressureAvgFrameMs, pressureP95FrameMs, pressureManagedMb, sectionMeshes.Count);
+        double dtMs = ms;
+        if (MeshPressureActive)
+            PressureActiveMsTotal += dtMs;
 
-        // Soft mesh hint only AFTER frame time is already bad: dense far sets under hitch.
-        if (!MeshPressureActive
-            && (pressureP95FrameMs >= LodMemoryBudget.FramePressureMs)
+        // Raw enter: sustained bad frames OR memory/hitch. Soft mesh hint may reinforce
+        // enter only when frame enter is already signalling — never mesh count alone.
+        bool enterSignal = LodMemoryBudget.IsUnderPressure(
+            pressureAvgFrameMs, pressureP95FrameMs, pressureManagedMb, sectionMeshes.Count);
+        if (!enterSignal
+            && LodMemoryBudget.IsFrameEnterSignal(pressureAvgFrameMs, pressureP95FrameMs)
             && sectionMeshes.Count > LodMemoryBudget.MaxResidentMeshes)
-            MeshPressureActive = true;
+            enterSignal = true;
+
+        bool clearSignal = LodMemoryBudget.IsFrameClearSignal(pressureAvgFrameMs, pressureP95FrameMs)
+            && !LodMemoryBudget.IsMemoryPressure(pressureP95FrameMs, pressureManagedMb);
+
+        if (!MeshPressureActive)
+        {
+            pressureClearAccumMs = 0;
+            if (enterSignal)
+            {
+                pressureEnterAccumMs += dtMs;
+                if (pressureEnterAccumMs >= LodMemoryBudget.PressureEnterSustainMs)
+                {
+                    MeshPressureActive = true;
+                    PressureEnterCount++;
+                    pressureEnterAccumMs = 0;
+                    pressureClearAccumMs = 0;
+                }
+            }
+            else
+            {
+                pressureEnterAccumMs = 0;
+            }
+        }
+        else
+        {
+            pressureEnterAccumMs = 0;
+            if (clearSignal)
+            {
+                pressureClearAccumMs += dtMs;
+                if (pressureClearAccumMs >= LodMemoryBudget.PressureClearSustainMs)
+                {
+                    MeshPressureActive = false;
+                    PressureClearCount++;
+                    pressureClearAccumMs = 0;
+                }
+            }
+            else
+            {
+                pressureClearAccumMs = 0;
+            }
+        }
     }
 
     void EvictStaleMeshes()
     {
         // Never drop meshes for count alone. Only when the player is actually hurting.
         if (!MeshPressureActive) return;
+
+        // Cooldown so an eviction burst cannot keep walk/draw spiked every frame.
+        if (frameCounter - lastPressureEvictFrame < EvictPressureCooldownFrames
+            && evictCursor >= evictBatch.Count)
+            return;
 
         bool drained = evictCursor >= evictBatch.Count;
         if (frameCounter - lastEvictScanFrame >= EvictScanInterval || (drained && evictBatchFull))
@@ -1895,6 +1960,7 @@ public class LodTerrainRenderer : IRenderer
             lastSelectedFrame.Remove(key);
             meshBornFrame.Remove(key);
             EvictedTotal++;
+            lastPressureEvictFrame = frameCounter;
             EvictedOutside2xTotal++;
             budget--;
         }

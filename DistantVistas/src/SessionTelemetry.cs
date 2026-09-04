@@ -91,6 +91,9 @@ public sealed class SessionTelemetry
         bool meshPressure = renderer.MeshPressureActive;
         int evictOutside2x = renderer.EvictedOutside2xTotal;
         int evictBlocked2x = renderer.EvictBlockedInside2xTotal;
+        int pressureEnter = renderer.PressureEnterCount;
+        int pressureClear = renderer.PressureClearCount;
+        double pressureActiveMs = renderer.PressureActiveMsTotal;
         double renderOrder = renderer.RenderOrder;
         float overdrawStart = renderer.OverdrawStart;
 
@@ -138,6 +141,9 @@ public sealed class SessionTelemetry
             MeshPressure = meshPressure,
             EvictOutside2x = evictOutside2x,
             EvictBlockedInside2x = evictBlocked2x,
+            PressureEnter = pressureEnter,
+            PressureClear = pressureClear,
+            PressureActiveMs = (int)pressureActiveMs,
             CompanionYield = renderer.LastCompanionYieldCount,
             PressureYieldCount = renderer.LastPressureYieldCount,
             Deferring = deferring ?? "",
@@ -216,6 +222,9 @@ public sealed class SessionTelemetry
         public bool MeshPressure;
         public int EvictOutside2x;
         public int EvictBlockedInside2x;
+        public int PressureEnter;
+        public int PressureClear;
+        public int PressureActiveMs;
         public int CompanionYield;
         public int PressureYieldCount;
         public string Deferring;
@@ -268,6 +277,9 @@ public sealed class SessionTelemetry
             Append(sb, "meshPressure", MeshPressure);
             Append(sb, "evictOutside2x", EvictOutside2x);
             Append(sb, "evictBlockedInside2x", EvictBlockedInside2x);
+            Append(sb, "pressureEnter", PressureEnter);
+            Append(sb, "pressureClear", PressureClear);
+            Append(sb, "pressureActiveMs", PressureActiveMs);
             Append(sb, "companionYield", CompanionYield);
             Append(sb, "pressureYieldCount", PressureYieldCount);
             Append(sb, "deferring", Deferring);

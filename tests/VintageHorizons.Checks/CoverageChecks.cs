@@ -37,6 +37,16 @@ public static class CoverageChecks
             "looking up is not look-down");
         c.True(LodCoveragePolicy.LookDownAmount(-1) >= 0.99f,
             "straight down is full look-down");
+        c.Eq(0.92f, LodCoveragePolicy.LookDownCoarseFill,
+            "coarse fill waits until ~67 deg, not a skyline pan");
+        c.Eq(0f, LodCoveragePolicy.LookDownSteepAmount(0.55),
+            "0.55 still has skyline: skip-disc and sink do not steepen yet");
+        c.Eq(0f, LodCoveragePolicy.LookDownSteepAmount(0.82),
+            "0.82 still has sky in frame: do not steepen yet");
+        c.Eq(0f, LodCoveragePolicy.LookDownSteepAmount(LodCoveragePolicy.LookDownCoarseFill),
+            "at the coarse-fill pitch steep amount is still zero");
+        c.True(LodCoveragePolicy.LookDownSteepAmount(1) >= 0.99f,
+            "nadir is full steep look-down");
 
         const double radius = 281;
         // At the surface, horizontal 0 is inside vanilla.
@@ -50,6 +60,8 @@ public static class CoverageChecks
         // Same height but still inside 3D sphere (vert 200 < 281): horizon skip, look-down no skip.
         c.True(LodCoveragePolicy.InsideVanillaCoverage(0, 320, 100, 120, radius, 0),
             "mid-alt nadir still skip at horizon");
+        c.True(LodCoveragePolicy.InsideVanillaCoverage(120 * 120, 320, 100, 120, radius, 0.55),
+            "mid-alt skyline pan still vanilla-owns nearby ground");
         c.False(LodCoveragePolicy.InsideVanillaCoverage(0, 320, 100, 120, radius, 1),
             "straight down does not skip existing LOD");
         // Look-down frustum / far XY: 200 blocks out, high camera, must not 2D-own.
@@ -98,16 +110,16 @@ public static class CoverageChecks
             "keep-circle still holds the L0 GPU mesh at 2x view distance");
         c.False(LodCoveragePolicy.RequestVisitedKeepMesh(0, false, true, false, at2x, TrailAnchor),
             "do not request L0 at 2x view distance just because it was visited");
-        c.True(LodCoveragePolicy.RequestVisitedKeepMesh(0, false, true, false, at2x, TrailAnchor, true, true),
-            "visited L0 at 2x VD in the lead cone with land drawn past it is requested");
+        c.False(LodCoveragePolicy.RequestVisitedKeepMesh(0, false, true, false, at2x, TrailAnchor, true, true),
+            "past 1.5x VD the lead cone does not request L0 (that was the turn hitch)");
         c.False(LodCoveragePolicy.RequestVisitedKeepMesh(0, false, true, false, at2x, TrailAnchor, false, true),
             "behind the camera, farther land does not force an L0 request");
         c.False(LodCoveragePolicy.RequestVisitedKeepMesh(0, false, true, false, at2x, TrailAnchor, true, false),
             "the frontier tile (nothing drawn past it) is not intervening");
         c.False(LodCoveragePolicy.DescendForVisitedKeep(2, true, at2x, TrailAnchor),
             "do not walk every L0 at 2x view distance");
-        c.True(LodCoveragePolicy.DescendForVisitedKeep(2, true, at2x, TrailAnchor, true, true),
-            "a parent that could not stop walks into intervening visited children");
+        c.False(LodCoveragePolicy.DescendForVisitedKeep(2, true, at2x, TrailAnchor, true, true),
+            "past 1.5x VD the parent mesh is what we draw, even in the lead cone");
         c.False(LodCoveragePolicy.DescendForVisitedKeep(2, true, at2x, TrailAnchor, false, true),
             "behind the camera the parent mesh is still what we draw");
         c.False(LodCoveragePolicy.SkipDrawTooFine(0, 1, false, true),
@@ -124,10 +136,10 @@ public static class CoverageChecks
             "missing L2: visit L1 children for hole-fill");
         c.True(LodCoveragePolicy.ShouldVisitChildForDraw(0, 1, false, false),
             "missing L1 when wanted is L1: L0 is the hole-fill rung");
-        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, false, 0f, true),
-            "captured L0 is walked even when a parent mesh exists and wanted is L2");
-        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(0, 1, false, true, true, false, 0f, true),
-            "captured L0 is walked under an L1 mesh");
+        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, false, 0f, true),
+            "behind the camera a parent mesh is enough; do not walk captured L0");
+        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 1, false, true, true, false, 0f, true),
+            "behind the camera, captured L0 under an L1 mesh stays parked");
         c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, false),
             "an L0 with no data is still not walked as hole-fill of a missing L2");
         c.True(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, true, 0f, true, true),
@@ -136,12 +148,12 @@ public static class CoverageChecks
             "missing L2, intervening L0 in the cone: walk it, not just the L1 rung");
         c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, true, 1f, false, true),
             "a child with no data is never intervening land");
-        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, false, 1f, true, true),
-            "captured L0 is walked behind the camera too");
-        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, true, 1f, true, false),
-            "captured L0 is walked even looking down with no land past it");
-        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(1, 3, false, true, true, false, 0f, true),
-            "captured L1 is walked when wanted is L3 and a parent mesh exists");
+        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, false, 1f, true, true),
+            "behind the camera, captured L0 is not walked (turn hitch)");
+        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, true, 1f, true, false),
+            "looking down with an L2 mesh does not walk L0");
+        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(1, 3, false, true, true, false, 0f, true),
+            "behind the camera, captured L1 under an L3 mesh stays parked");
         c.False(LodCoveragePolicy.ShouldVisitChildForDraw(2, 3, false, true, true, true, 1f, true, true),
             "intervening applies to L0/L1 only; look-down L2 under an L3 mesh is not forced");
         c.True(LodCoveragePolicy.ShouldVisitChildForDraw(2, 2, false, true),
@@ -173,8 +185,38 @@ public static class CoverageChecks
         c.False(LodCoveragePolicy.StopDescentAtAvailableRung(1, 2, false, false, true, true),
             "no mesh cannot stop descent");
         int fullCols = LodSection.GridSize * LodSection.GridSize;
-        c.Eq(15f, LodCoveragePolicy.LeadConeDegrees, "lead cone is 15 degrees");
+        c.Eq(1.5f, LodCoveragePolicy.LeadConeFineScale,
+            "lead-cone L0/L1 preference ends at 1.5x view distance");
+        c.Eq(3f, LodCoveragePolicy.HorizonDrawScale,
+            "horizon submit stops at 3x view distance");
+        c.True(LodCoveragePolicy.HorizonLeadConeFine(true, 0f, 400, 512),
+            "inside 1.5x the horizon still wants L0/L1");
+        c.False(LodCoveragePolicy.HorizonLeadConeFine(true, 0f, 800, 512),
+            "past 1.5x turning does not promote L2 plates to L0");
+        c.True(LodCoveragePolicy.HorizonLeadCone(true, 0f),
+            "shelf ban has no distance cap");
+        c.False(LodCoveragePolicy.StopDescentAtAvailableRung(2, 2, false, true, true, true, 0f, 800, 512),
+            "past 1.5x an L2 in the cone still does not stop");
+        c.False(LodCoveragePolicy.PastHorizonDraw(400, 512),
+            "inside 3x is still the horizon band");
+        c.True(LodCoveragePolicy.PastHorizonDraw(1600, 512),
+            "past 3x we stop; Farseer heightmaps are the silhouettes");
+        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, true, 0f, true, false, 1600, 512),
+            "past 3x do not walk L0");
+        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(1, 2, false, true, true, true, 0f, true, false, 1600, 512),
+            "past 3x do not walk L1 either");
         c.Eq(1, LodCoveragePolicy.LeadConeMaxDrawLevel, "in-cone max draw level is L1");
+        c.Eq(2, LodCoveragePolicy.LeadConeMaxCoverLevel, "in-cone whole cover caps at L2");
+        c.False(LodCoveragePolicy.MayLeadConeCoarseCover(3, true, true, 0f, 400, 512, true),
+            "PreferParentCoverage must not whole-cover L3+ in the lead cone");
+        c.False(LodCoveragePolicy.MayLeadConeCoarseCover(4, true, true, 0f, 400, 512, true),
+            "PreferParentCoverage must not whole-cover L4+ in the lead cone");
+        c.False(LodCoveragePolicy.MayDrawCoarseParent(3, false, true, true, 0f, 400, 512, true),
+            "MayDrawCoarseParent refuses L3+ preferParent in the lead cone");
+        c.True(LodCoveragePolicy.MayLeadConeCoarseCover(2, true, true, 0f, 400, 512, true),
+            "land-like L2 may temporary-cover in cone when children not ready");
+        c.True(LodCoveragePolicy.MayLeadConeCoarseCover(1, true, true, 0f, 400, 512, false),
+            "land-like L1 may cover in the lead cone");
         c.Eq(4, LodCoveragePolicy.MinLandLikeRelief(1), "L1 min relief is 4");
         c.Eq(8, LodCoveragePolicy.MinLandLikeRelief(2), "L2 min relief is 8");
         c.Eq(16, LodCoveragePolicy.MinLandLikeRelief(3), "L3 min relief is 16");
@@ -234,6 +276,10 @@ public static class CoverageChecks
             "straight down is not the horizon shelf ban");
         c.True(LodCoveragePolicy.HorizonLeadCone(true, 0f),
             "horizon pitch still uses the lead-cone shelf ban");
+        c.True(LodCoveragePolicy.HorizonLeadCone(true, 0.55f),
+            "0.55 look-down still has skyline; keep the shelf ban");
+        c.True(LodCoveragePolicy.HorizonLeadCone(true, 0.82f),
+            "0.82 look-down still has sky in frame; keep the shelf ban");
         c.False(LodCoveragePolicy.HorizonLeadCone(true, LodCoveragePolicy.LookDownCoarseFill),
             "at the look-down fill pitch the shelf ban lets go");
         c.True(LodCoveragePolicy.MayDrawCoarseParent(2, false, true, true, 1f),
@@ -497,6 +543,23 @@ public static class CoverageChecks
             "unmeshed dirty land still schedules idle");
         c.True(LodCoveragePolicy.ShouldRemeshWhileIdle(true, true, false),
             "a 64-block origin shift remeshes capture-dirty land");
+
+        c.False(LodCoveragePolicy.YieldFootprintToCompanion(false, false),
+            "without Farseer we still draw peek fill");
+        c.False(LodCoveragePolicy.YieldFootprintToCompanion(true, true),
+            "walked land stays ours when Farseer is on");
+        c.False(LodCoveragePolicy.YieldFootprintToCompanion(true, false),
+            "peek still draws when Farseer is on");
+        c.False(LodCoveragePolicy.YieldFootprintToCompanion(true, true, 100, 4000, 400, 512),
+            "inside view distance still draws");
+        c.False(LodCoveragePolicy.YieldFootprintToCompanion(true, true, 5000, 4000, 400, 512),
+            "over-budget still draws (eviction is the GPU cap, not a hole)");
+        c.False(LodCoveragePolicy.YieldFootprintToCompanion(true, true, 100, 4000, 600, 512),
+            "past view distance still draws: that band is this mod");
+        c.False(LodCoveragePolicy.YieldFootprintToCompanion(true, false, 100, 4000, 400, 512),
+            "peek inside view distance still draws");
+        c.False(LodCoveragePolicy.YieldFootprintToCompanion(true, false, 100, 4000, 1000, 512),
+            "peek past view distance still draws; 0.7.66 yield made that sky");
     }
 
     const double TrailAnchor = 512;
