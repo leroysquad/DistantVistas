@@ -103,6 +103,9 @@ public class LodPipeline
     /// <summary>Repaint baked palette colours for the current calendar month.</summary>
     public System.Func<LodSection, long, int>? RebakeSeasonPalette;
 
+    /// <summary>Upgrade legacy live-tint palette rows to discover-baked on disk load.</summary>
+    public System.Func<LodSection, long, int>? HealLegacyPalette;
+
     public int SeasonSectionsRepainted { get; private set; }
 
     readonly ConcurrentDictionary<long, byte> queuedColumns = new();
@@ -383,6 +386,7 @@ public class LodPipeline
             LoadCalls++;
             LoadMsTotal += ms;
             if (ms > LoadMsMax) LoadMsMax = ms;
+            if (loaded != null) AfterSectionLoaded(key, loaded);
             return loaded;
         };
         CachedSectionsLoaded = store.LoadAllKeys((level, sx, sz, applyToParent, provisional) =>
@@ -504,12 +508,7 @@ public class LodPipeline
             {
                 store.ResolvePendingPalette(result.Section, api.World);
                 result.Section.RemoveRunsWithFlag(LodPaletteEntry.FlagSkip);
-                repaired = RepairUncoloredPalette?.Invoke(result.Section) ?? 0;
-                if (World.SeasonRepaintEpochActive
-                    && LodSeasonBake.SectionHasBakedEntries(result.Section))
-                {
-                    World.SeasonDirty.Add(result.Key);
-                }
+                AfterSectionLoaded(result.Key, result.Section, ref repaired);
             }
             World.InstallLoaded(result.Key, result.Section);
 
@@ -521,6 +520,39 @@ public class LodPipeline
                 PaletteEntriesRepaired += repaired;
                 World.MarkChanged(result.Key);
             }
+        }
+    }
+
+    /// <summary>
+    /// Palette repair and legacy discover-bake after a section is read from disk. Sync and
+    /// async load paths both land here so FlagBaked survives Reclassify and old live-tint
+    /// caches upgrade on revisit without a manual cache wipe.
+    /// </summary>
+    void AfterSectionLoaded(long key, LodSection section, ref int repaired)
+    {
+        repaired += RepairUncoloredPalette?.Invoke(section) ?? 0;
+        int healed = HealLegacyPalette?.Invoke(section, key) ?? 0;
+        if (healed > 0)
+        {
+            repaired += healed;
+            World.RenderDirty.Add(key);
+        }
+        if (World.SeasonRepaintEpochActive
+            && (LodSeasonBake.SectionHasBakedEntries(section)
+                || LodSeasonBake.SectionNeedsLegacyHeal(section)))
+        {
+            World.SeasonDirty.Add(key);
+        }
+    }
+
+    void AfterSectionLoaded(long key, LodSection section)
+    {
+        int repaired = 0;
+        AfterSectionLoaded(key, section, ref repaired);
+        if (repaired > 0)
+        {
+            PaletteEntriesRepaired += repaired;
+            World.MarkChanged(key);
         }
     }
 
@@ -782,7 +814,8 @@ public class LodPipeline
                 continue;
             }
 
-            if (!LodSeasonBake.SectionHasBakedEntries(section))
+            if (!LodSeasonBake.SectionHasBakedEntries(section)
+                && !LodSeasonBake.SectionNeedsLegacyHeal(section))
             {
                 done.Add(key);
                 continue;

@@ -82,9 +82,13 @@ void main()
     localXZ = vertexPositionIn.xz;
 
     int slotRaw = int(vertexColorIn.a * 255.0 + 0.5);
-    int slot = clamp(slotRaw - (slotRaw / TINT_SLOTS) * TINT_SLOTS, 0, TINT_SLOTS - 1);
     int band = slotRaw / TINT_SLOTS;
+    int slot = clamp(slotRaw - band * TINT_SLOTS, 0, TINT_SLOTS - 1);
+    bool bakedAlbedo = band == 3;
     float tintBlend = clamp((yLevel - tintYLow) / max(1.0, tintYHigh - tintYLow), 0.0, 1.0);
+    if (bakedAlbedo) {
+        tint = vec3(1.0);
+    } else {
     tint = mix(tintsLow[slot].rgb, tintsHigh[slot].rgb, tintBlend);
     // Slot 0 is identity. A snow-row high sample must not bleach captured grass
     // or soil tops after vanilla unloads; copy the valley tint instead. Only
@@ -132,6 +136,7 @@ void main()
         // driver cannot drop the uniform.
         amt *= step(0.0, seasonRel + 1.0);
         tint = mix(tint, seasonTints[slot].rgb, amt);
+    }
     }
 
     worldPos = modelMatrix * vec4(vertexPositionIn, 1.0);

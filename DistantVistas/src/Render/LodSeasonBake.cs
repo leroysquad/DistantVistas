@@ -133,4 +133,69 @@ public static class LodSeasonBake
         }
         return false;
     }
+
+    /// <summary>
+    /// True when a section still uses the pre-0.7.79 live-tint path (untinted palette +
+    /// non-zero tint slot) and should be upgraded on load or budgeted repaint.
+    /// </summary>
+    public static bool SectionNeedsLegacyHeal(LodSection section)
+    {
+        for (int i = 0; i < section.Palette.Count; i++)
+        {
+            LodPaletteEntry e = section.Palette[i];
+            if ((e.Flags & LodPaletteEntry.FlagBaked) != 0) continue;
+            if (e.TintSlot != LodTintRegistry.SlotNone) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Repaint baked entries and upgrade legacy live-tint rows to discover-baked palettes.
+    /// </summary>
+    public static int HealOrRepaintSection(
+        IClientWorldAccessor world,
+        LodSection section,
+        long sectionKey,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf)
+    {
+        int changed = RebakeSection(world, section, sectionKey, plantTintFallback, untintedOf);
+        changed += UpgradeLegacyEntries(world, section, sectionKey, plantTintFallback, untintedOf);
+        return changed;
+    }
+
+    /// <summary>
+    /// Discover-bake legacy caches that still carry a live tint slot. Runs on revisit and
+    /// during the budgeted month repaint so players do not need to delete their cache.
+    /// </summary>
+    public static int UpgradeLegacyEntries(
+        IClientWorldAccessor world,
+        LodSection section,
+        long sectionKey,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf)
+    {
+        int changed = 0;
+        for (int pid = 0; pid < section.Palette.Count; pid++)
+        {
+            LodPaletteEntry entry = section.Palette[pid];
+            if ((entry.Flags & LodPaletteEntry.FlagBaked) != 0) continue;
+            if (entry.TintSlot == LodTintRegistry.SlotNone) continue;
+            if (entry.BlockId <= 0) continue;
+            if (!section.TryFindPaletteTop(sectionKey, pid, out int x, out int y, out int z)) continue;
+
+            Block block = world.Blocks[entry.BlockId];
+            (int untinted, LodUntintedShare share) = untintedOf(block);
+            if (!CanBake(block, untinted, plantTintFallback)) continue;
+
+            int baked = BakePaletteColor(world, block, untinted, x, y, z, share, plantTintFallback);
+            entry.Color = baked;
+            entry.Flags = (byte)(entry.Flags | LodPaletteEntry.FlagBaked);
+            entry.TintSlot = LodTintRegistry.SlotNone;
+            section.Palette[pid] = entry;
+            changed++;
+        }
+        if (changed > 0) section.InvalidatePaletteSnapshot();
+        return changed;
+    }
 }

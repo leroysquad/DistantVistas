@@ -24,6 +24,7 @@ public static class StoreChecks
         PurgeKeepsMatchingData(c);
         ProvisionalBitsSurviveReopen(c);
         CapturePolicyStamp(c);
+        FlagBakedSurvivesReclassify(c);
     }
 
     /// <summary>
@@ -499,6 +500,28 @@ public static class StoreChecks
             "leaves-skipped is the only stamp that purges");
         c.False(LodStore.MustPurgeSkipLeavesStamp("unknown-policy"),
             "an unknown stamp is not treated as skip-leaves");
+    }
+
+    static void FlagBakedSurvivesReclassify(Check c)
+    {
+        var section = new LodSection();
+        section.FindOrAddPaletteEntry(blockId: 42, color: 0x00407040, flags: LodPaletteEntry.FlagBaked);
+        byte[] blob = LodStore.Serialize(Fixtures.Snapshot(section, codes: new[] { "game:grass" }));
+
+        var store = new LodStore(null!);
+        store.ClassifyBlock = _ => ((byte)LodPaletteEntry.FlagThin, (byte)7);
+
+        LodSection? back = store.DeserializeForeign(blob, null);
+        c.True(back != null, "baked section deserializes");
+        store.ResolvePendingPalette(back!, code => code == "game:grass" ? 42 : 0);
+
+        LodPaletteEntry e = back!.Palette[0];
+        c.True((e.Flags & LodPaletteEntry.FlagBaked) != 0,
+            "FlagBaked survives palette reclassify on load");
+        c.Eq((byte)LodTintRegistry.SlotNone, e.TintSlot,
+            "baked entries keep tint slot 0 after reclassify");
+        c.True((e.Flags & LodPaletteEntry.FlagThin) != 0,
+            "live block flags are still refreshed on load");
     }
 
     static LodSection Restore(Check c, LodSection section, string[]? codes = null)

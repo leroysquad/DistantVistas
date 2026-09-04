@@ -157,6 +157,8 @@ public static class StaticAssetChecks
         c.True(vsh.Contains("uniform float seasonRel"), "lodterrain.vsh has live seasonRel");
         c.True(vsh.Contains("seasonTints"), "lodterrain.vsh has seasonTints");
         c.True(vsh.Contains("band != 1"), "lodterrain.vsh skips season on water");
+        c.True(vsh.Contains("bakedAlbedo") || vsh.Contains("band == 3"),
+            "lodterrain.vsh skips live tint on discover-baked band 3");
         c.False(vsh.Contains("uniform float seasonTempX"),
             "lodterrain.vsh does not drive vegetation with a global seasonTempX");
         c.True(vsh.Contains("keepClimateLow") && vsh.Contains("climateLow00"),

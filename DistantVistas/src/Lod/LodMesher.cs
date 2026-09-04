@@ -34,13 +34,15 @@ public static class LodMesher
     // water and flowers can be see-through by different amounts.
     const byte WaterBase = LodTintRegistry.MaxSlots;
     const byte ThinBase = LodTintRegistry.MaxSlots * 2;
+    /// <summary>Fourth alpha band: discover-baked albedo, no live climate/season multiply.</summary>
+    public const byte BakedBase = LodTintRegistry.MaxSlots * 3;
 
     static byte AlphaFor(byte paletteFlags, byte tintSlot, int color)
     {
-        byte slot = tintSlot < LodTintRegistry.MaxSlots ? tintSlot : (byte)LodTintRegistry.SlotNone;
         // Discover-baked palette: final RGB already includes climate + season.
         if ((paletteFlags & LodPaletteEntry.FlagBaked) != 0)
-            slot = (byte)LodTintRegistry.SlotNone;
+            return BakedBase;
+        byte slot = tintSlot < LodTintRegistry.MaxSlots ? tintSlot : (byte)LodTintRegistry.SlotNone;
         // Skip live tint for stored colours that are already brown earth, or
         // snow/ice that would turn green if a grass high-tint were multiplied
         // on. Greyscale and dull-olive grass MUST keep the climate slot or far

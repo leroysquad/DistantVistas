@@ -221,6 +221,9 @@ public static class MesherChecks
             "missing-tex water is forced to lake blue");
         c.Eq((byte)5, AlphaOf(Column(flags: 0, tintSlot: 5)),
             "ordinary grey-green tops keep the climate slot");
+        c.Eq(LodMesher.BakedBase,
+            AlphaOf(Column(LodPaletteEntry.FlagBaked, tintSlot: 5)),
+            "FlagBaked uses the fourth alpha band regardless of stored slot");
     }
 
     static void WaterIsASeparatePass(Check c)

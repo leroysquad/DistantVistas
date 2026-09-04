@@ -196,6 +196,7 @@ public class DistantVistasModSystem : ModSystem
 
         pipeline = new LodPipeline(capi, Mod.Logger, DescribePalette, block => (byte)TintSlotOf(block));
         pipeline.RebakeSeasonPalette = RebakeSectionSeason;
+        pipeline.HealLegacyPalette = HealLegacySection;
 
         // Refreshes old stable colours as well as empty server colours. Client-side only:
         // this needs the texture atlas and topsoil textures; a server stores 0 on purpose.
@@ -418,7 +419,11 @@ public class DistantVistasModSystem : ModSystem
     }
 
     int RebakeSectionSeason(LodSection section, long sectionKey) =>
-        LodSeasonBake.RebakeSection(
+        LodSeasonBake.HealOrRepaintSection(
+            capi.World, section, sectionKey, tints.PlantTintFallback, UntintedForRebake);
+
+    int HealLegacySection(LodSection section, long sectionKey) =>
+        LodSeasonBake.UpgradeLegacyEntries(
             capi.World, section, sectionKey, tints.PlantTintFallback, UntintedForRebake);
 
     (int Color, LodUntintedShare Share) UntintedForRebake(Block block)
