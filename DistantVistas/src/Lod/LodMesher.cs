@@ -38,6 +38,9 @@ public static class LodMesher
     static byte AlphaFor(byte paletteFlags, byte tintSlot, int color)
     {
         byte slot = tintSlot < LodTintRegistry.MaxSlots ? tintSlot : (byte)LodTintRegistry.SlotNone;
+        // Discover-baked palette: final RGB already includes climate + season.
+        if ((paletteFlags & LodPaletteEntry.FlagBaked) != 0)
+            slot = (byte)LodTintRegistry.SlotNone;
         // Skip live tint for stored colours that are already brown earth, or
         // snow/ice that would turn green if a grass high-tint were multiplied
         // on. Greyscale and dull-olive grass MUST keep the climate slot or far

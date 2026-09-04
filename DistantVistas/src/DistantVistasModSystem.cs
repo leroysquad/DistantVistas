@@ -195,6 +195,7 @@ public class DistantVistasModSystem : ModSystem
         LodWorld.MaxVisualLevel = GameMath.Clamp(config.MaxVisualLodLevel, 0, LodWorld.MaxLevel);
 
         pipeline = new LodPipeline(capi, Mod.Logger, DescribePalette, block => (byte)TintSlotOf(block));
+        pipeline.RebakeSeasonPalette = RebakeSectionSeason;
 
         // Refreshes old stable colours as well as empty server colours. Client-side only:
         // this needs the texture atlas and topsoil textures; a server stores 0 on purpose.
@@ -369,9 +370,13 @@ public class DistantVistasModSystem : ModSystem
         pipeline.QueueColumn(chunkCoord.X, chunkCoord.Z);
     }
 
+    int seasonAnchorMonth = -1;
+
     void OnGameTick(float dt)
     {
         if (!pipeline.Active) return;
+
+        CheckSeasonMonthChange();
 
         sessionTelemetry?.Tick(pipeline, renderer, deferringTo, Mod.Info.Version);
 
@@ -396,6 +401,33 @@ public class DistantVistasModSystem : ModSystem
         }
     }
 
+    void CheckSeasonMonthChange()
+    {
+        int month = capi.World.Calendar.Month;
+        if (seasonAnchorMonth < 0)
+        {
+            seasonAnchorMonth = month;
+            return;
+        }
+        if (month == seasonAnchorMonth) return;
+        seasonAnchorMonth = month;
+        pipeline.QueueSeasonRepaintAll();
+        Mod.Logger.Notification(
+            "[DistantVistas] Calendar month {0}: queuing gradual seasonal repaint of baked LOD palettes.",
+            month);
+    }
+
+    int RebakeSectionSeason(LodSection section, long sectionKey) =>
+        LodSeasonBake.RebakeSection(
+            capi.World, section, sectionKey, tints.PlantTintFallback, UntintedForRebake);
+
+    (int Color, LodUntintedShare Share) UntintedForRebake(Block block)
+    {
+        if (TryTopSoilColor(block, out int composite, out LodUntintedShare share))
+            return (composite, share);
+        return (StableColorOf(block), LodUntintedShare.None);
+    }
+
     /// <summary>
     /// Adopt whatever the server sent, then ask for what the render path now wants.
     /// Both on the game tick, because both mutate the LodWorld.
@@ -407,7 +439,7 @@ public class DistantVistasModSystem : ModSystem
         int before = pipeline.RemoteOnly.Count;
         assist.Pump((key, blob) =>
         {
-            if (blob.Length > 0 && pipeline.InstallForeignBlob(key, blob, RecolorForeignSection)) return true;
+            if (blob.Length > 0 && pipeline.InstallForeignBlob(key, blob, s => RecolorForeignSection(key, s))) return true;
             pipeline.MarkRemoteUnavailable(key);
             return false;
         });
@@ -545,7 +577,7 @@ public class DistantVistasModSystem : ModSystem
             // not be used for "not yet" - leaving the key alone lets a later tick retry.
             if (blob == null || blob.Length == 0) continue;
 
-            if (!pipeline.InstallForeignBlob(key, blob, RecolorForeignSection))
+            if (!pipeline.InstallForeignBlob(key, blob, s => RecolorForeignSection(key, s)))
             {
                 pipeline.MarkRemoteUnavailable(key);
             }
@@ -565,21 +597,12 @@ public class DistantVistasModSystem : ModSystem
     /// atlas and stored 0 for every one of them (DESIGN.md Ã‚Â§10.4). Block ids are already
     /// resolved from codes by the deserializer, so this only needs the atlas.
     /// </summary>
-    void RecolorForeignSection(LodSection section)
+    void RecolorForeignSection(long sectionKey, LodSection section)
     {
         for (int i = 0; i < section.Palette.Count; i++)
         {
             LodPaletteEntry entry = section.Palette[i];
 
-            // A code the block registry could not answer for. It still carries the flags
-            // the capturing side worked out, so it is still drawn as terrain - and a
-            // server stores 0 for every colour, so leaving this one alone drew it at
-            // exactly RGB 0,0,0. Black ground, correctly shaped, with nothing anywhere
-            // saying why. The shader cannot save it either: shade bottoms out at 0.55 and
-            // daylight is clamped to 0.02, but zero times anything is still zero.
-            //
-            // Neutral grey instead, and counted. Wrong-but-plausible stone beats a hole
-            // in the world, and the count is what turns the next report into a log line.
             if (entry.BlockId <= 0)
             {
                 entry.Color = LodPaletteRepair.UnknownBlockColor;
@@ -589,11 +612,39 @@ public class DistantVistasModSystem : ModSystem
             }
 
             Block block = capi.World.Blocks[entry.BlockId];
-            // Server captures have no atlas. Use the same stable topsoil composite as
-            // local capture, or remote grass stays brown until vanilla replaces it.
-            entry.Color = block.EntityClass == null ? StableColorOf(block) : AtlasColorOf(entry.BlockId);
+            LodUntintedShare share = LodUntintedShare.None;
+            int untinted;
+            if (block.EntityClass != null)
+            {
+                untinted = AtlasColorOf(entry.BlockId);
+            }
+            else if (TryTopSoilColor(block, out int composite, out share))
+            {
+                untinted = composite;
+            }
+            else
+            {
+                untinted = StableColorOf(block);
+            }
+
+            untinted = LodPaletteRepair.KeepCapturedColor(
+                untinted, terrainFallbackColor, LodBlockPolicy.IsClimateUntinted(block));
+
+            if (LodSeasonBake.CanBake(block, untinted, tints.PlantTintFallback)
+                && section.TryFindPaletteTop(sectionKey, i, out int x, out int y, out int z))
+            {
+                entry.Color = LodSeasonBake.BakePaletteColor(
+                    capi.World, block, untinted, x, y, z, share, tints.PlantTintFallback);
+                entry.Flags = (byte)(entry.Flags | LodPaletteEntry.FlagBaked);
+                entry.TintSlot = LodTintRegistry.SlotNone;
+            }
+            else
+            {
+                entry.Color = untinted;
+            }
             section.Palette[i] = entry;
         }
+        section.InvalidatePaletteSnapshot();
     }
 
     /// <summary>
@@ -614,20 +665,21 @@ public class DistantVistasModSystem : ModSystem
     }
 
     /// <summary>
-    /// The client half of palette registration: the untinted average colour from the
-    /// texture atlas, plus which live tint applies. Stored untinted on purpose, so the
-    /// shader can follow the calendar instead of freezing the season it was captured in.
-    /// A server has no atlas and cannot answer this at all (DESIGN.md Ã‚Â§10.4).
+    /// The client half of palette registration: stable untinted atlas mean (or topsoil
+    /// composite), then discover-bake climate + season maps at this block's position
+    /// through the game's own APIs. Baked entries use tint slot 0; legacy untinted caches
+    /// keep live shader tints until revisited or a budgeted month repaint.
+    /// A server has no atlas and cannot answer this at all (DESIGN.md §10.4).
     ///
-    /// The position is used ONLY for blocks whose colour depends on a block entity
-    /// (chisels). Everything else is a stable atlas mean so the near LOD ring does not
-    /// tile random grass pixels against the foreground.
+    /// The position is used for chisels (block entity colour) and for map sampling when
+    /// baking grass tops and foliage.
     /// </summary>
-    (int Color, byte TintSlot) DescribePalette(int blockId, int blockX, int blockY, int blockZ)
+    (int Color, byte TintSlot, bool Baked) DescribePalette(int blockId, int blockX, int blockY, int blockZ)
     {
         Block block = capi.World.Blocks[blockId];
 
         int color;
+        LodUntintedShare share = LodUntintedShare.None;
         if (block.EntityClass != null)
         {
             paletteSamplePos.Set(blockX, blockY, blockZ);
@@ -640,6 +692,10 @@ public class DistantVistasModSystem : ModSystem
                 color = sampled;
             }
         }
+        else if (TryTopSoilColor(block, out int composite, out share))
+        {
+            color = composite;
+        }
         else
         {
             color = StableColorOf(block);
@@ -647,10 +703,24 @@ public class DistantVistasModSystem : ModSystem
 
         color = LodPaletteRepair.KeepCapturedColor(
             color, terrainFallbackColor, LodBlockPolicy.IsClimateUntinted(block));
-        byte slot = LodPaletteRepair.IsRockLikeAlbedo(color) || LodPaletteRepair.IsSnowOrIceAlbedo(color)
-            ? (byte)LodTintRegistry.SlotNone
-            : (byte)TintSlotOf(block);
-        return (color, slot);
+
+        if (LodPaletteRepair.IsRockLikeAlbedo(color) || LodPaletteRepair.IsSnowOrIceAlbedo(color)
+            || LodBlockPolicy.IsClimateUntinted(block))
+        {
+            return (color, (byte)LodTintRegistry.SlotNone, false);
+        }
+
+        if (!LodSeasonBake.CanBake(block, color, tints.PlantTintFallback))
+        {
+            byte slot = (byte)TintSlotOf(block);
+            return (color, slot, false);
+        }
+
+        int baked = LodSeasonBake.BakePaletteColor(
+            capi.World, block, color, blockX, blockY, blockZ, share, tints.PlantTintFallback);
+        baked = LodPaletteRepair.KeepCapturedColor(
+            baked, terrainFallbackColor, LodBlockPolicy.IsClimateUntinted(block));
+        return (baked, (byte)LodTintRegistry.SlotNone, true);
     }
 
     /// <summary>

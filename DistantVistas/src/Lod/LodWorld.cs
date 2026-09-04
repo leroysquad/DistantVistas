@@ -56,6 +56,15 @@ public class LodWorld
     /// <summary>Sections whose mesh is stale.</summary>
     public readonly HashSet<long> RenderDirty = new();
 
+    /// <summary>
+    /// Sections whose baked palette must be repainted for a new calendar month.
+    /// Processed time-sliced from the game tick; never all-at-once.
+    /// </summary>
+    public readonly HashSet<long> SeasonDirty = new();
+
+    /// <summary>When true, sections loaded from disk with baked palettes join SeasonDirty.</summary>
+    public bool SeasonRepaintEpochActive;
+
     /// <summary>Sections whose DB row is stale.</summary>
     public readonly HashSet<long> SaveDirty = new();
 
@@ -470,6 +479,8 @@ public class LodWorld
     {
         Sections.Clear();
         RenderDirty.Clear();
+        SeasonDirty.Clear();
+        SeasonRepaintEpochActive = false;
         SaveDirty.Clear();
         MipDirty.Clear();
         HasDataSet.Clear();

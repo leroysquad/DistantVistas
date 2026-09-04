@@ -240,7 +240,7 @@ public class LodServerCaptureSystem : ModSystem
         // (Block.GetColorWithoutTint takes ICoreClientAPI). Sections are written
         // colour-unresolved and the receiving client fills colour in, which it can do
         // from the block code alone. Tint slots are likewise client-only and stay 0.
-        pipeline = new LodPipeline(sapi, Mod.Logger, (_, _, _, _) => (0, 0));
+        pipeline = new LodPipeline(sapi, Mod.Logger, (_, _, _, _) => (0, 0, false));
         pipeline.Open("ModData/distantvistas", "-server");
 
         tickListenerId = sapi.Event.RegisterGameTickListener(OnServerPipelineTick, 50);

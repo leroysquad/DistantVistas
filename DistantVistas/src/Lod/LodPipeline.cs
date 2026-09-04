@@ -15,7 +15,7 @@ namespace DistantVistas;
 /// <param name="cx">Chunk column X, for sampling position.</param>
 /// <param name="cz">Chunk column Z, for sampling position.</param>
 /// <param name="sampleY">Y of the run's top, for sampling position.</param>
-public delegate (int Color, byte TintSlot) LodPaletteDescriber(int blockId, int blockX, int blockY, int blockZ);
+public delegate (int Color, byte TintSlot, bool Baked) LodPaletteDescriber(int blockId, int blockX, int blockY, int blockZ);
 
 /// <summary>Which live tint applies to a block. The server has none and answers 0.</summary>
 public delegate byte LodTintSlotResolver(Block block);
@@ -55,6 +55,7 @@ public class LodPipeline
     const int CatchUpPropagationsPerTick = 48;
     const int CatchUpPropagationThreshold = 16;
     const int SectionSavesPerTick = 2;
+    const int SeasonRepaintSectionsPerTick = 2;
     const int ChunkSize = GlobalConstants.ChunkSize;
 
     /// <summary>
@@ -98,6 +99,11 @@ public class LodPipeline
 
     /// <summary>Palette entries given a colour on load because the cache had none.</summary>
     public int PaletteEntriesRepaired { get; private set; }
+
+    /// <summary>Repaint baked palette colours for the current calendar month.</summary>
+    public System.Func<LodSection, long, int>? RebakeSeasonPalette;
+
+    public int SeasonSectionsRepainted { get; private set; }
 
     readonly ConcurrentDictionary<long, byte> queuedColumns = new();
     readonly ConcurrentQueue<long> pendingColumns = new();
@@ -465,6 +471,7 @@ public class LodPipeline
             ? CatchUpPropagationsPerTick
             : PropagationsPerTick;
         World.ProcessPropagation(propagationBudget);
+        ProcessSeasonRepaint();
         SaveSomeDirtySections(SectionSavesPerTick);
         tickCounter++;
     }
@@ -496,11 +503,13 @@ public class LodPipeline
             if (result.Section != null && store != null)
             {
                 store.ResolvePendingPalette(result.Section, api.World);
-                // Reclassify has just refreshed flags from the live blocks, so this drops
-                // runs for anything that is no longer terrain (fire, meta) from sections
-                // captured under an older policy, without needing a re-explore.
                 result.Section.RemoveRunsWithFlag(LodPaletteEntry.FlagSkip);
                 repaired = RepairUncoloredPalette?.Invoke(result.Section) ?? 0;
+                if (World.SeasonRepaintEpochActive
+                    && LodSeasonBake.SectionHasBakedEntries(result.Section))
+                {
+                    World.SeasonDirty.Add(result.Key);
+                }
             }
             World.InstallLoaded(result.Key, result.Section);
 
@@ -719,8 +728,79 @@ public class LodPipeline
     {
         Block block = api.World.Blocks[blockId];
         (int x, int y, int z) = CaptureBlockPos(sectionKey, col, run);
-        (int color, byte tintSlot) = describePalette(blockId, x, y, z);
-        return section.FindOrAddPaletteEntry(blockId, color, LodBlockPolicy.FlagsFor(block), tintSlot);
+        (int color, byte tintSlot, bool baked) = describePalette(blockId, x, y, z);
+        byte flags = LodBlockPolicy.FlagsFor(block);
+        if (baked)
+        {
+            flags |= LodPaletteEntry.FlagBaked;
+            tintSlot = (byte)LodTintRegistry.SlotNone;
+        }
+
+        for (int i = 0; i < section.Palette.Count; i++)
+        {
+            if (section.Palette[i].BlockId != blockId) continue;
+            if (baked)
+            {
+                LodPaletteEntry e = section.Palette[i];
+                e.Color = color;
+                e.Flags = (byte)(e.Flags | LodPaletteEntry.FlagBaked);
+                e.TintSlot = LodTintRegistry.SlotNone;
+                section.Palette[i] = e;
+                section.InvalidatePaletteSnapshot();
+            }
+            return i;
+        }
+
+        if (baked) flags |= LodPaletteEntry.FlagBaked;
+        return section.FindOrAddPaletteEntry(blockId, color, flags, tintSlot);
+    }
+
+    /// <summary>
+    /// On calendar month change: every section that holds data may need a seasonal repaint.
+    /// </summary>
+    public void QueueSeasonRepaintAll()
+    {
+        World.SeasonRepaintEpochActive = true;
+        foreach (long key in World.HasDataSet)
+            World.SeasonDirty.Add(key);
+        foreach (long key in World.Sections.Keys)
+            World.SeasonDirty.Add(key);
+    }
+
+    void ProcessSeasonRepaint()
+    {
+        if (RebakeSeasonPalette == null || World.SeasonDirty.Count == 0) return;
+
+        int budget = SeasonRepaintSectionsPerTick;
+        var done = new List<long>(budget);
+        foreach (long key in World.SeasonDirty)
+        {
+            if (budget <= 0) break;
+            if (!World.Sections.TryGetValue(key, out LodSection? section))
+            {
+                // Cold row: leave in SeasonDirty until demand load brings it in.
+                continue;
+            }
+
+            if (!LodSeasonBake.SectionHasBakedEntries(section))
+            {
+                done.Add(key);
+                continue;
+            }
+
+            int changed = RebakeSeasonPalette(section, key);
+            if (changed > 0)
+            {
+                World.MarkChanged(key);
+                World.RenderDirty.Add(key);
+                SeasonSectionsRepainted++;
+            }
+            done.Add(key);
+            budget--;
+        }
+
+        foreach (long key in done) World.SeasonDirty.Remove(key);
+        if (World.SeasonDirty.Count == 0) World.SeasonRepaintEpochActive = false;
     }
 
     // ---- Persistence ----
