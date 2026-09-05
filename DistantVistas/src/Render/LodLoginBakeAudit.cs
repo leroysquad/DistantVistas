@@ -8,7 +8,7 @@ namespace DistantVistas;
 /// </summary>
 public static class LodLoginBakeAudit
 {
-    public const int MaxResweepRounds = 8;
+    public const int MaxResweepRounds = 1;
 
     public enum MissReason
     {

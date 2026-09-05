@@ -1,3 +1,6 @@
+## 0.8.19
+- **Login visit sweep miss-retry cap (0.8.18 playtest).** After the budgeted main pass (~3–5 min revisit target), the audit phase retried the same ~12 incomplete regions for 4+ extra passes. `MaxResweepRounds` capped from 8 → **1**; when the limit is hit the sweep calls `BeginDraining` and continues into play instead of looping. Splash opaque paint, 3–5 min revisit budget, and view-distance boost unchanged.
+
 ## 0.8.18
 - **CRITICAL: login splash black screen (0.8.17 playtest).** While the sweep suppressed `GuiScreenRunningGame` world draws, Harmony also skipped `RenderToDefaultFramebuffer`, so nothing reached the screen and `HasEverPaintedOpaque` stayed false (`loading cover not painted yet`). Fix: paint every frame **before** RunningGame framebuffer present via `OrthoMode` + `ClearFrameBuffer` hard fallback + explicit full-screen quad, then backdrop/title/bar on top; allow framebuffer present (still skip world/post passes). Loading-game async-sound bypass, 3–5 min revisit budget, view-distance boost, and deadlock fixes unchanged.
 

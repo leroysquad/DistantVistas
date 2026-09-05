@@ -201,6 +201,10 @@ public static class LoginSweepChecks
         c.True(bake.Contains("Phase.Auditing"), "login bake has an audit phase before release");
         c.True(bake.Contains("Retrying missed regions"),
             "login bake UI names the miss-resweep pass");
+        c.Eq(1, LodLoginBakeAudit.MaxResweepRounds,
+            "miss-resweep capped to one retry pass after main sweep");
+        c.True(bake.Contains("BeginDraining"),
+            "login bake drains into play when resweep limit hit");
 
         var world = new LodWorld();
         long key = LodWorld.SectionKey(0, 1, 2);
