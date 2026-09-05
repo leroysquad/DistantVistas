@@ -1060,7 +1060,7 @@ public class DistantVistasModSystem : ModSystem
         loginBake.Begin();
 
         Mod.Logger.Notification(
-            "Level finalized. Login visit sweep started ({0} sections in cache) — {1}.",
+            "[DistantVistas] Level finalized — login visit sweep starting ({0} sections in cache). Reason: {1}",
             pipeline.CachedSectionsLoaded, sweepGate.Reason);
     }
 

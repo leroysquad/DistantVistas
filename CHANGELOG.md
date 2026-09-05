@@ -1,8 +1,9 @@
-## 0.8.1
-- **CRITICAL: login overlay NRE on AfterFinalComposition.** `Render2DTexture(int, …)` uses VS's internal GUI quad mesh, which is null during `AfterFinalComposition` (and sometimes on early frames). All overlay draws now route through `TryDrawTexture` with an explicit `MeshRef` (`Gui.QuadMeshRef` or an owned `QuadMeshUtil` quad). Tinted solids use pre-baked Cairo colour textures via `TryDrawSolidColor` so we never call the tint overload that depends on the null internal quad.
-- **Unchanged:** login visit sweep enabled by default, camera pin, dual-pass overlay, fade-out release (0.8.0).
+## 0.8.2
+- **CRITICAL: overlay health gate aborted sweep with no UI (0.8.1 regression).** 0.8.1 routed *all* draws through explicit `MeshRef` only; on many VS 1.22.7 joins that path never succeeds on the ortho pass, so `ConsecutiveOpaqueFrames` stayed at 0 and the sweep aborted after 200 ticks with no loading screen or teleports. Fix: dual draw path — explicit quad on `AfterFinalComposition` (NRE-safe), **ortho internal-quad tint fallback** (`Render2DTexture(int, …, Vec4f)`) restored for the primary pass. Health gate no longer aborts the sweep when paint counter fails; logs a warning and continues after warmup timeout.
+- **Loud lifecycle logs:** `LOGIN VISIT SWEEP ARMED`, first opaque frame painted, overlay ready, quiet teleports begin, skip reason on gate.
+- **Unchanged:** 0.8.1 null-quad guards, camera pin, dual-pass overlay, fade-out, sweep enabled by default.
 
-## 0.8.0
+## 0.8.1
 - **Login visit sweep re-enabled by default.** `LoginVisitSweepEnabled` defaults to `true` again; the skip gate still bypasses the overlay when every visited L0 region is complete within the same season or 30 in-game days. Set `false` in `distantvistas.json` for immediate play without overlay.
 - **Viewport thrash fix.** The sweep now pins `Entity.CameraPos` (and clears `CameraPosOffset`) to the join pose while the entity quietly teleports for chunk streaming — the world no longer scrolls behind the loader. The full overlay (backdrop, title, panel) paints on **both** `Ortho` and `AfterFinalComposition` so sky/terrain cannot flash through between passes.
 - **Clean release.** Successful sweeps restore pose, HUD, audio, gamemode, and chunk visibility, then **fade the overlay out** (~0.85s) before unlocking controls. Abort/cancel still release immediately.

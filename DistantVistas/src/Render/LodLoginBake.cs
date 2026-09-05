@@ -23,6 +23,7 @@ public sealed class LodLoginBake
 
     enum StopPhase { Teleport, TeleportSettle, WaitChunks, Capture, Bake, BakeSettle, Done }
 
+    const int OverlayWarmupMinTicks = 4;
     const int OverlayWarmupMaxTicks = 200;
     const int TeleportSettleTicks = 18;
     const int BakeSettleTicks = 24;
@@ -78,6 +79,7 @@ public sealed class LodLoginBake
     int stopTicks;
     bool restoreCaptured;
     bool resuming;
+    bool loggedTeleportBegin;
 
     public Phase CurrentPhase => phase;
     public bool Active => phase != Phase.Done;
@@ -187,8 +189,13 @@ public sealed class LodLoginBake
         currentKey = null;
         restoreCaptured = false;
         overlayWarmupTicks = 0;
+        loggedTeleportBegin = false;
         stabilizeWindow.Clear();
         windowMedians.Clear();
+
+        capi.Logger.Notification(
+            "[DistantVistas] LOGIN VISIT SWEEP ARMED — mode={0}, regions={1}, overlay warming up.",
+            sweepModeLabel, total);
 
         pipeline.DeferLegacyHeal = true;
         audioMute.EnsureMuted();
@@ -220,18 +227,32 @@ public sealed class LodLoginBake
         overlayWarmupTicks++;
         string detail = screen.IsOverlayHealthy
             ? "Loading screen ready…"
-            : $"Waiting for loading screen… ({overlayWarmupTicks})";
+            : overlayWarmupTicks >= OverlayWarmupMaxTicks
+                ? "Starting visit sweep…"
+                : $"Waiting for loading screen… ({overlayWarmupTicks})";
         overlay.UpdateProgress(Progress, detail);
+
+        bool healthy = screen.IsOverlayHealthy
+            && overlayWarmupTicks >= LodLoginBakeScreenRenderer.RequiredHealthyFrames;
+        bool timedOut = overlayWarmupTicks >= OverlayWarmupMaxTicks;
+        bool minWait = overlayWarmupTicks >= OverlayWarmupMinTicks;
+
+        if (!healthy && !(timedOut && minWait))
+            return;
 
         if (!screen.IsOverlayHealthy)
         {
-            if (overlayWarmupTicks >= OverlayWarmupMaxTicks)
-                AbortSweep("loading screen never painted opaque frames — entering play");
-            return;
+            capi.Logger.Warning(
+                "[DistantVistas] Login visit sweep: overlay health not confirmed after {0} ticks " +
+                "(ever painted={1}, consecutive={2}) — continuing sweep anyway.",
+                overlayWarmupTicks, screen.HasEverPaintedOpaque, screen.ConsecutiveOpaqueFrames);
         }
-
-        if (overlayWarmupTicks < LodLoginBakeScreenRenderer.RequiredHealthyFrames)
-            return;
+        else
+        {
+            capi.Logger.Notification(
+                "[DistantVistas] Login visit sweep: loading overlay ready ({0} consecutive opaque frames).",
+                screen.ConsecutiveOpaqueFrames);
+        }
 
         worldHide.HideAllLoaded();
 
@@ -345,7 +366,17 @@ public sealed class LodLoginBake
         }
 
         phase = Phase.Sweeping;
+        LogTeleportBegin();
         BeginNextStop();
+    }
+
+    void LogTeleportBegin()
+    {
+        if (loggedTeleportBegin) return;
+        loggedTeleportBegin = true;
+        capi.Logger.Notification(
+            "[DistantVistas] Login visit sweep: quiet teleports begin — {0} L0 region{1}.",
+            total, total == 1 ? "" : "s");
     }
 
     void TickSweeping()
@@ -358,6 +389,7 @@ public sealed class LodLoginBake
                 BeginAuditing();
                 return;
             }
+            LogTeleportBegin();
             BeginNextStop();
             return;
         }

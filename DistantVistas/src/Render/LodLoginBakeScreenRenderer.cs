@@ -36,10 +36,11 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     static readonly float[] PanelFill = { 0.10f, 0.12f, 0.16f, 0.96f };
     static readonly double[] Gold = { 0.95, 0.84, 0.48, 1.0 };
 
-    /// <summary>Consecutive frames that painted the opaque base with a valid white texture.</summary>
+    /// <summary>Consecutive ortho frames that painted the opaque base.</summary>
     public const int RequiredHealthyFrames = 8;
 
     public int ConsecutiveOpaqueFrames { get; private set; }
+    public bool HasEverPaintedOpaque { get; private set; }
     public bool IsOverlayHealthy => ConsecutiveOpaqueFrames >= RequiredHealthyFrames;
 
     readonly ICoreClientAPI capi;
@@ -52,6 +53,8 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     readonly Dictionary<int, int> solidColorTextures = new();
 
     MeshRef? ownedQuad;
+    int whiteTextureId;
+    bool loggedFirstPaint;
 
     bool active;
     bool gfxReady;
@@ -88,6 +91,8 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
             {
                 gfxReady = false;
                 ConsecutiveOpaqueFrames = 0;
+                HasEverPaintedOpaque = false;
+                loggedFirstPaint = false;
                 PrepareImmediate();
             }
             else
@@ -123,8 +128,9 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     {
         if (!active || overlayAlpha <= 0f) return;
 
+        bool orthoPass = stage == EnumRenderStage.Ortho;
         bool safetyPass = stage == EnumRenderStage.AfterFinalComposition;
-        if (stage != EnumRenderStage.Ortho && !safetyPass) return;
+        if (!orthoPass && !safetyPass) return;
 
         EnsureGraphicsLoaded();
 
@@ -133,24 +139,36 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         float h = rapi.FrameHeight;
         if (w <= 0 || h <= 0)
         {
-            if (!safetyPass) ConsecutiveOpaqueFrames = 0;
+            if (orthoPass) ConsecutiveOpaqueFrames = 0;
             return;
         }
 
-        bool drewOpaque = DrawFullFrame(w, h, countHealth: !safetyPass);
-        if (!drewOpaque && !safetyPass)
+        bool drewOpaque = DrawFullFrame(w, h, orthoPass, countHealth: orthoPass);
+        if (!drewOpaque && orthoPass)
             ConsecutiveOpaqueFrames = 0;
     }
 
-    bool DrawFullFrame(float w, float h, bool countHealth)
+    bool DrawFullFrame(float w, float h, bool orthoPass, bool countHealth)
     {
-        bool drewOpaque = DrawOpaqueCover(w, h);
+        bool drewOpaque = DrawOpaqueCover(w, h, orthoPass);
         if (!drewOpaque) return false;
 
         if (countHealth)
+        {
             ConsecutiveOpaqueFrames++;
+            if (!HasEverPaintedOpaque)
+            {
+                HasEverPaintedOpaque = true;
+                if (!loggedFirstPaint)
+                {
+                    loggedFirstPaint = true;
+                    capi.Logger.Notification(
+                        "[DistantVistas] Login overlay: first opaque frame painted (ortho pass).");
+                }
+            }
+        }
 
-        DrawBackdrop(w, h);
+        DrawBackdrop(w, h, orthoPass);
 
         float titleW = 0;
         float titleH = 0;
@@ -176,71 +194,108 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
             int titleTexId = !titleMissing && titleImage.TextureId > 0
                 ? titleImage.TextureId
                 : titleFallbackTex.TextureId;
-            TryDrawTexture(titleTexId, titleX, blockTop, titleW, titleH, 204);
+            TryDrawTexture(titleTexId, titleX, blockTop, titleW, titleH, 204, orthoPass);
         }
 
         tint.Set(PanelFill[0], PanelFill[1], PanelFill[2], PanelFill[3] * overlayAlpha);
-        DrawSolid(panelX, panelY, PanelW, PanelH, 205, tint);
+        DrawSolid(panelX, panelY, PanelW, PanelH, 205, tint, orthoPass);
 
         float pad = 20f;
         float barY = panelY + 52f;
         float barW = PanelW - pad * 2f;
         float barH = 18f;
         tint.Set(BarTrack[0], BarTrack[1], BarTrack[2], BarTrack[3] * overlayAlpha);
-        DrawSolid(panelX + pad, barY, barW, barH, 206, tint);
+        DrawSolid(panelX + pad, barY, barW, barH, 206, tint, orthoPass);
         if (fraction > 0)
         {
             tint.Set(BarFill[0], BarFill[1], BarFill[2], BarFill[3] * overlayAlpha);
-            DrawSolid(panelX + pad, barY, barW * fraction, barH, 207, tint);
+            DrawSolid(panelX + pad, barY, barW * fraction, barH, 207, tint, orthoPass);
         }
 
-        float textAlpha = overlayAlpha;
-        if (textAlpha > 0.01f)
+        if (overlayAlpha > 0.01f)
         {
-            DrawText(percentTex, panelX + PanelW - pad - percentTex.Width, panelY + 14f, 208);
-            DrawText(statusTex, panelX + pad, panelY + 84f, 209);
+            DrawText(percentTex, panelX + PanelW - pad - percentTex.Width, panelY + 14f, 209, orthoPass);
+            DrawText(statusTex, panelX + pad, panelY + 84f, 210, orthoPass);
         }
 
         return true;
     }
 
-    bool DrawOpaqueCover(float w, float h)
+    bool DrawOpaqueCover(float w, float h, bool orthoPass)
     {
         tint.Set(OpaqueCover[0], OpaqueCover[1], OpaqueCover[2], OpaqueCover[3] * overlayAlpha);
-        return TryDrawSolidColor(0, 0, w, h, 198, tint);
+        return TryDrawSolidColor(0, 0, w, h, 198, tint, orthoPass);
     }
 
-    void DrawBackdrop(float w, float h)
+    void DrawBackdrop(float w, float h, bool orthoPass)
     {
         if (!backdropMissing && backdrop.TextureId > 0
-            && TryDrawTexture(backdrop.TextureId, 0, 0, w, h, 200))
+            && TryDrawTexture(backdrop.TextureId, 0, 0, w, h, 200, orthoPass))
         {
             tint.Set(0.04f, 0.05f, 0.08f, 0.45f * overlayAlpha);
-            DrawSolid(0, 0, w, h, 199, tint);
+            DrawSolid(0, 0, w, h, 199, tint, orthoPass);
             return;
         }
 
         tint.Set(DarkFill[0], DarkFill[1], DarkFill[2], DarkFill[3] * overlayAlpha);
-        DrawSolid(0, 0, w, h, 200, tint);
+        DrawSolid(0, 0, w, h, 200, tint, orthoPass);
     }
 
-    void DrawSolid(float x, float y, float width, float height, float z, Vec4f color) =>
-        TryDrawSolidColor(x, y, width, height, z, color);
+    void DrawSolid(float x, float y, float width, float height, float z, Vec4f color, bool orthoPass) =>
+        TryDrawSolidColor(x, y, width, height, z, color, orthoPass);
 
-    void DrawText(LoadedTexture tex, float x, float y, float z)
+    void DrawText(LoadedTexture tex, float x, float y, float z, bool orthoPass)
     {
         if (tex.TextureId <= 0 || tex.Width <= 0) return;
-        if (!TryDrawLoadedTexture(tex, x, y, z)) return;
+        TryDrawLoadedTexture(tex, x, y, z, orthoPass);
     }
 
     /// <summary>
-    /// VS routes <c>Render2DTexture(int, …)</c> through an internal quad that is null outside
-    /// ortho GUI setup (notably on <see cref="EnumRenderStage.AfterFinalComposition"/>).
-    /// Always supply an explicit <see cref="MeshRef"/> and pre-baked solid colours.
+    /// Draw order: explicit <see cref="MeshRef"/> (safe on AfterFinalComposition), then ortho
+    /// internal-quad tint path (proven on <see cref="EnumRenderStage.Ortho"/> before 0.8.1).
     /// </summary>
-    bool TryDrawTexture(int textureId, float x, float y, float width, float height, float z)
+    bool TryDrawTexture(int textureId, float x, float y, float width, float height, float z, bool orthoPass)
     {
         if (textureId <= 0 || width <= 0 || height <= 0) return false;
+        if (TryDrawWithExplicitQuad(textureId, x, y, width, height, z)) return true;
+        return orthoPass && TryDrawWithInternalQuad(textureId, x, y, width, height, z, null);
+    }
+
+    bool TryDrawSolidColor(float x, float y, float width, float height, float z, Vec4f color, bool orthoPass)
+    {
+        if (width <= 0 || height <= 0 || color[3] <= 0.001f) return false;
+
+        int bakedId = SolidColorTextureId(color);
+        if (bakedId > 0 && TryDrawWithExplicitQuad(bakedId, x, y, width, height, z))
+            return true;
+
+        if (!orthoPass) return false;
+
+        int whiteId = EnsureWhiteTexture();
+        return whiteId > 0 && TryDrawWithInternalQuad(whiteId, x, y, width, height, z, color);
+    }
+
+    bool TryDrawLoadedTexture(LoadedTexture tex, float x, float y, float z, bool orthoPass)
+    {
+        if (tex.TextureId <= 0) return false;
+        if (TryDrawWithExplicitQuad(tex.TextureId, x, y, tex.Width, tex.Height, z))
+            return true;
+
+        if (!orthoPass) return false;
+
+        try
+        {
+            capi.Render.Render2DLoadedTexture(tex, x, y, z);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    bool TryDrawWithExplicitQuad(int textureId, float x, float y, float width, float height, float z)
+    {
         MeshRef? quad = ResolveQuadMesh();
         if (quad == null) return false;
 
@@ -255,35 +310,23 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         }
     }
 
-    bool TryDrawSolidColor(float x, float y, float width, float height, float z, Vec4f color)
+    /// <summary>
+    /// VS internal GUI quad — valid on ortho, null on AfterFinalComposition (0.8.1 NRE).
+    /// </summary>
+    bool TryDrawWithInternalQuad(
+        int textureId, float x, float y, float width, float height, float z, Vec4f? color)
     {
-        if (width <= 0 || height <= 0 || color[3] <= 0.001f) return false;
-        int texId = SolidColorTextureId(color);
-        return texId > 0 && TryDrawTexture(texId, x, y, width, height, z);
-    }
-
-    bool TryDrawLoadedTexture(LoadedTexture tex, float x, float y, float z)
-    {
-        if (tex.TextureId <= 0) return false;
-        MeshRef? quad = ResolveQuadMesh();
-        if (quad == null) return false;
-
         try
         {
-            capi.Render.Render2DTexture(quad, tex.TextureId, x, y, tex.Width, tex.Height, z);
+            if (color != null)
+                capi.Render.Render2DTexture(textureId, x, y, width, height, z, color);
+            else
+                capi.Render.Render2DTexture(textureId, x, y, width, height, z);
             return true;
         }
         catch
         {
-            try
-            {
-                capi.Render.Render2DLoadedTexture(tex, x, y, z);
-                return true;
-            }
-            catch
-            {
-                return false;
-            }
+            return false;
         }
     }
 
@@ -304,6 +347,20 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         {
             return null;
         }
+    }
+
+    int EnsureWhiteTexture()
+    {
+        if (whiteTextureId > 0) return whiteTextureId;
+
+        using ImageSurface surface = new(Format.Argb32, 2, 2);
+        using Context ctx = new(surface);
+        ctx.SetSourceRGBA(1, 1, 1, 1);
+        ctx.Rectangle(0, 0, 2, 2);
+        ctx.Fill();
+
+        whiteTextureId = capi.Gui.LoadCairoTexture(surface, false);
+        return whiteTextureId;
     }
 
     int SolidColorTextureId(Vec4f color)

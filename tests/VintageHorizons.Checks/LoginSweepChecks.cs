@@ -105,8 +105,12 @@ public static class LoginSweepChecks
             "login bake teardown is idempotent");
         c.True(bake.Contains("Teardown(success: false, keepResume: true)"),
             "dispose routes through Teardown");
-        c.True(bake.Contains("Phase.FadingOut"),
-            "login bake fades overlay out before release");
+        c.True(bake.Contains("LOGIN VISIT SWEEP ARMED"),
+            "login bake logs loudly when sweep arms");
+        c.True(bake.Contains("quiet teleports begin"),
+            "login bake logs when teleports begin");
+        c.True(!bake.Contains("never painted opaque frames — entering play"),
+            "login bake does not abort solely on overlay paint counter");
         c.True(bake.Contains("restoreCameraPos"),
             "login bake pins camera while entity teleports for chunk load");
         c.True(bake.Contains("CameraPos.Set"),
@@ -175,12 +179,12 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeScreenRenderer.cs"));
         c.True(screen.Contains("OpaqueCover"),
             "screen renderer paints opaque base every frame");
-        c.True(screen.Contains("TryDrawTexture"),
-            "screen renderer guards Render2DTexture with explicit quad mesh");
-        c.True(screen.Contains("ResolveQuadMesh"),
-            "screen renderer resolves Gui or owned quad for 2D draws");
-        c.True(screen.Contains("TryDrawSolidColor"),
-            "screen renderer falls back to pre-baked solid Cairo colours");
+        c.True(screen.Contains("TryDrawWithInternalQuad"),
+            "screen renderer falls back to ortho internal quad tint path");
+        c.True(screen.Contains("TryDrawWithExplicitQuad"),
+            "screen renderer uses explicit MeshRef on after-final pass");
+        c.True(screen.Contains("HasEverPaintedOpaque"),
+            "screen renderer tracks whether ortho ever painted");
         c.True(screen.Contains("DrawFullFrame"),
             "screen renderer draws full UI on ortho and after-final passes");
         c.True(screen.Contains("SetOverlayAlpha"),
