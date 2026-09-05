@@ -36,6 +36,12 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     static readonly float[] PanelFill = { 0.10f, 0.12f, 0.16f, 0.96f };
     static readonly double[] Gold = { 0.95, 0.84, 0.48, 1.0 };
 
+    /// <summary>Consecutive frames that painted the opaque base with a valid white texture.</summary>
+    public const int RequiredHealthyFrames = 8;
+
+    public int ConsecutiveOpaqueFrames { get; private set; }
+    public bool IsOverlayHealthy => ConsecutiveOpaqueFrames >= RequiredHealthyFrames;
+
     readonly ICoreClientAPI capi;
     readonly LoadedTexture backdrop;
     readonly LoadedTexture titleImage;
@@ -79,7 +85,12 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
             if (value)
             {
                 gfxReady = false;
+                ConsecutiveOpaqueFrames = 0;
                 PrepareImmediate();
+            }
+            else
+            {
+                ConsecutiveOpaqueFrames = 0;
             }
         }
     }
@@ -106,16 +117,33 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     {
         if (!active) return;
 
+        if (stage == EnumRenderStage.AfterFinalComposition)
+        {
+            DrawOpaqueCoverOnly();
+            return;
+        }
+
+        if (stage != EnumRenderStage.Ortho) return;
+
         EnsureGraphicsLoaded();
 
         IRenderAPI rapi = capi.Render;
         float w = rapi.FrameWidth;
         float h = rapi.FrameHeight;
-        if (w <= 0 || h <= 0) return;
+        if (w <= 0 || h <= 0)
+        {
+            ConsecutiveOpaqueFrames = 0;
+            return;
+        }
 
-        // Opaque base — must cover sky/vanilla/LOD even when assets or white tex fail.
-        tint.Set(OpaqueCover[0], OpaqueCover[1], OpaqueCover[2], OpaqueCover[3]);
-        DrawSolid(0, 0, w, h, 198, tint);
+        bool drewOpaque = DrawOpaqueCover(w, h);
+        if (!drewOpaque)
+        {
+            ConsecutiveOpaqueFrames = 0;
+            return;
+        }
+
+        ConsecutiveOpaqueFrames++;
 
         DrawBackdrop(w, h);
 
@@ -164,6 +192,27 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
 
         DrawText(percentTex, panelX + PanelW - pad - percentTex.Width, panelY + 14f, 208);
         DrawText(statusTex, panelX + pad, panelY + 84f, 209);
+    }
+
+    bool DrawOpaqueCover(float w, float h)
+    {
+        int subId = WhiteTextureId();
+        if (subId <= 0) return false;
+        tint.Set(OpaqueCover[0], OpaqueCover[1], OpaqueCover[2], OpaqueCover[3]);
+        capi.Render.Render2DTexture(subId, 0, 0, w, h, 198, tint);
+        return true;
+    }
+
+    /// <summary>Paint only the opaque base (used on AfterFinalComposition as a safety pass).</summary>
+    public void DrawOpaqueCoverOnly()
+    {
+        if (!active) return;
+        EnsureGraphicsLoaded();
+        float w = capi.Render.FrameWidth;
+        float h = capi.Render.FrameHeight;
+        if (w <= 0 || h <= 0) return;
+        if (DrawOpaqueCover(w, h))
+            ConsecutiveOpaqueFrames++;
     }
 
     void DrawBackdrop(float w, float h)
@@ -317,5 +366,6 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         percentTex.Dispose();
         statusTex.Dispose();
         capi.Event.UnregisterRenderer(this, EnumRenderStage.Ortho);
+        capi.Event.UnregisterRenderer(this, EnumRenderStage.AfterFinalComposition);
     }
 }

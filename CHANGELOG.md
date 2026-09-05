@@ -1,3 +1,8 @@
+## 0.7.99
+- **Login visit sweep OFF by default (safe build).** `LoginVisitSweepEnabled` in `distantvistas.json` defaults to `false` — restores **0.7.78-style immediate play** with no overlay, teleports, or join thrash. Set `true` or `VINTAGEHORIZONS_LOGIN_SWEEP=1` only when testing.
+- **When sweep is enabled:** overlay must paint **8 consecutive opaque frames** before any teleport; aborts into play if the loading screen never becomes healthy. Opaque cover draws on **Ortho + AfterFinalComposition**; vanilla chunks are **hidden** except the active L0 target during capture; longer teleport/bake settle; LOD draw still suppressed.
+- **0.7.98 retained when enabled:** targeted incomplete-only revisit, `LodLoginBakeInputLock`, skip-if-complete / resume.
+
 ## 0.7.98
 - **CRITICAL: login sweep overlay + flicker fixes.** Screen renderer now paints an **opaque full-screen base every frame** (real Cairo white texture — no broken `TextureId=0` solids), raises ortho `RenderOrder` to 2.0, and prepares graphics immediately on show. LOD terrain draw is **suppressed** while the overlay is active so teleports cannot flash sky/terrain through.
 - **Targeted incomplete revisit.** When the miss audit finds gaps (e.g. 192 of 10,208), the sweep queues **only those keys** — not the entire visited canvas. Full revisit remains for clean-audit **season refresh** outside the window.

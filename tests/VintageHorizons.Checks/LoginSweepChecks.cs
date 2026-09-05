@@ -173,8 +173,10 @@ public static class LoginSweepChecks
             "screen renderer paints opaque base every frame");
         c.True(screen.Contains("EnsureWhiteSolid"),
             "screen renderer uses real white texture for solids");
-        c.True(screen.Contains("RenderOrder => 2.0"),
-            "screen renderer draws above other ortho layers");
+        c.True(screen.Contains("AfterFinalComposition"),
+            "screen renderer also draws on after-final pass");
+        c.True(screen.Contains("RequiredHealthyFrames"),
+            "screen renderer tracks overlay health");
 
         string renderer = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodTerrainRenderer.cs"));
@@ -209,6 +211,12 @@ public static class LoginSweepChecks
             "login bake settles after each teleport");
         c.True(bake.Contains("BakeSettle"),
             "login bake settles after each bake");
+        c.True(bake.Contains("OverlayWarmup"),
+            "login bake warms overlay before teleports");
+        c.True(bake.Contains("AbortSweep"),
+            "login bake aborts if overlay never becomes healthy");
+        c.True(bake.Contains("LodLoginBakeWorldHide"),
+            "login bake hides vanilla chunks during sweep");
         c.True(bake.Contains("LodLoginBakePlayerMove.ApplyQuiet"),
             "login bake uses quiet client entity moves");
         c.True(bake.Contains("LodLoginBakePlayerMove.ApplyQuietFrom"),
@@ -304,6 +312,10 @@ public static class LoginSweepChecks
             "level finalize consults sweep gate before overlay");
         c.True(mod.Contains("Login visit sweep skipped"),
             "skipped sweep logs and drops into play");
+        c.True(mod.Contains("LoginVisitSweepEnabled"),
+            "sweep gated by config default-off flag");
+        c.False(new DistantVistasConfig().LoginVisitSweepEnabled,
+            "login visit sweep disabled by default");
 
         string bake = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));

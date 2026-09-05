@@ -68,6 +68,12 @@ public class DistantVistasConfig
 
     /// <summary>Fresh occlusion ray tests per frame (cached results free). Default 48.</summary>
     public int FovOcclusionMaxTestsPerFrame = 48;
+
+    /// <summary>
+    /// Login visit sweep on join (overlay + teleports + season bake). OFF by default —
+    /// set true only when testing. Restores 0.7.78-style immediate play when false.
+    /// </summary>
+    public bool LoginVisitSweepEnabled = false;
 }
 
 /// <summary>
@@ -222,6 +228,8 @@ public class DistantVistasModSystem : ModSystem
         pipeline.InvalidateGpuMesh = renderer.InvalidateGpuMesh;
         loginBakeScreen = new LodLoginBakeScreenRenderer(capi);
         capi.Event.RegisterRenderer(loginBakeScreen, EnumRenderStage.Ortho, "distantvistas-login-bake");
+        capi.Event.RegisterRenderer(loginBakeScreen, EnumRenderStage.AfterFinalComposition,
+            "distantvistas-login-bake-final");
         loginBakeOverlay = new LodLoginBakeOverlay(capi, loginBakeScreen);
         // Real holes (captured land with no mesh at any rung) are reported with
         // the state of the keys involved, so a screenshot of sky has a log line.
@@ -1024,6 +1032,37 @@ public class DistantVistasModSystem : ModSystem
         }
     }
 
+    bool LoginVisitSweepEnabled() =>
+        config.LoginVisitSweepEnabled
+        || Environment.GetEnvironmentVariable("VINTAGEHORIZONS_LOGIN_SWEEP") == "1";
+
+    void StartLoginVisitSweepIfNeeded()
+    {
+        LodLoginSweepGate.Result sweepGate = LodLoginSweepGate.Decide(
+            capi, pipeline.World, pipeline, capi.World.Blocks,
+            tints.PlantTintFallback, UntintedForRebake);
+
+        if (!sweepGate.RunSweep)
+        {
+            renderer.LoginBakeComplete = true;
+            LodLoginSweepComplete.RecordSuccess(capi, pipeline.World);
+            Mod.Logger.Notification(
+                "[DistantVistas] Login visit sweep skipped — {0}. Entering play ({1} sections in cache).",
+                sweepGate.Reason, pipeline.CachedSectionsLoaded);
+            return;
+        }
+
+        loginBakeOverlay!.Show();
+        loginBake = new LodLoginBake(
+            capi, pipeline, renderer, loginBakeOverlay!, loginBakeScreen!,
+            tints.PlantTintFallback, UntintedForRebake);
+        loginBake.Begin();
+
+        Mod.Logger.Notification(
+            "Level finalized. Login visit sweep started ({0} sections in cache) — {1}.",
+            pipeline.CachedSectionsLoaded, sweepGate.Reason);
+    }
+
     void OnLevelFinalize()
     {
         ResolvePlantTintFallback();
@@ -1053,28 +1092,16 @@ public class DistantVistasModSystem : ModSystem
         // vanilla-server case it exists to stay out of the way of.
         assist?.Greet();
 
-        LodLoginSweepGate.Result sweepGate = LodLoginSweepGate.Decide(
-            capi, pipeline.World, pipeline, capi.World.Blocks,
-            tints.PlantTintFallback, UntintedForRebake);
-
-        if (!sweepGate.RunSweep)
+        if (!LoginVisitSweepEnabled())
         {
             renderer.LoginBakeComplete = true;
-            LodLoginSweepComplete.RecordSuccess(capi, pipeline.World);
             Mod.Logger.Notification(
-                "[DistantVistas] Login visit sweep skipped — {0}. Entering play ({1} sections in cache).",
-                sweepGate.Reason, pipeline.CachedSectionsLoaded);
+                "[DistantVistas] Login visit sweep is OFF (0.7.78-style play). " +
+                "Set LoginVisitSweepEnabled in distantvistas.json or VINTAGEHORIZONS_LOGIN_SWEEP=1 to test.");
         }
         else
         {
-            loginBakeOverlay!.Show();
-            loginBake = new LodLoginBake(
-                capi, pipeline, renderer, loginBakeOverlay!, tints.PlantTintFallback, UntintedForRebake);
-            loginBake.Begin();
-
-            Mod.Logger.Notification(
-                "Level finalized. Login visit sweep started ({0} sections in cache) — {1}.",
-                pipeline.CachedSectionsLoaded, sweepGate.Reason);
+            StartLoginVisitSweepIfNeeded();
         }
 
         capi.Event.RegisterCallback(_ => LogStats("Stats after 30s"), 30000);

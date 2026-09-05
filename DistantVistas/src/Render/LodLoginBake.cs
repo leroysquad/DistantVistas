@@ -19,12 +19,13 @@ namespace DistantVistas;
 /// </summary>
 public sealed class LodLoginBake
 {
-    public enum Phase { WaitingForWorld, Sweeping, Auditing, Draining, Stabilizing, Done }
+    public enum Phase { OverlayWarmup, WaitingForWorld, Sweeping, Auditing, Draining, Stabilizing, Done }
 
     enum StopPhase { Teleport, TeleportSettle, WaitChunks, Capture, Bake, BakeSettle, Done }
 
-    const int TeleportSettleTicks = 5;
-    const int BakeSettleTicks = 8;
+    const int OverlayWarmupMaxTicks = 200;
+    const int TeleportSettleTicks = 18;
+    const int BakeSettleTicks = 24;
 
     const int StabilizeWindowFrames = 90;
     const int StabilizeWindowsRequired = 4;
@@ -37,11 +38,13 @@ public sealed class LodLoginBake
     readonly LodPipeline pipeline;
     readonly LodTerrainRenderer renderer;
     readonly LodLoginBakeOverlay overlay;
+    readonly LodLoginBakeScreenRenderer screen;
     readonly LodLoginBakeAudioMute audioMute;
     readonly LodLoginBakeTimeFreeze timeFreeze;
     readonly LodLoginBakeGameMode gameMode;
     readonly LodLoginBakeHudHide hudHide;
     readonly LodLoginBakePlayerHide playerHide;
+    readonly LodLoginBakeWorldHide worldHide;
     readonly LodSeasonSampleExporter seasonSamples;
     readonly LodLoginSweepTiming sweepTiming = new();
     readonly Block? plantTintFallback;
@@ -56,6 +59,7 @@ public sealed class LodLoginBake
     int total;
     int finished;
     int worldWaitTicks;
+    int overlayWarmupTicks;
     int drainTicks;
     int auditTicks;
     int resweepRound;
@@ -76,6 +80,7 @@ public sealed class LodLoginBake
     {
         get
         {
+            if (phase == Phase.OverlayWarmup) return 0.01f;
             if (phase == Phase.WaitingForWorld) return 0.03f;
             if (phase == Phase.Sweeping)
                 return total <= 0 ? 0.05f : 0.05f + (float)finished / total * 0.70f;
@@ -97,6 +102,7 @@ public sealed class LodLoginBake
         LodPipeline pipeline,
         LodTerrainRenderer renderer,
         LodLoginBakeOverlay overlay,
+        LodLoginBakeScreenRenderer screen,
         Block? plantTintFallback,
         System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf)
     {
@@ -104,6 +110,7 @@ public sealed class LodLoginBake
         this.pipeline = pipeline;
         this.renderer = renderer;
         this.overlay = overlay;
+        this.screen = screen;
         this.plantTintFallback = plantTintFallback;
         this.untintedOf = untintedOf;
         audioMute = new LodLoginBakeAudioMute(capi);
@@ -111,6 +118,7 @@ public sealed class LodLoginBake
         gameMode = new LodLoginBakeGameMode(capi);
         hudHide = new LodLoginBakeHudHide(capi);
         playerHide = new LodLoginBakePlayerHide(capi);
+        worldHide = new LodLoginBakeWorldHide(capi);
         seasonSamples = new LodSeasonSampleExporter(capi);
         overlay.OnCancelRequested = CancelAndSave;
     }
@@ -169,10 +177,11 @@ public sealed class LodLoginBake
         auditTicks = 0;
         resweepRound = 0;
         retryingMisses = false;
-        phase = Phase.WaitingForWorld;
+        phase = Phase.OverlayWarmup;
         released = false;
         currentKey = null;
         restoreCaptured = false;
+        overlayWarmupTicks = 0;
         stabilizeWindow.Clear();
         windowMedians.Clear();
 
@@ -197,14 +206,46 @@ public sealed class LodLoginBake
         seasonSamples.BeginSession(sweepMode, sweepModeLabel, total);
         string startMsg = resuming
             ? $"{sweepModeLabel} — resuming ({finished}/{total} done)…"
-            : $"{sweepModeLabel} — waiting for world to load…";
+            : $"{sweepModeLabel} — preparing loading screen…";
         overlay.UpdateProgress(Progress, StatusWithEta($"{startMsg} (Esc to pause & save)"));
+    }
+
+    void TickOverlayWarmup()
+    {
+        overlayWarmupTicks++;
+        string detail = screen.IsOverlayHealthy
+            ? "Loading screen ready…"
+            : $"Waiting for loading screen… ({overlayWarmupTicks})";
+        overlay.UpdateProgress(Progress, detail);
+
+        if (!screen.IsOverlayHealthy)
+        {
+            if (overlayWarmupTicks >= OverlayWarmupMaxTicks)
+                AbortSweep("loading screen never painted opaque frames — entering play");
+            return;
+        }
+
+        if (overlayWarmupTicks < LodLoginBakeScreenRenderer.RequiredHealthyFrames)
+            return;
+
+        worldHide.HideAllLoaded();
 
         if (total == 0)
         {
             BeginAuditing();
             return;
         }
+
+        phase = Phase.WaitingForWorld;
+        worldWaitTicks = 0;
+    }
+
+    void AbortSweep(string reason)
+    {
+        capi.Logger.Error("[DistantVistas] Login visit sweep aborted: {0}", reason);
+        overlay.UpdateProgress(1f, "Entering play (sweep aborted)…");
+        renderer.LoginBakeComplete = true;
+        Teardown(success: false);
     }
 
     void PlanSweepQueue()
@@ -256,6 +297,9 @@ public sealed class LodLoginBake
 
         switch (phase)
         {
+            case Phase.OverlayWarmup:
+                TickOverlayWarmup();
+                break;
             case Phase.WaitingForWorld:
                 TickWaitingForWorld();
                 break;
@@ -329,6 +373,8 @@ public sealed class LodLoginBake
 
             case StopPhase.WaitChunks:
                 stopTicks++;
+                if (stopTicks == 1)
+                    worldHide.RevealL0(key);
                 if (!LodLoginSweep.AllMapChunksLoaded(capi.World.BlockAccessor, key)
                     && stopTicks < LodLoginSweep.MaxChunkWaitTicks)
                 {
@@ -465,13 +511,14 @@ public sealed class LodLoginBake
     void BeginNextStop()
     {
         if (pending.Count == 0) return;
+        worldHide.HideAllLoaded();
         long key = pending.Dequeue();
         currentKey = key;
         stopPhase = StopPhase.Teleport;
         stopTicks = 0;
 
         (double x, double y, double z) = LodLoginSweep.VisitPosition(capi.World, key);
-        TeleportPlayer(x, y, z);
+        TeleportPlayer(x, y, z, requestChunks: false);
         overlay.UpdateProgress(Progress,
             StatusWithEta($"{VisitPrefix()}moving to region… ({Pct(finished, total)})"));
     }
@@ -583,6 +630,15 @@ public sealed class LodLoginBake
 
         if (success || !keepResume)
             LodLoginSweepResume.Delete(capi);
+
+        try
+        {
+            worldHide.Restore();
+        }
+        catch
+        {
+            // Best-effort.
+        }
 
         try
         {
@@ -793,8 +849,8 @@ public sealed class LodLoginBake
         LodLoginBakePlayerMove.ApplyQuietFrom(capi, capi.World.Player.Entity, restorePos);
     }
 
-    void TeleportPlayer(double x, double y, double z) =>
-        LodLoginBakePlayerMove.ApplyQuiet(capi, capi.World.Player.Entity, x, y, z);
+    void TeleportPlayer(double x, double y, double z, bool requestChunks = true) =>
+        LodLoginBakePlayerMove.ApplyQuiet(capi, capi.World.Player.Entity, x, y, z, requestChunks);
 
     static string Pct(int done, int total) =>
         total <= 0 ? "0%" : $"{done * 100 / total}%";
