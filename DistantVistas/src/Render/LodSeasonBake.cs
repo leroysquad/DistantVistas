@@ -1,5 +1,6 @@
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.MathTools;
 
 namespace DistantVistas;
 
@@ -7,10 +8,11 @@ namespace DistantVistas;
 /// After a live visit capture: lock per-column season appearance into the palette.
 ///
 /// Capture (while the player is teleported there) stores real block ids — snow layers,
-/// green or snowy leaves, grass tops. Bake multiplies each column's atlas colour through
-/// Vintage Story's climate + season maps at that block's X/Y/Z, then sets
-/// <see cref="LodPaletteEntry.FlagBaked"/> so near and far LOD keep that paint until relog.
-/// Ground snow also follows a majority vote over snow-eligible captured surface columns.
+/// green or snowy leaves, grass tops. Bake samples vanilla's own tinted colour at each
+/// column top (or reproduces the live shader's split climate + season path as fallback),
+/// then sets <see cref="LodPaletteEntry.FlagBaked"/> so near and far LOD keep that paint
+/// until relog. Ground snow also follows a majority vote over snow-eligible captured
+/// surface columns.
 /// </summary>
 public static class LodSeasonBake
 {
@@ -80,7 +82,28 @@ public static class LodSeasonBake
         return new SnowVote(eligible, snowy);
     }
 
+    /// <summary>
+    /// Vanilla's fully tinted face colour at a world position — the ground truth during
+    /// the visit sweep when chunks are loaded.
+    /// </summary>
+    public static int SampleVanillaColor(ICoreClientAPI capi, Block block, int x, int y, int z)
+    {
+        try
+        {
+            var pos = new BlockPos(x, y, z);
+            int color = block.GetColor(capi, pos);
+            if (color != 0 && !LodPaletteRepair.NeedsColor(color))
+                return color;
+        }
+        catch
+        {
+            // Fall back to manual tint reproduction.
+        }
+        return 0;
+    }
+
     public static int BakePaletteColor(
+        ICoreClientAPI capi,
         IClientWorldAccessor world,
         Block block,
         int untintedColor,
@@ -91,13 +114,22 @@ public static class LodSeasonBake
         Block? plantTintFallback,
         bool groundSnowMajority = false)
     {
-        SampleFinalTint(world, block, x, y, z, share, plantTintFallback, out float tr, out float tg, out float tb);
-        int baked = MultiplyRgb(untintedColor, tr, tg, tb);
+        int baked = SampleVanillaColor(capi, block, x, y, z);
+        if (baked == 0)
+        {
+            SampleFinalTint(world, block, x, y, z, share, plantTintFallback, out float tr, out float tg, out float tb);
+            baked = MultiplyRgb(untintedColor, tr, tg, tb);
+        }
+
         if (groundSnowMajority && IsSnowEligibleGround(block))
             baked = BlendTowardSnow(baked, 0.72f);
         return baked;
     }
 
+    /// <summary>
+    /// Reproduce the live shader's split climate table + season mix when GetColor is
+    /// unavailable. Climate and season are never sampled together on white.
+    /// </summary>
     public static void SampleFinalTint(
         IClientWorldAccessor world,
         Block block,
@@ -126,28 +158,76 @@ public static class LodSeasonBake
             return;
         }
 
-        SampleMaps(world, climate, season, x, y, z, out r, out g, out b);
-
-        if (LodTintRegistry.IsSnowLikeTint(r, g, b) && y > world.SeaLevel + 8)
+        if (climate != null)
         {
-            SampleMaps(world, climate, season, x, world.SeaLevel, z, out float lr, out float lg, out float lb);
-            if (!LodTintRegistry.IsSnowLikeTint(lr, lg, lb))
+            int yHigh = GameMath.Clamp(y + LodTintRegistry.HighSampleOffsetBlocks, 0, world.BlockAccessor.MapSizeY - 1);
+            float tintBlend = GameMath.Clamp(
+                (y - world.SeaLevel) / (float)LodTintRegistry.HighSampleOffsetBlocks, 0f, 1f);
+
+            SampleClimateMap(world, climate, x, y, z, out float lr, out float lg, out float lb);
+            SampleClimateMap(world, climate, x, yHigh, z, out float hr, out float hg, out float hb);
+
+            if (LodTintRegistry.IsSnowLikeTint(hr, hg, hb) && y > world.SeaLevel + 8)
             {
-                r = lr; g = lg; b = lb;
+                SampleClimateMap(world, climate, x, world.SeaLevel, z, out float slr, out float slg, out float slb);
+                if (!LodTintRegistry.IsSnowLikeTint(slr, slg, slb))
+                {
+                    hr = slr; hg = slg; hb = slb;
+                }
             }
+
+            r = lr + (hr - lr) * tintBlend;
+            g = lg + (hg - lg) * tintBlend;
+            b = lb + (hb - lb) * tintBlend;
+            LodTintRegistry.ClampTintAwayFromWhite(ref r, ref g, ref b);
+        }
+        else
+        {
+            r = g = b = 1f;
         }
 
         r = LodTopSoil.Dilute(share.R, r);
         g = LodTopSoil.Dilute(share.G, g);
         b = LodTopSoil.Dilute(share.B, b);
+
+        if (season != null)
+        {
+            SampleSeasonMap(world, season, x, y, z, out float sr, out float sg, out float sb);
+            sr = LodTopSoil.Dilute(share.R, sr);
+            sg = LodTopSoil.Dilute(share.G, sg);
+            sb = LodTopSoil.Dilute(share.B, sb);
+
+            float temp = 128f;
+            ClimateCondition? cl = world.BlockAccessor.GetClimateAt(new BlockPos(x, world.SeaLevel, z));
+            if (cl != null)
+                temp = LodTintRegistry.UnscaledTempByteFromCelsius(cl.WorldGenTemperature);
+            float amt = LodTintRegistry.SeasonWeightFromTempByte(temp);
+
+            r += (sr - r) * amt;
+            g += (sg - g) * amt;
+            b += (sb - b) * amt;
+        }
     }
 
-    static void SampleMaps(
-        IClientWorldAccessor world, string? climate, string? season,
+    static void SampleClimateMap(
+        IClientWorldAccessor world, string climate,
         int x, int y, int z, out float r, out float g, out float b)
     {
         int rgba = world.ApplyColorMapOnRgba(
-            climate, season,
+            climate, (string?)null,
+            unchecked((int)0xFFFFFFFF), x, y, z);
+        r = ((rgba >> 16) & 0xFF) / 255f;
+        g = ((rgba >> 8) & 0xFF) / 255f;
+        b = (rgba & 0xFF) / 255f;
+        LodTintRegistry.ClampTintAwayFromWhite(ref r, ref g, ref b);
+    }
+
+    static void SampleSeasonMap(
+        IClientWorldAccessor world, string season,
+        int x, int y, int z, out float r, out float g, out float b)
+    {
+        int rgba = world.ApplyColorMapOnRgba(
+            (string?)null, season,
             unchecked((int)0xFFFFFFFF), x, y, z);
         r = ((rgba >> 16) & 0xFF) / 255f;
         g = ((rgba >> 8) & 0xFF) / 255f;
@@ -178,12 +258,13 @@ public static class LodSeasonBake
     /// Bake every tintable palette entry in a cached section. Returns how many colours changed.
     /// </summary>
     public static int BakeSection(
-        IClientWorldAccessor world,
+        ICoreClientAPI capi,
         LodSection section,
         long sectionKey,
         Block? plantTintFallback,
         System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf)
     {
+        IClientWorldAccessor world = capi.World;
         SnowVote vote = ComputeSnowVote(section, world.Blocks, sectionKey);
         int changed = 0;
         for (int pid = 0; pid < section.Palette.Count; pid++)
@@ -211,7 +292,7 @@ public static class LodSeasonBake
 
             bool groundSnow = vote.MajoritySnow && IsSnowEligibleGround(block);
             int baked = BakePaletteColor(
-                world, block, untinted, x, y, z, share, plantTintFallback, groundSnow);
+                capi, world, block, untinted, x, y, z, share, plantTintFallback, groundSnow);
             baked = LodPaletteRepair.KeepCapturedColor(
                 baked, untinted, LodBlockPolicy.IsClimateUntinted(block));
 

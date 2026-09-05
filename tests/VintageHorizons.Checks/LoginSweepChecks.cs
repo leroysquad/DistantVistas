@@ -11,6 +11,7 @@ public static class LoginSweepChecks
         BackdropHook(c);
         AudioMuteKeys(c);
         TimeFreezeKey(c);
+        TeardownHook(c);
     }
 
     static void L0ChunkColumns(Check c)
@@ -54,5 +55,26 @@ public static class LoginSweepChecks
     {
         c.Eq("distantvistas-loginbake", LodLoginBakeTimeFreeze.SpeedModifierKey,
             "login sweep calendar speed modifier key");
+    }
+
+    static void TeardownHook(Check c)
+    {
+        string bake = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
+        c.True(bake.Contains("void Teardown(bool success)"),
+            "login bake uses a single Teardown path");
+        c.True(bake.Contains("if (released) return"),
+            "login bake teardown is idempotent");
+        c.True(bake.Contains("Dispose() => Teardown(success: false)"),
+            "dispose routes through Teardown");
+        c.True(bake.Contains("Teardown(success: true)"),
+            "finish routes through Teardown");
+
+        string season = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSeasonBake.cs"));
+        c.True(season.Contains("block.GetColor(capi, pos)"),
+            "login bake samples vanilla GetColor at column top");
+        c.True(season.Contains("ApplyColorMapOnRgba(\n            climate, (string?)null,"),
+            "login bake fallback samples climate without season on white");
     }
 }

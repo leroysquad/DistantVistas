@@ -30,22 +30,28 @@ public static class LodMesher
     //   0..63    opaque,     tint slot = alpha
     //   64..127  water,      tint slot = alpha - 64
     //   128..191 thin plant, tint slot = alpha - 128
+    //   192..255 baked,      identity tint — stored RGB is final (band 3)
     // Slot 0 is the identity tint. The band picks the blend factor in the shader, so
     // water and flowers can be see-through by different amounts.
     const byte WaterBase = LodTintRegistry.MaxSlots;
     const byte ThinBase = LodTintRegistry.MaxSlots * 2;
+    const byte BakedBase = LodTintRegistry.MaxSlots * 3;
 
     static byte AlphaFor(byte paletteFlags, byte tintSlot, int color)
     {
-        byte slot = tintSlot < LodTintRegistry.MaxSlots ? tintSlot : (byte)LodTintRegistry.SlotNone;
+        bool water = (paletteFlags & LodPaletteEntry.FlagWater) != 0;
+        bool thin = (paletteFlags & LodPaletteEntry.FlagThin) != 0;
         if ((paletteFlags & LodPaletteEntry.FlagBaked) != 0)
-            slot = (byte)LodTintRegistry.SlotNone;
+            return water ? (byte)(WaterBase + LodTintRegistry.SlotNone)
+                : thin ? (byte)(ThinBase + LodTintRegistry.SlotNone)
+                : BakedBase;
+
+        byte slot = tintSlot < LodTintRegistry.MaxSlots ? tintSlot : (byte)LodTintRegistry.SlotNone;
         // Skip live tint for stored colours that are already brown earth, or
         // snow/ice that would turn green if a grass high-tint were multiplied
         // on. Greyscale and dull-olive grass MUST keep the climate slot or far
         // LOD stays the raw atlas grey. Remesh-only: old caches keep albedo
         // and only drop the slot.
-        bool water = (paletteFlags & LodPaletteEntry.FlagWater) != 0;
         // Water keeps its climate slot. Treating pale/foam water as snow/ice
         // stripped the tint and left a white stream.
         if (!water && (LodPaletteRepair.IsRockLikeAlbedo(color) || LodPaletteRepair.IsSnowOrIceAlbedo(color)))

@@ -1264,7 +1264,6 @@ public class DistantVistasModSystem : ModSystem
     {
         loginBake?.Dispose();
         loginBake = null;
-        loginBakeOverlay?.Hide();
         renderer.LoginBakeComplete = false;
         assist?.Reset();
         // Belongs to the world being left: the next one is a different savegame with a

@@ -1,3 +1,9 @@
+## 0.7.84
+- **Login bake colour match (critical).** Visit-sweep bake now samples vanilla `Block.GetColor` at each column top (with split climate + season fallback matching the live shader). Baked sections use alpha band 3 so the mesher and shaders display stored RGB exactly — no manila wash from live climate/season multiply, keep-origin ratio, snow overlay, or valuenoise.
+
+## 0.7.83
+- **Login bake teardown.** One idempotent `Teardown()` path on success, abort, error, and world leave — hides overlay, restores player pose, unlocks controls/mouse, unmutes audio, and unfreezes calendar time with no leftover state.
+
 ## 0.7.82
 - **Login sweep overlay + input lock (critical fix).** Layout locked: (1) full-screen landscape photo `assets/distantvistas/textures/gui/login-backdrop.png`, (2) centered arched solid-gold title graphic `assets/distantvistas/textures/gui/login-title-rainbow.png` (rainbow shape, single gold — not multicolor letters), (3) loading panel below with progress %, bar and status. Paints every frame via `IRenderer` at `EnumRenderStage.Ortho`; solid dark fill and gold arched text only if assets are missing from the zip.
 - **Input lock during bake.** Movement, look, jump, fly, sneak, sprint and mouse buttons cleared every tick; mouse grabbed; join camera pose held; sweep stops pin the player at each visit position so they cannot free-fly between teleports. Input-blocking dialog captures keyboard/chat/inventory shortcuts.

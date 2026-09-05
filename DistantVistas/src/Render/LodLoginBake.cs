@@ -48,6 +48,7 @@ public sealed class LodLoginBake
     int worldWaitTicks;
     int drainTicks;
     Phase phase = Phase.WaitingForWorld;
+    bool released;
     long? currentKey;
     StopPhase stopPhase;
     int stopTicks;
@@ -101,6 +102,7 @@ public sealed class LodLoginBake
         worldWaitTicks = 0;
         drainTicks = 0;
         phase = Phase.WaitingForWorld;
+        released = false;
         currentKey = null;
         restoreCaptured = false;
         stabilizeWindow.Clear();
@@ -279,7 +281,7 @@ public sealed class LodLoginBake
         if (section == null) return;
 
         LodSeasonBake.BakeSection(
-            capi.World, section, l0Key, plantTintFallback, untintedOf);
+            capi, section, l0Key, plantTintFallback, untintedOf);
 
         world.MarkChanged(l0Key);
         pipeline.InvalidateGpuMesh?.Invoke(l0Key);
@@ -332,21 +334,71 @@ public sealed class LodLoginBake
 
     void Finish()
     {
-        phase = Phase.Done;
-        renderer.LoginBakeComplete = true;
         overlay.UpdateProgress(1f, "Ready.");
-        overlay.Hide();
-        ReleaseAll();
+        Teardown(success: true);
         capi.Logger.Notification(
             "[DistantVistas] Login visit sweep finished: {0}/{1} regions captured and locked until relog.",
             finished, total);
     }
 
-    void ReleaseAll()
+    /// <summary>
+    /// Single idempotent teardown for success, abort, error, and world leave.
+    /// Undoes overlay, pose, controls, audio mute, and calendar freeze with no leftovers.
+    /// </summary>
+    void Teardown(bool success)
     {
-        ReleasePlayerControls();
-        audioMute.Restore();
-        timeFreeze.Restore();
+        if (released) return;
+
+        released = true;
+        phase = Phase.Done;
+
+        if (success)
+            renderer.LoginBakeComplete = true;
+
+        try
+        {
+            overlay.Hide();
+        }
+        catch
+        {
+            // Best-effort.
+        }
+
+        try
+        {
+            RestorePlayerPose();
+        }
+        catch
+        {
+            // Best-effort.
+        }
+
+        try
+        {
+            ReleasePlayerControls();
+        }
+        catch
+        {
+            // Best-effort.
+        }
+
+        try
+        {
+            audioMute.Restore();
+        }
+        catch
+        {
+            // Best-effort.
+        }
+
+        try
+        {
+            timeFreeze.Restore();
+        }
+        catch
+        {
+            // Best-effort.
+        }
     }
 
     void HoldPlayerControls()
@@ -449,16 +501,5 @@ public sealed class LodLoginBake
     static string Pct(int done, int total) =>
         total <= 0 ? "0%" : $"{done * 100 / total}%";
 
-    public void Dispose()
-    {
-        try
-        {
-            RestorePlayerPose();
-            overlay.Hide();
-        }
-        finally
-        {
-            ReleaseAll();
-        }
-    }
+    public void Dispose() => Teardown(success: false);
 }

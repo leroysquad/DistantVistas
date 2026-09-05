@@ -97,16 +97,14 @@ public static class StaticAssetChecks
     }
 
     /// <summary>
-    /// LodMesher packs the tint slot into a vertex alpha byte in three bands: opaque at
-    /// slot, water at MaxSlots + slot, thin at MaxSlots * 2 + slot. Alpha is a byte, so the
-    /// largest encodable value is MaxSlots * 3 - 1. Raise MaxSlots past 85 and the thin band
-    /// wraps into the opaque band with no error anywhere - thin plants would render as solid
-    /// terrain of an arbitrary tint.
+    /// LodMesher packs the tint slot into a vertex alpha byte in four bands: opaque at
+    /// slot, water at MaxSlots + slot, thin at MaxSlots * 2 + slot, baked at MaxSlots * 3.
+    /// Alpha is a byte, so the largest encodable value is MaxSlots * 4 - 1.
     /// </summary>
     static void AlphaPacking(Check c)
     {
-        c.True(LodTintRegistry.MaxSlots * 3 <= 256,
-            $"tint bands fit in a byte (MaxSlots {LodTintRegistry.MaxSlots} * 3 <= 256)");
+        c.True(LodTintRegistry.MaxSlots * 4 <= 256,
+            $"tint bands fit in a byte (MaxSlots {LodTintRegistry.MaxSlots} * 4 <= 256)");
     }
 
     /// <summary>
@@ -158,6 +156,7 @@ public static class StaticAssetChecks
         c.True(vsh.Contains("uniform float seasonRel"), "lodterrain.vsh has live seasonRel");
         c.True(vsh.Contains("seasonTints"), "lodterrain.vsh has seasonTints");
         c.True(vsh.Contains("band != 1"), "lodterrain.vsh skips season on water");
+        c.True(vsh.Contains("band == 3"), "lodterrain.vsh bypasses live tint on baked band");
         c.False(vsh.Contains("uniform float seasonTempX"),
             "lodterrain.vsh does not drive vegetation with a global seasonTempX");
         c.True(vsh.Contains("keepClimateLow") && vsh.Contains("climateLow00"),
@@ -185,6 +184,7 @@ public static class StaticAssetChecks
             "lodterrain.fsh does not discard the camera skip disc");
         c.False(fsh.Contains("skipR"),
             "lodterrain.fsh does not punch a view-distance sphere (sky circle)");
+        c.True(fsh.Contains("bool baked = band == 3"), "lodterrain.fsh skips snow/noise on baked band");
         c.True(fsh.Contains("band == 1") && fsh.Contains("0.18, 0.38, 0.50"),
             "lodterrain.fsh recolors foam-white water to lake blue");
         c.True(vsh.Contains("lookDown"),
