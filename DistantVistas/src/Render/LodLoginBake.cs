@@ -328,9 +328,9 @@ public sealed class LodLoginBake
     {
         phase = Phase.Done;
         renderer.LoginBakeComplete = true;
-        capi.World.Player.Entity.Controls.MovespeedMultiplier = 1f;
+        ReleasePlayerControls();
         overlay.UpdateProgress(1f, "Ready.");
-        if (overlay.IsOpened()) overlay.TryClose();
+        overlay.Hide();
         capi.Logger.Notification(
             "[DistantVistas] Login visit sweep finished: {0}/{1} regions captured and locked until relog.",
             finished, total);
@@ -338,20 +338,80 @@ public sealed class LodLoginBake
 
     void HoldPlayerControls()
     {
-        var entity = capi.World.Player.Entity;
+        CloseBlockingDialogs();
+
+        IClientPlayer player = capi.World.Player;
+        EntityPlayer entity = player.Entity;
+        EntityControls controls = entity.Controls;
+
         if (!restoreCaptured)
         {
             restorePos.SetFrom(entity.Pos);
             restoreCaptured = true;
         }
 
-        if (phase == Phase.WaitingForWorld)
+        HoldPlayerPose(entity);
+        LockPlayerCamera(capi, player, restorePos);
+        BlockPlayerInput(controls);
+
+        capi.Input.MouseGrabbed = true;
+    }
+
+    void HoldPlayerPose(EntityPlayer entity)
+    {
+        if (phase == Phase.Sweeping && currentKey != null)
+        {
+            (double x, double y, double z) = LodLoginSweep.VisitPosition(capi.World, currentKey.Value);
+            entity.Pos.SetPos(x, y, z);
+        }
+        else
         {
             entity.Pos.SetFrom(restorePos);
-            entity.Pos.Motion.Set(0, 0, 0);
         }
 
-        entity.Controls.MovespeedMultiplier = 0f;
+        entity.Pos.Motion.Set(0, 0, 0);
+    }
+
+    static void LockPlayerCamera(ICoreClientAPI capi, IClientPlayer player, EntityPos pose)
+    {
+        player.CameraYaw = pose.Yaw;
+        player.CameraPitch = pose.Pitch;
+        player.Entity.Pos.Yaw = pose.Yaw;
+        player.Entity.Pos.Pitch = pose.Pitch;
+        capi.Input.MouseYaw = pose.Yaw;
+        capi.Input.MousePitch = pose.Pitch;
+    }
+
+    static void BlockPlayerInput(EntityControls controls)
+    {
+        controls.StopAllMovement();
+        controls.MovespeedMultiplier = 0f;
+        controls.WalkVector.Set(0, 0, 0);
+        controls.FlyVector.Set(0, 0, 0);
+        controls.IsFlying = false;
+        controls.NoClip = false;
+        controls.Gliding = false;
+        controls.DetachedMode = false;
+
+        for (int i = 0; i <= (int)EnumEntityAction.InWorldRightMouseDown; i++)
+            controls[(EnumEntityAction)i] = false;
+    }
+
+    void ReleasePlayerControls()
+    {
+        capi.World.Player.Entity.Controls.MovespeedMultiplier = 1f;
+        capi.Input.MouseGrabbed = false;
+    }
+
+    void CloseBlockingDialogs()
+    {
+        var open = capi.Gui.OpenedGuis;
+        for (int i = open.Count - 1; i >= 0; i--)
+        {
+            GuiDialog dlg = open[i];
+            if (dlg == overlay || dlg.DialogType == EnumDialogType.HUD) continue;
+            dlg.TryClose();
+        }
     }
 
     void RestorePlayerPose()
@@ -377,7 +437,7 @@ public sealed class LodLoginBake
     public void Dispose()
     {
         RestorePlayerPose();
-        capi.World.Player.Entity.Controls.MovespeedMultiplier = 1f;
-        if (overlay.IsOpened()) overlay.TryClose();
+        ReleasePlayerControls();
+        overlay.Hide();
     }
 }

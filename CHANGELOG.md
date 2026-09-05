@@ -1,3 +1,7 @@
+## 0.7.82
+- **Login sweep overlay + input lock (critical fix).** Full-screen cover now paints every frame via an `IRenderer` at `EnumRenderStage.Ortho` (cannot be skipped like a small `GuiDialog`). Landscape backdrop hook at `assets/distantvistas/textures/login-backdrop.png` with solid dark fallback. Distant Vistas title, progress %, status bar and detail text on top.
+- **Input lock during bake.** Movement, look, jump, fly, sneak, sprint and mouse buttons cleared every tick; mouse grabbed; join camera pose held; sweep stops pin the player at each visit position so they cannot free-fly between teleports. Input-blocking dialog captures keyboard/chat/inventory shortcuts.
+
 ## 0.7.81
 - **Visit-sweep purpose locked.** Login pass exists to gather live season truth by being at each visited 64×64 canvas: re-capture loaded voxels (snow on ground, snowy/part-green trees, autumn tone) while teleported there under the full-screen overlay, season-bake per column top, persist to SQLite, propagate to parent mips so near and far LOD match until relog. Not finalize-time recolor of unloaded cache.
 - **Drain phase.** After all visits, mips and SQLite flush behind the overlay before frame-time release.

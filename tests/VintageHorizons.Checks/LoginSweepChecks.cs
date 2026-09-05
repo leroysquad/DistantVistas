@@ -8,6 +8,7 @@ public static class LoginSweepChecks
     {
         L0ChunkColumns(c);
         VisitedL0Only(c);
+        BackdropHook(c);
     }
 
     static void L0ChunkColumns(Check c)
@@ -28,5 +29,12 @@ public static class LoginSweepChecks
         var keys = LodLoginSweep.VisitedL0Keys(world).ToArray();
         c.Eq(2, keys.Length, "only level-0 keys are swept");
         c.True(keys.All(k => LodWorld.KeyLevel(k) == 0), "every sweep key is L0");
+    }
+
+    static void BackdropHook(Check c)
+    {
+        c.Eq("distantvistas:textures/login-backdrop.png",
+            LodLoginBakeScreenRenderer.BackdropAsset.ToString(),
+            "login backdrop asset hook");
     }
 }

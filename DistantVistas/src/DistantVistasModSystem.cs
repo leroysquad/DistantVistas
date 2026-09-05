@@ -126,6 +126,7 @@ public class DistantVistasModSystem : ModSystem
     /// </summary>
     LodAssistClient? assist;
 
+    LodLoginBakeScreenRenderer? loginBakeScreen;
     LodLoginBakeOverlay? loginBakeOverlay;
     LodLoginBake? loginBake;
 
@@ -218,7 +219,9 @@ public class DistantVistasModSystem : ModSystem
         renderer.HeightOcclusion.PeekMarginBlocks = config.FovOcclusionPeekMargin;
         renderer.HeightOcclusion.MaxTestsPerFrame = config.FovOcclusionMaxTestsPerFrame;
         pipeline.InvalidateGpuMesh = renderer.InvalidateGpuMesh;
-        loginBakeOverlay = new LodLoginBakeOverlay(capi);
+        loginBakeScreen = new LodLoginBakeScreenRenderer(capi);
+        capi.Event.RegisterRenderer(loginBakeScreen, EnumRenderStage.Ortho, "distantvistas-login-bake");
+        loginBakeOverlay = new LodLoginBakeOverlay(capi, loginBakeScreen);
         // Real holes (captured land with no mesh at any rung) are reported with
         // the state of the keys involved, so a screenshot of sky has a log line.
         renderer.SetHoleLogger(msg => Mod.Logger.Notification(msg));
@@ -1261,6 +1264,7 @@ public class DistantVistasModSystem : ModSystem
     {
         loginBake?.Dispose();
         loginBake = null;
+        loginBakeOverlay?.Hide();
         renderer.LoginBakeComplete = false;
         assist?.Reset();
         // Belongs to the world being left: the next one is a different savegame with a
@@ -1435,6 +1439,8 @@ public class DistantVistasModSystem : ModSystem
         // Stops the storage writer before the connection it writes through.
         Quietly(() => pipeline?.Dispose());
         Quietly(() => renderer?.Dispose());
+        Quietly(() => loginBakeOverlay?.Dispose());
+        Quietly(() => loginBakeScreen?.Dispose());
     }
 
     /// <summary>
