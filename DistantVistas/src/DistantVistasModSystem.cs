@@ -159,6 +159,8 @@ public class DistantVistasModSystem : ModSystem
     {
         capi = api;
 
+        LodLoginBakeHarmony.Apply(Mod);
+
         try
         {
             config = capi.LoadModConfig<DistantVistasConfig>("distantvistas.json") ?? new DistantVistasConfig();
@@ -1326,6 +1328,7 @@ public class DistantVistasModSystem : ModSystem
         loginBake?.Dispose();
         loginBake = null;
         loginBakePulse?.Bind(null, PumpLoginBakeWhileSweeping);
+        LodLoginBakeSweepGate.Release();
         renderer.LoginBakeComplete = false;
         renderer.LoginBakeOverlayActive = false;
         assist?.Reset();

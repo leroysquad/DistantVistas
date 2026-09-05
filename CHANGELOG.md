@@ -1,3 +1,11 @@
+## 0.8.9
+- **CRITICAL: sky/vegetation flash during visit sweep (0.8.8).** When the cached vanilla loader was missing, stock fallback failed to paint and the sweep aborted into play while teleports still ran — world flashed behind a broken cover. Fix: re-open `GuiScreenLoadingGame` as `ScreenManager.CurrentScreen` via `LoadScreen` / `LoadScreenNoLoadCall` (create instance when cache is empty); Harmony suppresses `GuiScreenRunningGame` world draws while the sweep is active; **never abort into play** solely because the cover has not painted yet; stock fallback paints on ortho + after-final at render order 3.0.
+- **Vanilla loading text preserved.** DV progress appends after the stock VS line (`Loading mountains… — visiting 1/43`) instead of replacing it.
+- **Release restores running screen.** `Hide()` calls `LoadScreenNoLoadCall(GuiScreenRunningGame)` when the loader was held.
+
+## 0.8.8
+- _(User-reported intermediate build — cover-timeout abort and stock-only fallback regression; superseded by 0.8.9.)_
+
 ## 0.8.6
 - **CRITICAL: bootstrap hang on new worlds (0.8.5).** `LodLoginBakeRenderDriver` only ran on `AfterFinalComposition`, which never fired while `RenderToDefaultFramebuffer` blocked on async sound loading. Instantiating a fresh `GuiScreenLoadingGame` on empty cache re-triggered that wait. Fix: pulse sweep ticks from `LodLoginBakeVanillaLoadingHold.OnRenderPulse` **before** any blocking vanilla draw; never construct a new loading screen (stock fallback only); immediate `RegisterCallback(0)` kick. Esc poll unchanged on render pulse.
 - **Bootstrap visit budget.** Empty-canvas bootstrap still **probes** a 6000-block disk (~27k L0 cells) for ocean/land classification, but **visits at most 43 stops** (`BootstrapMaxVisitStops` = `BootstrapCellBudget(3.5s/stop)` targeting ~2.5 min). Evenly samples across the disk sorted by spawn distance. UI label shows `Bootstrap (new world) (43 of 27607)`.

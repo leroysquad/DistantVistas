@@ -80,12 +80,22 @@ public static class LoginSweepChecks
             "login sweep holds vanilla world loading screen");
         c.True(hold.Contains("loadingText"),
             "vanilla hold updates ScreenManager.loadingText");
-        c.True(hold.Contains("LoadAndCacheScreen"),
-            "vanilla hold uses engine cache API when available");
-        c.True(hold.Contains("OnRenderPulse"),
-            "vanilla hold pulses sweep before blocking draw");
-        c.True(!hold.Contains("new GuiScreenLoadingGame"),
-            "vanilla hold does not construct fresh loading screens");
+        c.True(hold.Contains("LoadScreenNoLoadCall"),
+            "vanilla hold re-opens loader via ScreenManager");
+        c.True(hold.Contains("FormatLoadingText"),
+            "vanilla hold appends DV status to loading lines");
+        c.True(!hold.Contains("never construct"),
+            "vanilla hold can create loading screen when cache is empty");
+
+        string gate = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeSweepGate.cs"));
+        c.True(gate.Contains("SuppressRunningGameRender"),
+            "sweep gate suppresses running-game world render");
+
+        string harmony = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeHarmony.cs"));
+        c.True(harmony.Contains("RenderToPrimary"),
+            "harmony skips running-game primary render during sweep");
 
         string screen = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeScreenRenderer.cs"));
@@ -277,8 +287,10 @@ public static class LoginSweepChecks
             "login bake polls Esc from render loop");
         c.True(bake.Contains("KeyboardKeyState"),
             "login bake reads Escape from keyboard state");
-        c.True(bake.Contains("continuing sweep anyway"),
-            "login bake continues if vanilla loading screen never paints");
+        c.True(bake.Contains("NoteLoadingCoverUnpainted"),
+            "login bake never aborts solely on unpainted cover");
+        c.True(!bake.Contains("cover never painted"),
+            "login bake does not abort on cover paint timeout");
         c.True(bake.Contains("LodLoginBakeWorldHide"),
             "login bake hides vanilla chunks during sweep");
         c.True(bake.Contains("LodLoginBakePlayerMove.ApplyQuiet"),

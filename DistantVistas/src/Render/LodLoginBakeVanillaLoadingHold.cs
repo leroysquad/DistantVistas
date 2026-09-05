@@ -7,13 +7,17 @@ namespace DistantVistas;
 
 /// <summary>
 /// Keeps the player on Vintage Story's native world-loading UI during the login visit
-/// sweep by re-rendering <see cref="GuiScreenLoadingGame"/> and updating
-/// <see cref="ScreenManager.loadingText"/> with sweep progress.
+/// sweep by re-activating <see cref="GuiScreenLoadingGame"/> on the
+/// <see cref="ScreenManager"/> and appending Distant Vistas progress to
+/// <see cref="ScreenManager.loadingText"/>.
 /// </summary>
 public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
 {
     static readonly FieldInfo? CachedScreensField = typeof(ScreenManager).GetField(
         "CachedScreens", BindingFlags.Instance | BindingFlags.NonPublic);
+
+    static readonly FieldInfo? CurrentScreenField = typeof(ScreenManager).GetField(
+        "CurrentScreen", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
 
     static readonly MethodInfo? LoadAndCacheScreenMethod = typeof(ScreenManager).GetMethod(
         "LoadAndCacheScreen",
@@ -22,24 +26,41 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
         types: new[] { typeof(Type) },
         modifiers: null);
 
+    static readonly MethodInfo? LoadScreenMethod = typeof(ScreenManager).GetMethod(
+        "LoadScreen",
+        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+        binder: null,
+        types: new[] { typeof(GuiScreen) },
+        modifiers: null);
+
+    static readonly MethodInfo? LoadScreenNoLoadCallMethod = typeof(ScreenManager).GetMethod(
+        "LoadScreenNoLoadCall",
+        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+        binder: null,
+        types: new[] { typeof(GuiScreen) },
+        modifiers: null);
+
     readonly ICoreClientAPI capi;
     LodLoginBakeStockLoadingFallback? stockFallback;
 
     GuiScreenLoadingGame? loadingScreen;
+    GuiScreenRunningGame? runningScreen;
     ScreenManager? screenManager;
-    string detail = "";
+    string vanillaLine = "";
+    string dvDetail = "";
     bool active;
     bool useStockFallback;
+    bool screenHeld;
     bool loggedFirstPaint;
     bool loggedResolve;
+    bool loggedReopen;
 
-    /// <summary>
-    /// Fired at the start of each draw pass, before any blocking vanilla loading draw.
-    /// </summary>
+    /// <summary>Fired at the start of each draw pass, before any blocking vanilla draw.</summary>
     public Action<float>? OnRenderPulse;
 
     public bool IsReady => loadingScreen != null || stockFallback?.IsReady == true;
     public bool HasRendered { get; private set; }
+    public bool UsesVanillaScreen => active && !useStockFallback && loadingScreen != null;
 
     public double RenderOrder => 1.5;
     public int RenderRange => 9998;
@@ -52,8 +73,11 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
         HasRendered = false;
         loggedFirstPaint = false;
         loggedResolve = false;
+        loggedReopen = false;
         useStockFallback = false;
-        detail = "";
+        screenHeld = false;
+        vanillaLine = "";
+        dvDetail = "";
         stockFallback?.Hide();
         Resolve();
     }
@@ -62,16 +86,16 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
     {
         active = false;
         stockFallback?.Hide();
+        RestoreRunningScreen();
     }
 
     public void SetProgress(float fraction, string detail)
     {
-        this.detail = detail ?? "";
+        dvDetail = detail ?? "";
         ApplyLoadingText();
-        stockFallback?.SetProgress(fraction, this.detail);
+        stockFallback?.SetProgress(fraction, dvDetail);
     }
 
-    /// <summary>No-op — vanilla loading screen does not fade; release hides it.</summary>
     public void SetOverlayAlpha(float alpha) { }
 
     public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
@@ -82,14 +106,15 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
             || stage == EnumRenderStage.AfterFinalComposition;
         if (!drawPass) return;
 
-        // Must run before RenderToDefaultFramebuffer — that call can block on async sound.
         OnRenderPulse?.Invoke(deltaTime);
 
         if (!useStockFallback && loadingScreen != null)
         {
+            EnsureLoadingScreenCurrent();
+            ApplyLoadingText();
+
             try
             {
-                ApplyLoadingText();
                 loadingScreen.RenderToDefaultFramebuffer(deltaTime);
                 HasRendered = true;
                 if (!loggedFirstPaint)
@@ -98,17 +123,16 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
                     capi.Logger.Notification(
                         "[DistantVistas] Login sweep: vanilla loading screen painted.");
                 }
-                return;
             }
             catch (Exception ex)
             {
                 capi.Logger.Warning(
                     "[DistantVistas] Login sweep: vanilla loading draw failed ({0}) — stock fallback.",
                     ex.Message);
-                useStockFallback = true;
-                stockFallback ??= new LodLoginBakeStockLoadingFallback(capi);
-                stockFallback.Show();
+                SwitchToStockFallback();
             }
+
+            if (HasRendered) return;
         }
 
         stockFallback?.OnRenderFrame(deltaTime, stage);
@@ -116,12 +140,55 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
             HasRendered = true;
     }
 
+    void EnsureLoadingScreenCurrent()
+    {
+        if (screenManager == null || loadingScreen == null) return;
+        GuiScreen? current = CurrentScreenField?.GetValue(screenManager) as GuiScreen;
+        if (current == loadingScreen) return;
+
+        if (!loggedReopen)
+        {
+            loggedReopen = true;
+            capi.Logger.Notification(
+                "[DistantVistas] Login sweep: re-opening vanilla world loading screen.");
+        }
+
+        TryActivateLoadingScreen(fromCache: true);
+    }
+
     void ApplyLoadingText()
     {
         if (screenManager == null) return;
-        screenManager.loadingText = string.IsNullOrWhiteSpace(detail)
-            ? "Loading…"
-            : detail;
+
+        if (string.IsNullOrWhiteSpace(vanillaLine))
+            CaptureVanillaLine();
+
+        screenManager.loadingText = FormatLoadingText(vanillaLine, dvDetail);
+    }
+
+    void CaptureVanillaLine()
+    {
+        if (screenManager == null) return;
+        string current = screenManager.loadingText ?? "";
+        if (string.IsNullOrWhiteSpace(current))
+        {
+            vanillaLine = "Loading…";
+            return;
+        }
+
+        int sep = current.IndexOf(" — ", StringComparison.Ordinal);
+        vanillaLine = sep > 0 ? current[..sep] : current;
+    }
+
+    static string FormatLoadingText(string vanilla, string dv)
+    {
+        if (string.IsNullOrWhiteSpace(dv))
+            return string.IsNullOrWhiteSpace(vanilla) ? "Loading…" : vanilla;
+        if (string.IsNullOrWhiteSpace(vanilla) || vanilla == dv)
+            return dv;
+        if (vanilla.Contains(dv, StringComparison.Ordinal))
+            return vanilla;
+        return vanilla + " — " + dv;
     }
 
     void Resolve()
@@ -129,43 +196,94 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
         try
         {
             var clientMain = (ClientMain)capi.World;
-            GuiScreenRunningGame running = clientMain.ScreenRunningGame;
-            screenManager = running.ScreenManager;
+            runningScreen = clientMain.ScreenRunningGame;
+            screenManager = runningScreen.ScreenManager;
+
             loadingScreen = FindCachedLoadingScreen(screenManager);
+            bool created = false;
             if (loadingScreen == null)
             {
-                capi.Logger.Warning(
-                    "[DistantVistas] Login sweep: no cached vanilla loading screen — stock fallback.");
-                useStockFallback = true;
-                stockFallback = new LodLoginBakeStockLoadingFallback(capi);
-                stockFallback.Show();
+                loadingScreen = new GuiScreenLoadingGame(
+                    screenManager, runningScreen.ParentScreen ?? runningScreen);
+                created = true;
                 capi.Logger.Notification(
-                    "[DistantVistas] Login sweep: stock Loading… fallback (vanilla screen unavailable).");
+                    "[DistantVistas] Login sweep: created vanilla world loading screen instance.");
+            }
+
+            if (!TryActivateLoadingScreen(fromCache: !created))
+            {
+                capi.Logger.Warning(
+                    "[DistantVistas] Login sweep: could not activate vanilla loading screen — stock fallback.");
+                SwitchToStockFallback();
                 return;
             }
 
+            CaptureVanillaLine();
             ApplyLoadingText();
 
             if (!loggedResolve)
             {
                 loggedResolve = true;
                 capi.Logger.Notification(
-                    "[DistantVistas] Login sweep: using vanilla world loading screen during visit bake.");
+                    "[DistantVistas] Login sweep: holding vanilla world loading screen during visit bake.");
             }
-            return;
         }
         catch (Exception ex)
         {
             capi.Logger.Warning(
                 "[DistantVistas] Login sweep: could not attach to vanilla loading screen ({0}) — stock fallback.",
                 ex.Message);
+            SwitchToStockFallback();
         }
+    }
 
+    void SwitchToStockFallback()
+    {
         useStockFallback = true;
-        stockFallback = new LodLoginBakeStockLoadingFallback(capi);
+        screenHeld = false;
+        stockFallback ??= new LodLoginBakeStockLoadingFallback(capi);
         stockFallback.Show();
         capi.Logger.Notification(
-            "[DistantVistas] Login sweep: stock Loading… fallback (vanilla screen unavailable).");
+            "[DistantVistas] Login sweep: stock Loading… fallback (opaque cover).");
+    }
+
+    bool TryActivateLoadingScreen(bool fromCache)
+    {
+        if (screenManager == null || loadingScreen == null) return false;
+
+        try
+        {
+            MethodInfo? method = fromCache ? LoadScreenNoLoadCallMethod : LoadScreenMethod;
+            method ??= LoadScreenNoLoadCallMethod ?? LoadScreenMethod;
+            if (method == null) return false;
+
+            method.Invoke(screenManager, new object[] { loadingScreen });
+            screenHeld = true;
+            return true;
+        }
+        catch (Exception ex)
+        {
+            capi.Logger.Warning(
+                "[DistantVistas] Login sweep: LoadScreen failed ({0}).", ex.Message);
+            return false;
+        }
+    }
+
+    void RestoreRunningScreen()
+    {
+        if (!screenHeld || screenManager == null || runningScreen == null) return;
+        try
+        {
+            LoadScreenNoLoadCallMethod?.Invoke(screenManager, new object[] { runningScreen });
+        }
+        catch
+        {
+            // Best-effort restore on release.
+        }
+        finally
+        {
+            screenHeld = false;
+        }
     }
 
     static GuiScreenLoadingGame? FindCachedLoadingScreen(ScreenManager sm)
@@ -203,6 +321,7 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
     public void Dispose()
     {
         active = false;
+        RestoreRunningScreen();
         stockFallback?.Dispose();
         capi.Event.UnregisterRenderer(this, EnumRenderStage.Ortho);
         capi.Event.UnregisterRenderer(this, EnumRenderStage.AfterFinalComposition);

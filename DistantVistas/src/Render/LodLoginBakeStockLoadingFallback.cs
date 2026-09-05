@@ -15,7 +15,7 @@ public sealed class LodLoginBakeStockLoadingFallback : IRenderer, IDisposable
     public bool IsReady => stock.Active;
     public bool HasRendered => stock.HasEverPaintedOpaque;
 
-    public double RenderOrder => 1.6;
+    public double RenderOrder => 3.0;
     public int RenderRange => 9998;
 
     public LodLoginBakeStockLoadingFallback(ICoreClientAPI capi)

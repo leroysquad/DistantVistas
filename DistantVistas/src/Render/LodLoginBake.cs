@@ -194,6 +194,7 @@ public sealed class LodLoginBake
 
         overlay.Show();
         renderer.LoginBakeOverlayActive = true;
+        LodLoginBakeSweepGate.Arm();
 
         LodLoginSweepResume? resume = LodLoginSweepResume.TryLoad(capi);
         if (resume != null && resume.IsEligible(capi.World))
@@ -284,8 +285,7 @@ public sealed class LodLoginBake
             }
             else
             {
-                capi.Logger.Warning(
-                    "[DistantVistas] Login visit sweep: vanilla loading screen not painted — continuing sweep anyway.");
+                NoteLoadingCoverUnpainted();
             }
 
             capi.Logger.Notification(
@@ -310,6 +310,13 @@ public sealed class LodLoginBake
         overlay.UpdateProgress(1f, "Entering play (sweep aborted)…");
         renderer.LoginBakeComplete = true;
         Teardown(success: false);
+    }
+
+    /// <summary>Never abort into play solely because the loading cover failed to paint.</summary>
+    void NoteLoadingCoverUnpainted()
+    {
+        capi.Logger.Warning(
+            "[DistantVistas] Login visit sweep: loading cover not painted yet — keeping sweep active (no abort).");
     }
 
     void PlanSweepQueue()
@@ -721,6 +728,7 @@ public sealed class LodLoginBake
         statusWriter.TouchAdvance(success ? "release-success" : "release-cancel");
         statusWriter.WriteNow(Phase.Done, sweepModeLabel, total, finished, force: true);
         statusWriter.Clear();
+        LodLoginBakeSweepGate.Release();
     }
 
     /// <summary>
@@ -758,6 +766,7 @@ public sealed class LodLoginBake
         statusWriter.TouchAdvance(keepResume ? "release-paused" : "release-cancel");
         statusWriter.WriteNow(Phase.Done, sweepModeLabel, total, finished, force: true);
         statusWriter.Clear();
+        LodLoginBakeSweepGate.Release();
 
         if (!keepResume)
             LodLoginSweepResume.Delete(capi);

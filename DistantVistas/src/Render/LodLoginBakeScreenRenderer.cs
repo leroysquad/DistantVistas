@@ -103,7 +103,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         }
     }
 
-    public double RenderOrder => 2.0;
+    public double RenderOrder => stockOnly ? 3.0 : 2.0;
     public int RenderRange => 9999;
 
     public void SetProgress(float progress, string detail)
@@ -144,7 +144,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
             return;
         }
 
-        bool drewOpaque = DrawFullFrame(w, h, orthoPass, countHealth: orthoPass);
+        bool drewOpaque = DrawFullFrame(w, h, orthoPass, countHealth: orthoPass || stockOnly);
         if (!drewOpaque && orthoPass)
             ConsecutiveOpaqueFrames = 0;
     }
@@ -154,7 +154,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         bool drewOpaque = DrawOpaqueCover(w, h, orthoPass);
         if (!drewOpaque) return false;
 
-        if (countHealth)
+        if (countHealth || stockOnly)
         {
             ConsecutiveOpaqueFrames++;
             if (!HasEverPaintedOpaque)
