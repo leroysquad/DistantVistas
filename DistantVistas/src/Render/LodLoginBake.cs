@@ -44,6 +44,7 @@ public sealed class LodLoginBake
     readonly Block? plantTintFallback;
     readonly System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf;
     readonly Queue<long> pending = new();
+    readonly HashSet<long> completedKeys = new();
     readonly List<double> stabilizeWindow = new(128);
     readonly List<double> windowMedians = new(8);
     readonly EntityPos restorePos = new();
@@ -64,6 +65,7 @@ public sealed class LodLoginBake
     StopPhase stopPhase;
     int stopTicks;
     bool restoreCaptured;
+    bool resuming;
 
     public Phase CurrentPhase => phase;
     public bool Active => phase != Phase.Done;
@@ -107,17 +109,57 @@ public sealed class LodLoginBake
         hudHide = new LodLoginBakeHudHide(capi);
         playerHide = new LodLoginBakePlayerHide(capi);
         seasonSamples = new LodSeasonSampleExporter(capi);
+        overlay.OnCancelRequested = CancelAndSave;
+    }
+
+    /// <summary>Escape during the overlay — save remaining queue and release controls.</summary>
+    public void CancelAndSave()
+    {
+        if (phase == Phase.Done || released) return;
+        int left = pending.Count + (currentKey != null ? 1 : 0);
+        if (left <= 0 && phase is not Phase.Sweeping and not Phase.WaitingForWorld)
+        {
+            Teardown(success: false);
+            return;
+        }
+
+        SaveResumeSnapshot();
+        capi.Logger.Notification(
+            "[DistantVistas] Login visit sweep paused — {0} region(s) remaining. Relog to resume (same season or within {1} days).",
+            left, (int)LodLoginSweepResume.MaxResumeDayGap);
+        overlay.UpdateProgress(Progress,
+            $"Paused — {left} region(s) saved. Relog to resume (Esc again cancelled).");
+        Teardown(success: false, keepResume: true);
     }
 
     public void Begin()
     {
         pending.Clear();
-        LodLoginSweepPlan plan = LodLoginSweepBootstrap.Plan(pipeline.World, capi.World);
-        sweepMode = plan.Mode;
-        sweepModeLabel = plan.ModeLabel;
-        foreach (long key in plan.Keys)
-            pending.Enqueue(key);
-        total = pending.Count;
+        completedKeys.Clear();
+        LodLoginSweepResume? resume = LodLoginSweepResume.TryLoad(capi);
+        if (resume != null && resume.IsEligible(capi.World))
+        {
+            ApplyResume(resume);
+            resuming = true;
+        }
+        else
+        {
+            resuming = false;
+            if (resume != null)
+            {
+                LodLoginSweepResume.Delete(capi);
+                capi.Logger.Notification(
+                    "[DistantVistas] Saved login sweep expired (season/day limit) — planning a fresh sweep.");
+            }
+
+            LodLoginSweepPlan plan = LodLoginSweepBootstrap.Plan(pipeline.World, capi.World);
+            sweepMode = plan.Mode;
+            sweepModeLabel = plan.ModeLabel;
+            foreach (long key in plan.Keys)
+                pending.Enqueue(key);
+            total = pending.Count;
+        }
+
         sweepTiming.Begin();
         finished = 0;
         worldWaitTicks = 0;
@@ -139,11 +181,23 @@ public sealed class LodLoginBake
         gameMode.EnsureCreative();
         hudHide.EnsureHidden();
         playerHide.EnsureHidden();
-        capi.Logger.Notification(
-            "[DistantVistas] Login visit sweep: {0} — {1} L0 region{2}.",
-            sweepModeLabel, total, total == 1 ? "" : "s");
+        if (resuming)
+        {
+            capi.Logger.Notification(
+                "[DistantVistas] Login visit sweep resuming: {0} — {1} left ({2}/{3} done).",
+                sweepModeLabel, pending.Count, finished, total);
+        }
+        else
+        {
+            capi.Logger.Notification(
+                "[DistantVistas] Login visit sweep: {0} — {1} L0 region{2}.",
+                sweepModeLabel, total, total == 1 ? "" : "s");
+        }
         seasonSamples.BeginSession(sweepMode, sweepModeLabel, total);
-        overlay.UpdateProgress(Progress, StatusWithEta($"{sweepModeLabel} — waiting for world to load…"));
+        string startMsg = resuming
+            ? $"{sweepModeLabel} — resuming ({finished}/{total} done)…"
+            : $"{sweepModeLabel} — waiting for world to load…";
+        overlay.UpdateProgress(Progress, StatusWithEta($"{startMsg} (Esc to pause & save)"));
 
         if (total == 0)
         {
@@ -252,6 +306,8 @@ public sealed class LodLoginBake
             case StopPhase.Bake:
                 BakeAndPersist(key);
                 finished++;
+                completedKeys.Add(key);
+                SaveResumeSnapshot();
                 sweepTiming.NoteFinished(finished);
                 stopPhase = StopPhase.Done;
                 currentKey = null;
@@ -450,7 +506,7 @@ public sealed class LodLoginBake
     /// Single idempotent teardown for success, abort, error, and world leave.
     /// Undoes overlay, pose, controls, audio mute, and calendar freeze with no leftovers.
     /// </summary>
-    void Teardown(bool success)
+    void Teardown(bool success, bool keepResume = false)
     {
         if (released) return;
 
@@ -460,6 +516,9 @@ public sealed class LodLoginBake
 
         if (success)
             renderer.LoginBakeComplete = true;
+
+        if (success || !keepResume)
+            LodLoginSweepResume.Delete(capi);
 
         try
         {
@@ -568,6 +627,59 @@ public sealed class LodLoginBake
         playerHide.EnsureHidden();
     }
 
+    void ApplyResume(LodLoginSweepResume resume)
+    {
+        sweepMode = resume.SweepMode;
+        sweepModeLabel = resume.SweepModeLabel;
+        total = resume.PlannedTotal;
+        finished = resume.Finished;
+        resweepRound = resume.ResweepRound;
+        retryingMisses = resume.RetryingMisses;
+        foreach (long key in resume.Completed)
+            completedKeys.Add(key);
+        pending.Clear();
+        foreach (long key in resume.Pending)
+            pending.Enqueue(key);
+        restorePos.SetPos(resume.RestoreX, resume.RestoreY, resume.RestoreZ);
+        restorePos.Yaw = resume.RestoreYaw;
+        restorePos.Pitch = resume.RestorePitch;
+        restoreCaptured = true;
+    }
+
+    void SaveResumeSnapshot()
+    {
+        if (released || phase == Phase.Done) return;
+
+        int left = pending.Count + (currentKey != null ? 1 : 0);
+        if (left <= 0 && phase is not Phase.Sweeping and not Phase.WaitingForWorld)
+            return;
+
+        LodLoginSweepResume snap = LodLoginSweepResume.CaptureCalendar(capi);
+        snap.SweepMode = sweepMode;
+        snap.SweepModeLabel = sweepModeLabel;
+        snap.PlannedTotal = total;
+        snap.Finished = finished;
+        snap.ResweepRound = resweepRound;
+        snap.RetryingMisses = retryingMisses;
+        snap.Completed = completedKeys.ToList();
+
+        var pendingList = new List<long>(pending);
+        if (currentKey != null)
+            pendingList.Insert(0, currentKey.Value);
+        snap.Pending = pendingList;
+
+        if (restoreCaptured)
+        {
+            snap.RestoreX = restorePos.X;
+            snap.RestoreY = restorePos.Y;
+            snap.RestoreZ = restorePos.Z;
+            snap.RestoreYaw = restorePos.Yaw;
+            snap.RestorePitch = restorePos.Pitch;
+        }
+
+        snap.Save(capi);
+    }
+
     void HoldPlayerPose(EntityPlayer entity)
     {
         if (phase == Phase.Sweeping && currentKey != null)
@@ -592,20 +704,8 @@ public sealed class LodLoginBake
         capi.Input.MousePitch = pose.Pitch;
     }
 
-    static void BlockPlayerInput(EntityControls controls)
-    {
-        controls.StopAllMovement();
-        controls.MovespeedMultiplier = 0f;
-        controls.WalkVector.Set(0, 0, 0);
-        controls.FlyVector.Set(0, 0, 0);
-        controls.IsFlying = true;
-        controls.NoClip = true;
-        controls.Gliding = false;
-        controls.DetachedMode = false;
-
-        for (int i = 0; i <= (int)EnumEntityAction.InWorldRightMouseDown; i++)
-            controls[(EnumEntityAction)i] = false;
-    }
+    static void BlockPlayerInput(EntityControls controls) =>
+        LodLoginBakeInputLock.Apply(controls);
 
     void ReleasePlayerControls()
     {
@@ -640,5 +740,10 @@ public sealed class LodLoginBake
             ? detail + sweepTiming.EtaSuffix(finished, total)
             : detail;
 
-    public void Dispose() => Teardown(success: false);
+    public void Dispose()
+    {
+        if (Active)
+            SaveResumeSnapshot();
+        Teardown(success: false, keepResume: true);
+    }
 }

@@ -1,3 +1,7 @@
+## 0.7.95
+- **CRITICAL: BlockPlayerInput crash on VS 1.22.7.** Stopped iterating raw `EnumEntityAction` ints past indexer bounds; `LodLoginBakeInputLock` uses `StopAllMovement()` plus named properties and a guarded action list.
+- **Cancel / resume sweep saver.** Press **Esc** during the loader to pause and save remaining L0 keys to `ModData/distantvistas/login-sweep-resume.json`. On next login, resumes under the same overlay when still the **same season** or within **30 in-game days**; otherwise starts fresh. Progress also autosaves after each visited region and on world leave.
+
 ## 0.7.94
 - **VS 1.22.5 API compile fixes.** `IRenderAPI.CameraType` and `IInputAPI.MouseGrabbed` are read-only — player hide uses transparent tint + input guard only; `IList<Block>` for `world.Blocks`; bootstrap usings; screen renderer float/ref locals; cairo-sharp reference for Cairo title fallback.
 

@@ -11,6 +11,8 @@ public sealed class LodLoginBakeInputGuard : HudElement
 {
     bool wantActive;
 
+    public Action? OnCancelRequested;
+
     public LodLoginBakeInputGuard(ICoreClientAPI capi) : base(capi) { }
 
     public override string ToggleKeyCombinationCode => "";
@@ -31,7 +33,12 @@ public sealed class LodLoginBakeInputGuard : HudElement
 
     public override bool ShouldReceiveMouseEvents() => wantActive && IsOpened();
 
-    public override bool OnEscapePressed() => wantActive && IsOpened();
+    public override bool OnEscapePressed()
+    {
+        if (!wantActive || !IsOpened()) return false;
+        OnCancelRequested?.Invoke();
+        return true;
+    }
 
     public void RequestShow()
     {

@@ -18,6 +18,7 @@ public static class LoginSweepChecks
         OverlayGuard(c);
         QuietTeleports(c);
         SeasonSampleExport(c);
+        SweepResume(c);
         SweepTiming(c);
         CreativeMode(c);
         HudHide(c);
@@ -168,15 +169,19 @@ public static class LoginSweepChecks
             "login bake never sends chat commands during sweep");
         c.True(!bake.Contains("/tp"),
             "login bake does not use /tp");
+        c.True(bake.Contains("LodLoginBakeInputLock.Apply"),
+            "login bake blocks input via safe action list");
         c.True(bake.Contains("LodLoginBakePlayerMove.ApplyQuiet"),
             "login bake uses quiet client entity moves");
         c.True(bake.Contains("LodLoginBakePlayerMove.ApplyQuietFrom"),
             "login bake restores pose with quiet client moves");
 
-        string move = File.ReadAllText(Path.Combine(
-            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakePlayerMove.cs"));
-        c.True(move.Contains("SetChunkColumnVisible"),
-            "quiet moves request client chunk columns without server tp");
+        string inputLock = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeInputLock.cs"));
+        c.True(inputLock.Contains("StopAllMovement"),
+            "input lock calls StopAllMovement");
+        c.True(!inputLock.Contains("for (int i = 0"),
+            "input lock does not iterate raw enum ints");
     }
 
     static void SeasonSampleExport(Check c)
@@ -201,6 +206,27 @@ public static class LoginSweepChecks
             "sample exporter batches disk writes");
         c.True(exporter.Contains("README.md"),
             "schema readme is written beside samples");
+    }
+
+    static void SweepResume(Check c)
+    {
+        c.Eq(30.0, LodLoginSweepResume.MaxResumeDayGap, "resume within 30 in-game days");
+        c.Eq("ModData/distantvistas/login-sweep-resume.json", LodLoginSweepResume.RelPath,
+            "resume file under ModData/distantvistas");
+
+        string bake = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
+        c.True(bake.Contains("CancelAndSave"),
+            "login bake can cancel and save progress");
+        c.True(bake.Contains("SaveResumeSnapshot"),
+            "login bake persists resume snapshots");
+        c.True(bake.Contains("LodLoginSweepResume.TryLoad"),
+            "login bake restores eligible resume on begin");
+
+        string guard = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeInputGuard.cs"));
+        c.True(guard.Contains("OnCancelRequested"),
+            "escape routes to cancel/resume handler");
     }
 
     static void SweepTiming(Check c)

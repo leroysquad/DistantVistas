@@ -17,6 +17,12 @@ public sealed class LodLoginBakeOverlay : IDisposable
         inputGuard = new LodLoginBakeInputGuard(capi);
     }
 
+    public Action? OnCancelRequested
+    {
+        get => inputGuard.OnCancelRequested;
+        set => inputGuard.OnCancelRequested = value;
+    }
+
     public void UpdateProgress(float fraction, string detail) =>
         screen.SetProgress(fraction, detail);
 
