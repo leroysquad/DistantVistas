@@ -4,10 +4,13 @@ using Vintagestory.API.Common;
 namespace DistantVistas;
 
 /// <summary>
-/// Login-bake: resolve grass tops and foliage RGB through the game's climate + season
-/// colour maps at each block's lat/long and calendar moment. Stored albedo is multiplied
-/// once; tint slot 0 and <see cref="LodPaletteEntry.FlagBaked"/> tell the shader not to
-/// re-tint. Ground snow on a section follows a majority vote over snow-eligible columns.
+/// After a live visit capture: lock per-column season appearance into the palette.
+///
+/// Capture (while the player is teleported there) stores real block ids — snow layers,
+/// green or snowy leaves, grass tops. Bake multiplies each column's atlas colour through
+/// Vintage Story's climate + season maps at that block's X/Y/Z, then sets
+/// <see cref="LodPaletteEntry.FlagBaked"/> so near and far LOD keep that paint until relog.
+/// Ground snow also follows a majority vote over snow-eligible captured surface columns.
 /// </summary>
 public static class LodSeasonBake
 {

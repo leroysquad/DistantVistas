@@ -1,3 +1,7 @@
+## 0.7.81
+- **Visit-sweep purpose locked.** Login pass exists to gather live season truth by being at each visited 64×64 canvas: re-capture loaded voxels (snow on ground, snowy/part-green trees, autumn tone) while teleported there under the full-screen overlay, season-bake per column top, persist to SQLite, propagate to parent mips so near and far LOD match until relog. Not finalize-time recolor of unloaded cache.
+- **Drain phase.** After all visits, mips and SQLite flush behind the overlay before frame-time release.
+
 ## 0.7.80
 - **Login visit sweep (replaces cache bake at finalize).** Full-screen opaque Distant Vistas loading UI covers the viewport while the client waits for the world/map to stream, then teleports the player (invisibly) to every visited L0 region so vanilla loads real terrain and the mod re-captures + season-bakes what is actually there now. Progress shows N/total and status; original pose is restored before release. No mid-play season remap after sweep (unchanged from 0.7.79).
 - **Discarded:** immediate SQLite palette bake on `LevelFinalize` — cached rows lack current-season truth until chunks load and the player visits.

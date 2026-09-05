@@ -6,7 +6,8 @@ using Vintagestory.API.MathTools;
 namespace DistantVistas;
 
 /// <summary>
-/// Pure helpers for the login visit sweep: section footprints, chunk columns, readiness.
+/// Helpers for the login visit sweep: which L0 canvases to revisit, chunk coverage,
+/// and world-readiness before teleports begin.
 /// </summary>
 public static class LodLoginSweep
 {

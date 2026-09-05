@@ -2,17 +2,24 @@ using System.Diagnostics;
 using System.Globalization;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
 
 namespace DistantVistas;
 
 /// <summary>
-/// Login visit sweep: wait for the world to stream, teleport the player (hidden) to each
-/// visited L0 section, re-capture live terrain, season-bake, restore pose, then release.
+/// Login visit sweep — gather live season truth by being at each visited square.
+///
+/// Purpose (locked): teleport the player (hidden behind a full-screen overlay) to every
+/// previously visited L0 canvas cell so vanilla streams real chunks. The mod re-captures
+/// voxel columns from that loaded terrain (snow blocks, leaf species, grass tops) and
+/// season-bakes palette colours per column top. Those canvases persist to SQLite and
+/// stay painted in near and far LOD until the next login. This is NOT a finalize-time
+/// recolor of unloaded cache rows.
 /// </summary>
 public sealed class LodLoginBake
 {
-    public enum Phase { WaitingForWorld, Sweeping, Stabilizing, Done }
+    public enum Phase { WaitingForWorld, Sweeping, Draining, Stabilizing, Done }
 
     enum StopPhase { Teleport, WaitChunks, Capture, Bake, Done }
 
@@ -20,6 +27,7 @@ public sealed class LodLoginBake
     const int StabilizeWindowsRequired = 4;
     const double StabilizeMaxMs = 28.0;
     const double StabilizeTimeoutSec = 12.0;
+    const int MaxDrainTicks = 600;
 
     readonly ICoreClientAPI capi;
     readonly LodPipeline pipeline;
@@ -36,6 +44,7 @@ public sealed class LodLoginBake
     int total;
     int finished;
     int worldWaitTicks;
+    int drainTicks;
     Phase phase = Phase.WaitingForWorld;
     long? currentKey;
     StopPhase stopPhase;
@@ -50,7 +59,9 @@ public sealed class LodLoginBake
         {
             if (phase == Phase.WaitingForWorld) return 0.03f;
             if (phase == Phase.Sweeping)
-                return total <= 0 ? 0.05f : 0.05f + (float)finished / total * 0.80f;
+                return total <= 0 ? 0.05f : 0.05f + (float)finished / total * 0.75f;
+            if (phase == Phase.Draining)
+                return 0.80f + Math.Min(0.05f, drainTicks / (float)MaxDrainTicks * 0.05f);
             if (phase == Phase.Stabilizing)
             {
                 float settle = Math.Min(1f, (float)windowMedians.Count / StabilizeWindowsRequired);
@@ -84,6 +95,7 @@ public sealed class LodLoginBake
         total = pending.Count;
         finished = 0;
         worldWaitTicks = 0;
+        drainTicks = 0;
         phase = Phase.WaitingForWorld;
         currentKey = null;
         restoreCaptured = false;
@@ -94,7 +106,7 @@ public sealed class LodLoginBake
         overlay.UpdateProgress(Progress, "Waiting for world to load…");
 
         if (total == 0)
-            BeginStabilizing();
+            BeginDraining();
     }
 
     public void Tick(float dt)
@@ -110,6 +122,9 @@ public sealed class LodLoginBake
                 break;
             case Phase.Sweeping:
                 TickSweeping();
+                break;
+            case Phase.Draining:
+                TickDraining();
                 break;
             case Phase.Stabilizing:
                 TickStabilizing(dt);
@@ -131,7 +146,7 @@ public sealed class LodLoginBake
 
         if (total == 0)
         {
-            BeginStabilizing();
+            BeginDraining();
             return;
         }
 
@@ -146,7 +161,7 @@ public sealed class LodLoginBake
             if (pending.Count == 0)
             {
                 RestorePlayerPose();
-                BeginStabilizing();
+                BeginDraining();
                 return;
             }
             BeginNextStop();
@@ -170,6 +185,7 @@ public sealed class LodLoginBake
                         $"Visiting {finished + 1}/{total} — loading terrain… ({stopTicks})");
                     return;
                 }
+                SweepColumnsAround(key);
                 pipeline.QueueL0SectionForce(key);
                 stopPhase = StopPhase.Capture;
                 stopTicks = 0;
@@ -181,14 +197,14 @@ public sealed class LodLoginBake
                     && stopTicks < LodLoginSweep.MaxCaptureWaitTicks)
                 {
                     overlay.UpdateProgress(Progress,
-                        $"Visiting {finished + 1}/{total} — capturing… ({Pct(finished, total)})");
+                        $"Visiting {finished + 1}/{total} — capturing live terrain… ({Pct(finished, total)})");
                     return;
                 }
                 stopPhase = StopPhase.Bake;
                 break;
 
             case StopPhase.Bake:
-                BakeSection(key);
+                BakeAndPersist(key);
                 finished++;
                 stopPhase = StopPhase.Done;
                 currentKey = null;
@@ -196,6 +212,28 @@ public sealed class LodLoginBake
                     $"Visited {finished}/{total} ({Pct(finished, total)})");
                 break;
         }
+    }
+
+    void TickDraining()
+    {
+        drainTicks++;
+        pipeline.DrainLoginMip(64);
+        pipeline.DrainLoginPersistence(24);
+
+        int mips = pipeline.World.MipDirty.Count;
+        overlay.UpdateProgress(Progress,
+            mips > 0
+                ? $"Updating distant land… ({mips} parent sections left)"
+                : "Saving visited canvases…");
+
+        if (!pipeline.HasPendingLoginMip && !pipeline.HasPendingLoginPersistence) 
+        {
+            BeginStabilizing();
+            return;
+        }
+
+        if (drainTicks >= MaxDrainTicks)
+            BeginStabilizing();
     }
 
     void BeginNextStop()
@@ -212,7 +250,19 @@ public sealed class LodLoginBake
             $"Visiting {finished + 1}/{total} — moving to region… ({Pct(finished, total)})");
     }
 
-    void BakeSection(long l0Key)
+    void SweepColumnsAround(long l0Key)
+    {
+        (double x, _, double z) = LodLoginSweep.VisitPosition(capi.World, l0Key);
+        int cx = (int)Math.Floor(x / GlobalConstants.ChunkSize);
+        int cz = (int)Math.Floor(z / GlobalConstants.ChunkSize);
+        pipeline.SweepLoadedColumns(cx, cz, 2);
+    }
+
+    /// <summary>
+    /// Lock season appearance from the freshly captured voxels: snow on columns,
+    /// leaf hue per species/height, ground tone from live maps at each block top.
+    /// </summary>
+    void BakeAndPersist(long l0Key)
     {
         LodWorld world = pipeline.World;
         if (!world.Sections.TryGetValue(l0Key, out LodSection? section))
@@ -222,14 +272,20 @@ public sealed class LodLoginBake
         }
         if (section == null) return;
 
-        int changed = LodSeasonBake.BakeSection(
+        LodSeasonBake.BakeSection(
             capi.World, section, l0Key, plantTintFallback, untintedOf);
-        if (changed > 0)
-        {
-            world.MarkChanged(l0Key);
-            pipeline.InvalidateGpuMesh?.Invoke(l0Key);
-            world.RenderDirty.Add(l0Key);
-        }
+
+        world.MarkChanged(l0Key);
+        pipeline.InvalidateGpuMesh?.Invoke(l0Key);
+        world.RenderDirty.Add(l0Key);
+    }
+
+    void BeginDraining()
+    {
+        RestorePlayerPose();
+        phase = Phase.Draining;
+        drainTicks = 0;
+        overlay.UpdateProgress(Progress, "Updating distant land…");
     }
 
     void BeginStabilizing()
@@ -276,7 +332,7 @@ public sealed class LodLoginBake
         overlay.UpdateProgress(1f, "Ready.");
         if (overlay.IsOpened()) overlay.TryClose();
         capi.Logger.Notification(
-            "[DistantVistas] Login visit sweep finished: {0}/{1} regions, season locked until relog.",
+            "[DistantVistas] Login visit sweep finished: {0}/{1} regions captured and locked until relog.",
             finished, total);
     }
 
@@ -321,6 +377,7 @@ public sealed class LodLoginBake
     public void Dispose()
     {
         RestorePlayerPose();
+        capi.World.Player.Entity.Controls.MovespeedMultiplier = 1f;
         if (overlay.IsOpened()) overlay.TryClose();
     }
 }

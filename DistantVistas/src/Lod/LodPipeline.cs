@@ -770,6 +770,19 @@ public class LodPipeline
 
     // ---- Persistence ----
 
+    /// <summary>Coarse LOD parents still absorbing L0 visit captures.</summary>
+    public bool HasPendingLoginMip => World.MipDirty.Count > 0;
+
+    /// <summary>SQLite rows or storage-thread backlog not flushed yet.</summary>
+    public bool HasPendingLoginPersistence =>
+        World.SaveDirty.Count > 0 || (storageThread?.Backlog ?? 0) > 0;
+
+    /// <summary>Push baked L0 colours into parent mips so far LOD matches near.</summary>
+    public void DrainLoginMip(int budget = 48) => World.ProcessPropagation(budget);
+
+    /// <summary>Queue dirty sections to the storage thread after visit sweep.</summary>
+    public void DrainLoginPersistence(int budget = 16) => SaveSomeDirtySections(budget);
+
     void SaveSomeDirtySections(int budget)
     {
         if (store == null || World.SaveDirty.Count == 0) return;

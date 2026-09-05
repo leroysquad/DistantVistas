@@ -40,7 +40,7 @@ public class LodLoginBakeOverlay : GuiDialog
             .CreateCompo("dvistas-login-sweep", dialogBounds)
             .AddGameOverlay(overlayBounds, new[] { 0.06, 0.08, 0.11, 1.0 })
             .AddStaticText("Distant Vistas", CairoFont.WhiteDetailText(), titleBounds)
-            .AddStaticText("Preparing visited land for this season…",
+            .AddStaticText("Preparing visited land — capturing what is there this season.",
                 CairoFont.WhiteSmallishText(), subtitleBounds)
             .AddStatbar(barBounds, new[] { 0.28, 0.55, 0.82 }, ProgressKey)
             .AddDynamicText("", CairoFont.WhiteSmallText(), detailBounds, StatusKey)
