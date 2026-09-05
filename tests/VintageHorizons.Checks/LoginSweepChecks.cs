@@ -79,6 +79,10 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSeasonBake.cs"));
         c.True(season.Contains("BakeSectionFromVisit"),
             "visit sweep uses exact GetColor bake path");
+        c.True(season.Contains("for (int col = 0; col < cols; col++)"),
+            "visit bake walks every captured column, not one colour per block id");
+        c.True(season.Contains("TrySetTopRunPaletteId"),
+            "visit bake splits palette rows per column when colours differ");
         c.True(season.Contains("block.GetColor(capi, pos)"),
             "visit bake samples vanilla GetColor at column top");
         c.True(bake.Contains("BakeSectionFromVisit"),

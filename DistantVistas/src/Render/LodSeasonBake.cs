@@ -255,9 +255,9 @@ public static class LodSeasonBake
     }
 
     /// <summary>
-    /// Login visit sweep: lock palette RGB from vanilla <c>GetColor</c> at each column
-    /// top while chunks are loaded. No shader reproduction or greener stable guesses —
-    /// rows stay unbaked when GetColor is unavailable so the audit re-queues the cell.
+    /// Login visit sweep: lock each column's top RGB from vanilla <c>GetColor</c> at that
+    /// column's world position. Splits palette rows when neighbours differ so the L0
+    /// cell stays mottled instead of one flat colour per block id.
     /// </summary>
     public static int BakeSectionFromVisit(
         ICoreClientAPI capi,
@@ -269,39 +269,36 @@ public static class LodSeasonBake
         IClientWorldAccessor world = capi.World;
         SnowVote vote = ComputeSnowVote(section, world.Blocks, sectionKey);
         int changed = 0;
-        for (int pid = 0; pid < section.Palette.Count; pid++)
+        int cols = LodSection.GridSize * LodSection.GridSize;
+
+        for (int col = 0; col < cols; col++)
         {
+            if (!section.Captured[col]) continue;
+            if (!section.TryGetTopRun(col, out ulong topRun)) continue;
+
+            int pid = LodSection.RunPaletteId(topRun);
+            if (pid < 0 || pid >= section.Palette.Count) continue;
+
             LodPaletteEntry entry = section.Palette[pid];
             if (entry.BlockId <= 0 || entry.BlockId >= world.Blocks.Length) continue;
+
             Block block = world.Blocks[entry.BlockId];
-            if (!section.TryFindPaletteTop(sectionKey, pid, out int x, out int y, out int z)) continue;
+            (int x, int y, int z) = LodPipeline.CaptureBlockPos(sectionKey, col, topRun);
 
             (int untinted, _) = untintedOf(block);
             untinted = LodPaletteRepair.KeepCapturedColor(
                 untinted, untinted, LodBlockPolicy.IsClimateUntinted(block));
 
-            if (!CanBake(block, untinted, plantTintFallback))
-            {
-                if ((entry.Flags & LodPaletteEntry.FlagBaked) != 0)
-                {
-                    entry.Flags = (byte)(entry.Flags & ~LodPaletteEntry.FlagBaked);
-                    entry.TintSlot = 0;
-                    section.Palette[pid] = entry;
-                    changed++;
-                }
-                continue;
-            }
+            if (!CanBake(block, untinted, plantTintFallback)) continue;
 
             int baked = SampleVanillaColor(capi, block, x, y, z);
             if (baked == 0)
             {
-                if ((entry.Flags & LodPaletteEntry.FlagBaked) != 0)
-                {
-                    entry.Flags = (byte)(entry.Flags & ~LodPaletteEntry.FlagBaked);
-                    entry.TintSlot = 0;
-                    section.Palette[pid] = entry;
+                byte liveFlags = (byte)(entry.Flags & ~LodPaletteEntry.FlagBaked);
+                int livePid = section.FindOrAddPaletteEntry(
+                    entry.BlockId, entry.Color, liveFlags, entry.TintSlot);
+                if (livePid != pid && section.TrySetTopRunPaletteId(col, livePid))
                     changed++;
-                }
                 continue;
             }
 
@@ -311,17 +308,27 @@ public static class LodSeasonBake
             if (vote.MajoritySnow && IsSnowEligibleGround(block))
                 baked = BlendTowardSnow(baked, 0.72f);
 
-            if (baked == entry.Color && (entry.Flags & LodPaletteEntry.FlagBaked) != 0
-                && entry.TintSlot == LodTintRegistry.SlotNone)
+            byte bakedFlags = (byte)(entry.Flags | LodPaletteEntry.FlagBaked);
+            int targetPid = section.FindOrAddPaletteEntry(
+                entry.BlockId, baked, bakedFlags, LodTintRegistry.SlotNone);
+
+            if (targetPid != pid)
             {
+                if (section.TrySetTopRunPaletteId(col, targetPid))
+                    changed++;
                 continue;
             }
 
-            entry.Color = baked;
-            entry.Flags = (byte)(entry.Flags | LodPaletteEntry.FlagBaked);
-            entry.TintSlot = LodTintRegistry.SlotNone;
-            section.Palette[pid] = entry;
-            changed++;
+            if (entry.Color != baked
+                || entry.TintSlot != LodTintRegistry.SlotNone
+                || (entry.Flags & LodPaletteEntry.FlagBaked) == 0)
+            {
+                entry.Color = baked;
+                entry.Flags = bakedFlags;
+                entry.TintSlot = LodTintRegistry.SlotNone;
+                section.Palette[pid] = entry;
+                changed++;
+            }
         }
 
         if (changed > 0) section.InvalidatePaletteSnapshot();

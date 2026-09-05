@@ -705,7 +705,6 @@ public class LodPipeline
     {
         LodSection section = World.GetOrCreateSection(result.SectionKey);
 
-        var pidByBlockId = new Dictionary<int, int>();
         ulong[]?[] batch = result.RunsByColumn;
 
         for (int col = 0; col < batch.Length; col++)
@@ -717,15 +716,9 @@ public class LodPipeline
             for (int i = 0; i < runs.Length; i++)
             {
                 int blockId = LodSection.RunPaletteId(runs[i]); // raw block id from capture
-                if (!pidByBlockId.TryGetValue(blockId, out int pid))
-                {
-                    // One palette entry per block id per section, coloured from the first
-                    // run seen. For chiselled blocks that means one chisel's material mix
-                    // stands in for the whole section - coarse, but theirs, where the
-                    // centre probe answered with the placeholder texture for all of them.
-                    pid = RegisterPaletteEntry(section, result.SectionKey, blockId, col, runs[i]);
-                    pidByBlockId[blockId] = pid;
-                }
+                // Per-column palette registration: same block id at different columns
+                // keeps its own sampled colour instead of one manila fill for the cell.
+                int pid = RegisterPaletteEntry(section, result.SectionKey, blockId, col, runs[i]);
 
                 // Decorative ground cover never becomes terrain: a flower would
                 // otherwise be a solid, pale-grey 1-block cube.

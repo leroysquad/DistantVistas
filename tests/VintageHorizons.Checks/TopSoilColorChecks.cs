@@ -63,7 +63,8 @@ public static class TopSoilColorChecks
     {
         c.Eq(0f, LodTopSoil.UntintedShare(0f, 0f, 0.5f), "a black block has no untinted share rather than a NaN");
         c.Eq(1f, LodTopSoil.GreenerCoverage(1f), "full coverage stays capped at 1");
-        c.True(LodTopSoil.GreenerCoverage(0.5f) > 0.5f, "greener bias lifts mid coverage");
+        c.True(LodTopSoil.GreenerCoverage(0.5f) > 0.5f,
+            "legacy stable topsoil bias lifts mid coverage (not used on visit bake)");
 
         foreach (float a in new[] { 0f, 0.001f, 0.999f, 1f })
         foreach (float soil in new[] { 0f, 1f, 255f })

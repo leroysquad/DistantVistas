@@ -316,7 +316,9 @@ public class LodSection
     {
         for (int i = 0; i < Palette.Count; i++)
         {
-            if (Palette[i].BlockId == blockId) return i;
+            LodPaletteEntry e = Palette[i];
+            if (e.BlockId == blockId && e.Color == color && e.Flags == flags && e.TintSlot == tintSlot)
+                return i;
         }
         Palette.Add(new LodPaletteEntry
         {
@@ -327,6 +329,24 @@ public class LodSection
         });
         snapPaletteCount = -1;
         return Palette.Count - 1;
+    }
+
+    /// <summary>Top run of a captured column (runs are stored top-down).</summary>
+    public bool TryGetTopRun(int col, out ulong run)
+    {
+        if (col < 0 || col >= Captured.Length || !Captured[col]) { run = 0; return false; }
+        int from = ColumnStart[col];
+        if (ColumnStart[col + 1] <= from) { run = 0; return false; }
+        run = Runs[from];
+        return true;
+    }
+
+    /// <summary>Point a column's top run at another palette row (per-column colour splits).</summary>
+    public bool TrySetTopRunPaletteId(int col, int newPaletteId)
+    {
+        if (!TryGetTopRun(col, out ulong run)) return false;
+        Runs[ColumnStart[col]] = PackRun(newPaletteId, RunYTop(run), RunYBottom(run));
+        return true;
     }
 
     /// <summary>

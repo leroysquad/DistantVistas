@@ -15,6 +15,7 @@ public static class SectionChecks
         ReplaceColumnsPaths(c);
         FlagRemoval(c);
         PaletteReuse(c);
+        PerColumnPaletteSplit(c);
         SnapshotSharesSectionArrays(c);
         ProvisionalQuadrants(c);
     }
@@ -177,17 +178,33 @@ public static class SectionChecks
     {
         var s = new LodSection();
         int first = s.FindOrAddPaletteEntry(blockId: 7, color: 0x00112233, flags: 0);
-        int again = s.FindOrAddPaletteEntry(blockId: 7, color: 0x00445566, flags: LodPaletteEntry.FlagWater);
+        int same = s.FindOrAddPaletteEntry(blockId: 7, color: 0x00112233, flags: 0);
+        int different = s.FindOrAddPaletteEntry(blockId: 7, color: 0x00445566, flags: 0);
         int other = s.FindOrAddPaletteEntry(blockId: 8, color: 0x00112233, flags: 0);
 
-        c.Eq(first, again, "the same block id reuses its palette slot");
-        c.Eq(2, s.Palette.Count, "reuse does not grow the palette");
+        c.Eq(first, same, "the same block id and colour reuses its palette slot");
+        c.Eq(3, s.Palette.Count, "different colours for one block id get separate slots");
+        c.True(first != different, "a different colour gets its own slot");
         c.True(first != other, "a different block id gets its own slot");
-
-        // Identity is the block id alone, so a re-add keeps the original colour and flags.
-        // Capture relies on that: it re-adds entries constantly and must not thrash them.
         c.Eq(0x00112233, s.Palette[first].Color, "reuse keeps the original colour");
-        c.Eq((byte)0, s.Palette[first].Flags, "reuse keeps the original flags");
+    }
+
+    static void PerColumnPaletteSplit(Check c)
+    {
+        var s = new LodSection();
+        int green = s.FindOrAddPaletteEntry(blockId: 1, color: 0x00509050, flags: 0);
+        int olive = s.FindOrAddPaletteEntry(blockId: 1, color: 0x00687840, flags: LodPaletteEntry.FlagBaked);
+        c.True(green != olive, "neighbouring grass tones are separate palette rows");
+        c.Eq(0x00509050, s.Palette[green].Color, "first tone is preserved");
+        c.Eq(0x00687840, s.Palette[olive].Color, "second tone is preserved");
+
+        s.SetColumn(0, new[] { LodSection.PackRun(green, 40, 0) });
+        s.SetColumn(1, new[] { LodSection.PackRun(green, 40, 0) });
+        c.True(s.TrySetTopRunPaletteId(1, olive), "a column can point at its own palette row");
+        c.Eq(olive, LodSection.RunPaletteId(s.ColumnRuns(1)[0]),
+            "column 1 now carries the olive top colour");
+        c.Eq(green, LodSection.RunPaletteId(s.ColumnRuns(0)[0]),
+            "column 0 still carries the green top colour");
     }
 
     static bool IsMonotonic(int[] starts)
