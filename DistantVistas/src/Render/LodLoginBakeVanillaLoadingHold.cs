@@ -33,6 +33,11 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
     bool loggedFirstPaint;
     bool loggedResolve;
 
+    /// <summary>
+    /// Fired at the start of each draw pass, before any blocking vanilla loading draw.
+    /// </summary>
+    public Action<float>? OnRenderPulse;
+
     public bool IsReady => loadingScreen != null || stockFallback?.IsReady == true;
     public bool HasRendered { get; private set; }
 
@@ -76,6 +81,9 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
         bool drawPass = stage == EnumRenderStage.Ortho
             || stage == EnumRenderStage.AfterFinalComposition;
         if (!drawPass) return;
+
+        // Must run before RenderToDefaultFramebuffer — that call can block on async sound.
+        OnRenderPulse?.Invoke(deltaTime);
 
         if (!useStockFallback && loadingScreen != null)
         {
@@ -123,18 +131,18 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
             var clientMain = (ClientMain)capi.World;
             GuiScreenRunningGame running = clientMain.ScreenRunningGame;
             screenManager = running.ScreenManager;
-            bool createdNew = false;
             loadingScreen = FindCachedLoadingScreen(screenManager);
             if (loadingScreen == null)
             {
-                loadingScreen = new GuiScreenLoadingGame(screenManager, running.ParentScreen ?? running);
-                createdNew = true;
+                capi.Logger.Warning(
+                    "[DistantVistas] Login sweep: no cached vanilla loading screen — stock fallback.");
+                useStockFallback = true;
+                stockFallback = new LodLoginBakeStockLoadingFallback(capi);
+                stockFallback.Show();
+                capi.Logger.Notification(
+                    "[DistantVistas] Login sweep: stock Loading… fallback (vanilla screen unavailable).");
+                return;
             }
-
-            // Re-calling OnScreenLoaded on a cached screen re-triggers async asset/sound
-            // loading and can deadlock the client while the sweep holds the loading UI.
-            if (createdNew)
-                loadingScreen.OnScreenLoaded();
 
             ApplyLoadingText();
 
@@ -171,7 +179,6 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
         Type loadingType = typeof(GuiScreenLoadingGame);
         foreach (System.Collections.DictionaryEntry entry in dict)
         {
-            // VS 1.22.x ScreenManager.CachedScreens is Dictionary<Type, GuiScreen>.
             if (entry.Key is Type t && t == loadingType && entry.Value is GuiScreenLoadingGame loading)
                 return loading;
         }

@@ -82,8 +82,10 @@ public static class LoginSweepChecks
             "vanilla hold updates ScreenManager.loadingText");
         c.True(hold.Contains("LoadAndCacheScreen"),
             "vanilla hold uses engine cache API when available");
-        c.True(hold.Contains("createdNew"),
-            "vanilla hold only calls OnScreenLoaded on fresh instances");
+        c.True(hold.Contains("OnRenderPulse"),
+            "vanilla hold pulses sweep before blocking draw");
+        c.True(!hold.Contains("new GuiScreenLoadingGame"),
+            "vanilla hold does not construct fresh loading screens");
 
         string screen = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeScreenRenderer.cs"));
@@ -226,16 +228,25 @@ public static class LoginSweepChecks
             "vanilla hold re-renders native loading UI each frame");
 
         string driver = File.ReadAllText(Path.Combine(
-            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeRenderDriver.cs"));
-        c.True(driver.Contains("LodLoginBakeRenderDriver"),
-            "render driver exists for sweep while game ticks stall");
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakePulse.cs"));
+        c.True(driver.Contains("LodLoginBakePulse"),
+            "render pulse drives sweep while game ticks stall");
         c.True(driver.Contains("PollCancelFromRender"),
-            "render driver polls Esc each frame");
+            "render pulse polls Esc each frame");
+
+        string status = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepStatusWriter.cs"));
+        c.True(status.Contains("ModData/Logs/login-sweep-status.json"),
+            "sweep status heartbeat path");
+        c.True(status.Contains("StuckHint"),
+            "sweep status includes stuck hint");
 
         string mod = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "DistantVistasModSystem.cs"));
-        c.True(mod.Contains("LodLoginBakeRenderDriver"),
-            "mod registers render-frame sweep driver");
+        c.True(mod.Contains("LodLoginBakePulse"),
+            "mod wires render pulse from vanilla hold");
+        c.True(mod.Contains("OnRenderPulse"),
+            "mod connects vanilla hold render pulse");
     }
 
     static void QuietTeleports(Check c)
@@ -385,12 +396,16 @@ public static class LoginSweepChecks
         c.Eq(90.0, LodLoginSweepTiming.TargetMinSec, "sweep target min seconds");
         c.Eq(150.0, LodLoginSweepTiming.TargetMaxSec, "sweep target max seconds");
         c.Eq(6000, LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks,
-            "empty-canvas bootstrap radius default");
+            "empty-canvas bootstrap probe radius default");
         c.Eq(94, LodLoginSweepBootstrap.BootstrapCellRadius(),
             "6000 blocks is ~94 L0 cells radius at 64-block footprint");
+        c.Eq(43, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "bootstrap visit cap targets ~2.5 min at 3.5s/stop");
 
         string bootstrap = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepBootstrap.cs"));
+        c.True(bootstrap.Contains("BudgetVisitStops"),
+            "bootstrap applies hard visit stop budget");
         c.True(bootstrap.Contains("BootstrapCoastGuard"),
             "bootstrap can plan coast-guard ocean sweeps");
         c.True(bootstrap.Contains("BootstrapRadius"),

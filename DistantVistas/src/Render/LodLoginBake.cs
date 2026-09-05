@@ -47,6 +47,7 @@ public sealed class LodLoginBake
     readonly LodLoginBakeWorldHide worldHide;
     readonly LodSeasonSampleExporter seasonSamples;
     readonly LodLoginSweepTiming sweepTiming = new();
+    readonly LodLoginSweepStatusWriter statusWriter;
     readonly Block? plantTintFallback;
     readonly System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf;
     readonly Queue<long> pending = new();
@@ -124,6 +125,7 @@ public sealed class LodLoginBake
         playerHide = new LodLoginBakePlayerHide(capi);
         worldHide = new LodLoginBakeWorldHide(capi);
         seasonSamples = new LodSeasonSampleExporter(capi);
+        statusWriter = new LodLoginSweepStatusWriter(capi);
         overlay.OnCancelRequested = CancelAndSave;
     }
 
@@ -257,6 +259,8 @@ public sealed class LodLoginBake
             ? $"{sweepModeLabel} — resuming ({finished}/{total} done)…"
             : $"{sweepModeLabel} — preparing loading screen…";
         overlay.UpdateProgress(Progress, StatusWithEta($"{startMsg} (Esc to pause & save)"));
+        statusWriter.TouchAdvance("armed");
+        statusWriter.WriteNow(phase, sweepModeLabel, total, finished, force: true);
     }
 
     void TickOverlayWarmup()
@@ -272,6 +276,7 @@ public sealed class LodLoginBake
         if (!loggedWarmupComplete)
         {
             loggedWarmupComplete = true;
+            statusWriter.TouchAdvance("warmup-complete");
             if (overlay.HasRendered)
             {
                 capi.Logger.Notification(
@@ -340,7 +345,7 @@ public sealed class LodLoginBake
             return;
         }
 
-        LodLoginSweepPlan bootstrap = LodLoginSweepBootstrap.Plan(world, capi.World);
+        LodLoginSweepPlan bootstrap = LodLoginSweepBootstrap.Plan(world, capi.World, capi);
         sweepMode = bootstrap.Mode;
         sweepModeLabel = bootstrap.ModeLabel;
         foreach (long key in bootstrap.Keys)
@@ -375,6 +380,8 @@ public sealed class LodLoginBake
                 TickStabilizing(dt);
                 break;
         }
+
+        statusWriter.WriteNow(phase, sweepModeLabel, total, finished);
     }
 
     void TickWaitingForWorld()
@@ -397,6 +404,7 @@ public sealed class LodLoginBake
 
         phase = Phase.Sweeping;
         LogTeleportBegin();
+        statusWriter.TouchAdvance("teleports-begin");
         BeginNextStop();
     }
 
@@ -476,6 +484,7 @@ public sealed class LodLoginBake
                 completedKeys.Add(key);
                 SaveResumeSnapshot();
                 sweepTiming.NoteFinished(finished);
+                statusWriter.TouchAdvance($"region-{finished}-of-{total}");
                 stopPhase = StopPhase.BakeSettle;
                 stopTicks = 0;
                 overlay.UpdateProgress(Progress,
@@ -709,6 +718,9 @@ public sealed class LodLoginBake
         try { hudHide.Restore(); } catch { }
         try { playerHide.Restore(); } catch { }
         try { seasonSamples.Dispose(); } catch { }
+        statusWriter.TouchAdvance(success ? "release-success" : "release-cancel");
+        statusWriter.WriteNow(Phase.Done, sweepModeLabel, total, finished, force: true);
+        statusWriter.Clear();
     }
 
     /// <summary>
@@ -743,6 +755,9 @@ public sealed class LodLoginBake
         try { hudHide.Restore(); } catch { }
         try { playerHide.Restore(); } catch { }
         try { seasonSamples.Dispose(); } catch { }
+        statusWriter.TouchAdvance(keepResume ? "release-paused" : "release-cancel");
+        statusWriter.WriteNow(Phase.Done, sweepModeLabel, total, finished, force: true);
+        statusWriter.Clear();
 
         if (!keepResume)
             LodLoginSweepResume.Delete(capi);

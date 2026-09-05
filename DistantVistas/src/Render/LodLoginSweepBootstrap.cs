@@ -45,8 +45,14 @@ public readonly struct LodLoginSweepPlan
 /// </summary>
 public static class LodLoginSweepBootstrap
 {
-    /// <summary>Default bootstrap extent for empty canvas (tunable 4000–7000).</summary>
+    /// <summary>Default bootstrap probe radius for empty canvas (ocean/land classification).</summary>
     public const int EmptyCanvasBootstrapRadiusBlocks = 6000;
+
+    /// <summary>
+    /// Hard cap on bootstrap visit stops (~2.5 min at <see cref="LodLoginSweepTiming.InitialSecPerStop"/>).
+    /// </summary>
+    public static int BootstrapMaxVisitStops =>
+        LodLoginSweepTiming.BootstrapCellBudget(LodLoginSweepTiming.InitialSecPerStop);
 
     /// <summary>Ocean cells must span at least this many blocks to trigger coast-guard mode.</summary>
     public const int LargeOceanMinSpanBlocks = 1500;
@@ -61,7 +67,8 @@ public static class LodLoginSweepBootstrap
 
     public static LodLoginSweepPlan Plan(
         LodWorld world,
-        IClientWorldAccessor clientWorld)
+        IClientWorldAccessor clientWorld,
+        ICoreClientAPI? capi = null)
     {
         List<long> visited = LodLoginSweep.VisitedL0Keys(world).ToList();
         if (visited.Count > 0)
@@ -73,7 +80,7 @@ public static class LodLoginSweepBootstrap
                 "Revisiting visited land");
         }
 
-        return PlanEmptyCanvas(clientWorld);
+        return PlanEmptyCanvas(clientWorld, capi);
     }
 
     /// <summary>
@@ -104,7 +111,7 @@ public static class LodLoginSweepBootstrap
     public static int BootstrapCellRadius(int footprint = LodSection.SectionBlocks) =>
         (int)Math.Ceiling(EmptyCanvasBootstrapRadiusBlocks / (double)footprint);
 
-    static LodLoginSweepPlan PlanEmptyCanvas(IClientWorldAccessor world)
+    static LodLoginSweepPlan PlanEmptyCanvas(IClientWorldAccessor world, ICoreClientAPI? capi)
     {
         EntityPos pos = world.Player.Entity.Pos;
         int footprint = LodSection.SectionBlocks;
@@ -127,11 +134,14 @@ public static class LodLoginSweepBootstrap
 
         if (TryPlanCoastGuard(kinds, centerSx, centerSz, footprint, out List<long> coastKeys))
         {
+            int planned = coastKeys.Count;
+            coastKeys = BudgetVisitStops(coastKeys, centerSx, centerSz);
+            LogBudget(capi, planned, coastKeys.Count);
             coastKeys.Sort();
             return new LodLoginSweepPlan(
                 LodLoginSweepPlanMode.BootstrapCoastGuard,
                 coastKeys,
-                "Bootstrap (coast guard)");
+                LabelForBudgetedBootstrap("Bootstrap (coast guard)", planned, coastKeys.Count));
         }
 
         var radiusKeys = new List<long>(disk.Count);
@@ -140,11 +150,57 @@ public static class LodLoginSweepBootstrap
             if (sx < 0 || sz < 0) continue;
             radiusKeys.Add(LodWorld.SectionKey(0, sx, sz));
         }
+        int plannedRadius = radiusKeys.Count;
+        radiusKeys = BudgetVisitStops(radiusKeys, centerSx, centerSz);
+        LogBudget(capi, plannedRadius, radiusKeys.Count);
         radiusKeys.Sort();
         return new LodLoginSweepPlan(
             LodLoginSweepPlanMode.BootstrapRadius,
             radiusKeys,
-            "Bootstrap (new world)");
+            LabelForBudgetedBootstrap("Bootstrap (new world)", plannedRadius, radiusKeys.Count));
+    }
+
+    internal static List<long> BudgetVisitStops(List<long> keys, int centerSx, int centerSz)
+    {
+        int max = BootstrapMaxVisitStops;
+        if (keys.Count <= max) return keys;
+
+        keys.Sort((a, b) =>
+        {
+            long da = DistSq(a, centerSx, centerSz);
+            long db = DistSq(b, centerSx, centerSz);
+            return da.CompareTo(db);
+        });
+
+        var sampled = new List<long>(max);
+        for (int i = 0; i < max; i++)
+        {
+            int idx = max == 1
+                ? 0
+                : (int)((long)i * (keys.Count - 1) / (max - 1));
+            sampled.Add(keys[idx]);
+        }
+        return sampled;
+    }
+
+    static long DistSq(long key, int centerSx, int centerSz)
+    {
+        int dx = LodWorld.KeySx(key) - centerSx;
+        int dz = LodWorld.KeySz(key) - centerSz;
+        return (long)dx * dx + (long)dz * dz;
+    }
+
+    static string LabelForBudgetedBootstrap(string baseLabel, int planned, int budgeted) =>
+        budgeted < planned
+            ? $"{baseLabel} ({budgeted} of {planned})"
+            : baseLabel;
+
+    internal static void LogBudget(ICoreClientAPI? capi, int planned, int budgeted)
+    {
+        if (budgeted >= planned) return;
+        capi?.Logger.Notification(
+            "[DistantVistas] Bootstrap budget: visiting {0} of {1} disk cells (~{2} target).",
+            budgeted, planned, LodLoginSweepTiming.FormatDuration(LodLoginSweepTiming.TargetMaxSec));
     }
 
     static bool TryPlanCoastGuard(
