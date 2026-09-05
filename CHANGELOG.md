@@ -1,3 +1,6 @@
+## 0.7.91
+- **Empty-canvas bootstrap (new world).** When no visited L0 keys exist, login sweep no longer uses a tiny timing-budget ring. It probes rain height near spawn: large ocean triggers **Bootstrap (coast guard)** — every ocean L0 cell in the bootstrap disk plus all land coastline neighbours; otherwise **Bootstrap (new world)** sweeps a ~6000-block-radius disk (`EmptyCanvasBootstrapRadiusBlocks`, tunable). Existing visited canvases still use **Revisiting visited land** (full visited L0 set, can exceed 6k). Progress UI and log lines name the active mode.
+
 ## 0.7.90
 - **Per-column captured colours (no whole-cell flat fill).** Palette rows are keyed by block id **and** stored colour, capture registers each column at its own position, and `BakeSectionFromVisit` samples `GetColor` per column top — splitting palette rows when neighbours differ. Fixes the hard-line 64-block checkerboard / manila plates from one averaged colour per block id across the L0 cell.
 - **Exact visit-sweep priority unchanged (0.7.89).** Only live `GetColor` during the sweep; legacy heal deferred; baked band 3 displays stored RGB with no live tint wash; coarse plant-pull/noise only on unbaked far LOD.

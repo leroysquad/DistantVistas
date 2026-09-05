@@ -4,7 +4,8 @@ namespace DistantVistas;
 
 /// <summary>
 /// Measures per-stop timing during the login visit sweep and formats ETA strings.
-/// Target window: ~1.5–2.5 minutes on typical hardware for bootstrap-sized runs.
+/// Target window: ~1.5–2.5 minutes on typical hardware for small bootstrap runs;
+/// large empty-canvas disks (6k radius) scale with cell count and show honest ETA.
 /// </summary>
 public sealed class LodLoginSweepTiming
 {

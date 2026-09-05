@@ -55,6 +55,8 @@ public sealed class LodLoginBake
     int auditTicks;
     int resweepRound;
     bool retryingMisses;
+    LodLoginSweepPlanMode sweepMode = LodLoginSweepPlanMode.RevisitVisited;
+    string sweepModeLabel = "Revisiting visited land";
     Phase phase = Phase.WaitingForWorld;
     bool released;
     long? currentKey;
@@ -108,8 +110,10 @@ public sealed class LodLoginBake
     public void Begin()
     {
         pending.Clear();
-        foreach (long key in LodLoginSweepBootstrap.PlanKeys(
-                     pipeline.World, capi.World, LodLoginSweepTiming.InitialSecPerStop))
+        LodLoginSweepPlan plan = LodLoginSweepBootstrap.Plan(pipeline.World, capi.World);
+        sweepMode = plan.Mode;
+        sweepModeLabel = plan.ModeLabel;
+        foreach (long key in plan.Keys)
             pending.Enqueue(key);
         total = pending.Count;
         sweepTiming.Begin();
@@ -133,7 +137,10 @@ public sealed class LodLoginBake
         gameMode.EnsureCreative();
         hudHide.EnsureHidden();
         playerHide.EnsureHidden();
-        overlay.UpdateProgress(Progress, StatusWithEta("Waiting for world to load…"));
+        capi.Logger.Notification(
+            "[DistantVistas] Login visit sweep: {0} — {1} L0 region{2}.",
+            sweepModeLabel, total, total == 1 ? "" : "s");
+        overlay.UpdateProgress(Progress, StatusWithEta($"{sweepModeLabel} — waiting for world to load…"));
 
         if (total == 0)
         {
@@ -175,8 +182,8 @@ public sealed class LodLoginBake
         {
             overlay.UpdateProgress(Progress,
                 StatusWithEta(worldWaitTicks > LodLoginSweep.MaxWorldReadyTicks
-                    ? "World slow to load — continuing anyway…"
-                    : "Waiting for world and map to load…"));
+                    ? $"{sweepModeLabel} — world slow to load, continuing anyway…"
+                    : $"{sweepModeLabel} — waiting for world and map to load…"));
             if (worldWaitTicks < LodLoginSweep.MaxWorldReadyTicks) return;
         }
 
@@ -333,7 +340,7 @@ public sealed class LodLoginBake
     {
         if (retryingMisses)
             return $"Retrying missed regions (pass {resweepRound}) — {finished + 1}/{total} — ";
-        return $"Visiting {finished + 1}/{total} — ";
+        return $"{sweepModeLabel} — {finished + 1}/{total} — ";
     }
 
     void BeginNextStop()

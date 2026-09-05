@@ -8,6 +8,7 @@ public static class LoginSweepChecks
     {
         L0ChunkColumns(c);
         VisitedL0Only(c);
+        BootstrapRevisitPlan(c);
         BackdropHook(c);
         AudioMuteKeys(c);
         TimeFreezeKey(c);
@@ -37,6 +38,22 @@ public static class LoginSweepChecks
         var keys = LodLoginSweep.VisitedL0Keys(world).ToArray();
         c.Eq(2, keys.Length, "only level-0 keys are swept");
         c.True(keys.All(k => LodWorld.KeyLevel(k) == 0), "every sweep key is L0");
+    }
+
+    static void BootstrapRevisitPlan(Check c)
+    {
+        var world = new LodWorld();
+        world.InstallStoredKey(0, 4, 7, applyToParent: true, provisional: false);
+        world.InstallStoredKey(0, 8, 1, applyToParent: true, provisional: false);
+
+        var visited = LodLoginSweep.VisitedL0Keys(world).ToList();
+        visited.Sort();
+        var plan = new LodLoginSweepPlan(
+            LodLoginSweepPlanMode.RevisitVisited, visited, "Revisiting visited land");
+
+        c.Eq(LodLoginSweepPlanMode.RevisitVisited, plan.Mode, "visited canvas uses revisit mode");
+        c.Eq("Revisiting visited land", plan.ModeLabel, "revisit mode label");
+        c.Eq(2, plan.Keys.Count, "revisit plan includes every visited L0 key");
     }
 
     static void BackdropHook(Check c)
@@ -144,13 +161,24 @@ public static class LoginSweepChecks
     {
         c.Eq(90.0, LodLoginSweepTiming.TargetMinSec, "sweep target min seconds");
         c.Eq(150.0, LodLoginSweepTiming.TargetMaxSec, "sweep target max seconds");
-        c.True(LodLoginSweepTiming.BootstrapCellBudget(3.5) >= 12,
-            "bootstrap budgets at least a dozen cells");
+        c.Eq(6000, LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks,
+            "empty-canvas bootstrap radius default");
+        c.Eq(94, LodLoginSweepBootstrap.BootstrapCellRadius(),
+            "6000 blocks is ~94 L0 cells radius at 64-block footprint");
+
+        string bootstrap = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepBootstrap.cs"));
+        c.True(bootstrap.Contains("BootstrapCoastGuard"),
+            "bootstrap can plan coast-guard ocean sweeps");
+        c.True(bootstrap.Contains("BootstrapRadius"),
+            "bootstrap can plan radius disk sweeps");
 
         string bake = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
-        c.True(bake.Contains("LodLoginSweepBootstrap.PlanKeys"),
-            "login bake plans sweep keys with bootstrap sizing");
+        c.True(bake.Contains("LodLoginSweepBootstrap.Plan("),
+            "login bake plans sweep with bootstrap vs revisit mode");
+        c.True(bake.Contains("sweepModeLabel"),
+            "login bake progress distinguishes bootstrap vs revisit");
         c.True(bake.Contains("StatusWithEta"),
             "login bake progress includes ETA suffix");
     }
