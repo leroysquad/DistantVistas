@@ -1272,10 +1272,15 @@ public class LodPipeline
 
         // Orphan sync: SeasonForced keys dropped from RenderDirty after a failed
         // TryStart would stall forever while SeasonForced stayed high (probe-h).
-        if (World.SeasonForcedRemesh.Count > 0)
+        // Throttled — PruneRenderDirty now keeps forced keys, so this is a safety net.
+        if (World.SeasonForcedRemesh.Count > 0
+            && (seasonProgressTicks % 20 == 0 || World.SeasonForcedRemesh.Count > World.RenderDirty.Count))
         {
             foreach (long fk in World.SeasonForcedRemesh)
-                World.RenderDirty.Add(fk);
+            {
+                if (!World.RenderDirty.Contains(fk))
+                    World.RenderDirty.Add(fk);
+            }
         }
 
         int budget = LodFrameBudget.ResidentPaletteThisTick(
@@ -1313,14 +1318,12 @@ public class LodPipeline
         seasonRepaintScratch.Clear();
         if (SeasonCatchUpLevel >= 0)
         {
-            foreach (long key in World.SeasonDirty)
-            {
-                if (!World.Sections.ContainsKey(key)) continue;
-                if (LodWorld.KeyLevel(key) != SeasonCatchUpLevel) continue;
-                double distSq = LodWorld.NearestDistanceSqTo(key, px, pz);
-                seasonRepaintScratch.Add((key, distSq));
-            }
-            seasonRepaintScratch.Sort((a, b) => a.DistSq.CompareTo(b.DistSq));
+            int collectCap = Math.Max(budget * 8, LodFrameBudget.ScratchCap);
+            int focusLevel = SeasonCatchUpLevel;
+            LodSeasonIdleOrder.FillNearestCapped(
+                seasonRepaintScratch, World.SeasonDirty, seasonRepaintDone, px, pz,
+                collectCap, maxDistBlocks: 0,
+                accept: key => World.Sections.ContainsKey(key) && LodWorld.KeyLevel(key) == focusLevel);
         }
 
         seasonRepaintDone.Clear();

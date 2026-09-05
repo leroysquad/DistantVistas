@@ -26,6 +26,7 @@ public static class ResidencyChecks
         IncompleteLeavesDoNotReplaceParentCoverage(c);
         ProvisionalStoredKeyIsKnownCold(c);
         DeletedDerivedParentIsCreatedFromChildren(c);
+        L2DataKeysTrackExploreIndex(c);
     }
 
     /// <summary>
@@ -244,6 +245,21 @@ public static class ResidencyChecks
             "the parent received the child columns");
         c.Eq(0, requested.Count,
             "mip did not async-load a parent it was about to rebuild");
+    }
+
+    static void L2DataKeysTrackExploreIndex(Check c)
+    {
+        var world = NewWorld(out _);
+        long l0 = LodWorld.SectionKey(0, 10, 20);
+        world.GetOrCreateSection(l0);
+        c.True(world.HasDataSet.Contains(l0), "L0 is in HasDataSet");
+        long l2 = LodWorld.ParentKey(LodWorld.ParentKey(l0));
+        c.True(world.HasDataSet.Contains(l2), "L2 ancestor is registered");
+        c.True(world.L2DataKeys.Contains(l2), "L2 index lists the ancestor once");
+        c.Eq(1, world.L2DataKeys.Count, "one L0 create adds one L2 key");
+
+        world.GetOrCreateSection(l0);
+        c.Eq(1, world.L2DataKeys.Count, "re-getting the same L0 does not duplicate L2");
     }
 
     // ---- helpers ----

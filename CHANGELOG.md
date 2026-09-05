@@ -1,3 +1,11 @@
+## 0.8.47
+- **Managed heap leak on huge explored worlds.** `lastSelectedFrame` and `meshBornFrame` grew with every key ever meshed or walk-selected and were only cleared on pressure eviction. They are now trimmed in bounded batches when they outgrow live GPU meshes (~17 GB telemetry symptom).
+- **Fewer per-frame full scans.** Farthest meshed distance is tracked incrementally on upload/evict instead of walking every `sectionMeshes` key each frame. Farthest captured extent spreads an L2 index scan across frames (2048 keys/frame) instead of walking all of `HasDataSet` every 60 frames.
+- **Walking schedule hitch.** `ScheduleKeepMeshes` and `ScheduleHandoffUpgrades` use the same rotating examine budget as nearest-dirty when `RenderDirty` is huge.
+- **Season catch-up hitch.** Month repaint uses capped nearest selection instead of sorting the whole resident dirty set. Orphan `SeasonForced`→`RenderDirty` sync is throttled; prune no longer drops forced keys.
+- **Climate table cap during draw.** `EnsureClimateCell` evicts far cells when the table hits 8192, not only on keep-origin shift.
+- **Memory pressure.** Extreme managed heaps (≥8 GB and 2× soft bar) count toward pressure without requiring a hitch storm. RAM probe reads Linux `MemTotal` instead of free available memory.
+
 ## 0.8.46
 - **Near grass like 0.7.76 again.** 0.8.45 capped greedy tops at 12 columns and hard-pulled plant colour on every grassLike top — that painted hard micro-square shade lines in the foreground. Full greedy is back. Plant-pull is far/coarse-only (near ring stays closer to vertex*tint). Greener topsoil bake, climate 40/4, section-keyed upload, and hitch P0 from 0.8.43 stay.
 - **Fewer hitch on huge dirty lists.** Nearest-dirty and keep-overlay no longer full-scan thousands of RenderDirty keys every frame (rotating examine budget). Looking around no longer bypasses mesh-starve for keep/handoff. Uploads hitch-gate to one per frame. SeasonDirty resident checks are cached. Soft-cap cold spill under pressure is a bit stronger when the heap is already heavy.

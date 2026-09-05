@@ -18,6 +18,18 @@ public static class FrameBudgetChecks
         WalkingDoesNotStarveMeshKeep(c);
         WalkingStartsKeepNotSeason(c);
         PruneWalkBudgetExists(c);
+        ExtremeManagedHeapCountsAsPressure(c);
+    }
+
+    static void ExtremeManagedHeapCountsAsPressure(Check c)
+    {
+        LodMemoryBudget.Probe();
+        long bar = LodMemoryBudget.ManagedPressureMb;
+        long extreme = Math.Max(8_001, bar * 2);
+        c.True(LodMemoryBudget.IsMemoryPressure(30, extreme),
+            "heap at 2× soft bar counts toward pressure");
+        c.False(LodMemoryBudget.IsMemoryPressure(30, Math.Max(1, bar / 4)),
+            "well under the soft bar does not trip the extreme rule");
     }
 
     static void PruneWalkBudgetExists(Check c)

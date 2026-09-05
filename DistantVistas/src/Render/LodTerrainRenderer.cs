@@ -103,6 +103,13 @@ public class LodTerrainRenderer : IRenderer
     readonly HashSet<long> emptyMeshKeys = new();
     readonly Dictionary<long, long> lastSelectedFrame = new();
     readonly Dictionary<long, long> meshBornFrame = new();
+    readonly List<long> metadataPruneScratch = new();
+    long lastMetadataPruneFrame;
+    bool farthestMeshedNeedsRescan = true;
+    int capturedL2Cursor;
+    double capturedScanMaxSq;
+    int keepScheduleCursor;
+    int handoffScheduleCursor;
     readonly List<long> evictBatch = new();
     readonly List<long> evictBorn = new();
     int evictCursor;
@@ -298,7 +305,6 @@ public class LodTerrainRenderer : IRenderer
     /// inward.
     /// </summary>
     double farthestCapturedDistance;
-    long lastCapturedScanFrame = long.MinValue / 2;
 
     double FarthestKnownDistance => Math.Max(farthestMeshedDistance, farthestCapturedDistance);
 
@@ -530,24 +536,14 @@ public class LodTerrainRenderer : IRenderer
 
     void UpdateEffectiveFarDistance(float vanillaViewDistance)
     {
-        double maxDistSq = 0;
-        foreach (long key in sectionMeshes.Keys)
-        {
-            int footprint = LodWorld.KeyFootprintBlocks(key);
-            double dx = LodWorld.KeySx(key) * (double)footprint + footprint / 2.0 - camPos.X;
-            double dz = LodWorld.KeySz(key) * (double)footprint + footprint / 2.0 - camPos.Z;
-            double distSq = dx * dx + dz * dz;
-            if (distSq > maxDistSq) maxDistSq = distSq;
-        }
+        if (farthestMeshedNeedsRescan)
+            RescanFarthestMeshedDistance();
 
-        float far = (float)Math.Sqrt(maxDistSq) + LodSection.SectionBlocks * 1.5f;
-        farthestMeshedDistance = maxDistSq > 0 ? far : 0;
+        AdvanceCapturedDistanceScan();
 
-        if (frameCounter - lastCapturedScanFrame >= EvictScanInterval)
-        {
-            lastCapturedScanFrame = frameCounter;
-            farthestCapturedDistance = ScanFarthestCapturedDistance();
-        }
+        float far = farthestMeshedDistance > 0
+            ? farthestMeshedDistance
+            : 0;
         // The discard / sky fade at dist == 1 sits on the captured rim, never
         // on visited interior whose far meshes happen to be evicted.
         far = Math.Max(far, (float)farthestCapturedDistance);
@@ -558,24 +554,71 @@ public class LodTerrainRenderer : IRenderer
             EffectiveFarDistance = Math.Max(far, vanillaViewDistance + 16384);
     }
 
-    /// <summary>
-    /// Farthest captured L2 (256-block) footprint from the camera, padded so
-    /// its far corner is inside. L2 keeps the scan at a few thousand keys.
-    /// </summary>
-    double ScanFarthestCapturedDistance()
+    void RescanFarthestMeshedDistance()
     {
-        const int scanLevel = 2;
-        int footprint = LodSection.SectionBlocks << scanLevel;
         double maxDistSq = 0;
-        foreach (long key in world.HasDataSet)
+        foreach (long key in sectionMeshes.Keys)
         {
-            if (LodWorld.KeyLevel(key) != scanLevel) continue;
+            int footprint = LodWorld.KeyFootprintBlocks(key);
             double dx = LodWorld.KeySx(key) * (double)footprint + footprint / 2.0 - camPos.X;
             double dz = LodWorld.KeySz(key) * (double)footprint + footprint / 2.0 - camPos.Z;
             double distSq = dx * dx + dz * dz;
             if (distSq > maxDistSq) maxDistSq = distSq;
         }
-        return maxDistSq > 0 ? Math.Sqrt(maxDistSq) + footprint * 0.75 : 0;
+
+        farthestMeshedDistance = maxDistSq > 0
+            ? (float)Math.Sqrt(maxDistSq) + LodSection.SectionBlocks * 1.5f
+            : 0;
+        farthestMeshedNeedsRescan = false;
+    }
+
+    void NoteMeshedDistance(long key)
+    {
+        int footprint = LodWorld.KeyFootprintBlocks(key);
+        double dx = LodWorld.KeySx(key) * (double)footprint + footprint / 2.0 - camPos.X;
+        double dz = LodWorld.KeySz(key) * (double)footprint + footprint / 2.0 - camPos.Z;
+        float dist = (float)Math.Sqrt(dx * dx + dz * dz) + LodSection.SectionBlocks * 1.5f;
+        if (dist > farthestMeshedDistance)
+            farthestMeshedDistance = dist;
+    }
+
+    /// <summary>
+    /// Spread L2 captured-extent scans across frames so a huge HasDataSet does not
+    /// hitch every <see cref="EvictScanInterval"/>.
+    /// </summary>
+    void AdvanceCapturedDistanceScan()
+    {
+        const int scanLevel = 2;
+        const int budget = 2048;
+        int footprint = LodSection.SectionBlocks << scanLevel;
+        var keys = world.L2DataKeys;
+        if (keys.Count == 0)
+        {
+            farthestCapturedDistance = 0;
+            capturedL2Cursor = 0;
+            capturedScanMaxSq = 0;
+            return;
+        }
+
+        if (capturedL2Cursor >= keys.Count)
+        {
+            capturedL2Cursor = 0;
+            farthestCapturedDistance = capturedScanMaxSq > 0
+                ? Math.Sqrt(capturedScanMaxSq) + footprint * 0.75
+                : 0;
+            capturedScanMaxSq = 0;
+        }
+
+        int examined = 0;
+        while (examined < budget && capturedL2Cursor < keys.Count)
+        {
+            long key = keys[capturedL2Cursor++];
+            double dx = LodWorld.KeySx(key) * (double)footprint + footprint / 2.0 - camPos.X;
+            double dz = LodWorld.KeySz(key) * (double)footprint + footprint / 2.0 - camPos.Z;
+            double distSq = dx * dx + dz * dz;
+            if (distSq > capturedScanMaxSq) capturedScanMaxSq = distSq;
+            examined++;
+        }
     }
 
     // ---- Detail selection (quadtree walk) ----
@@ -2075,6 +2118,8 @@ public class LodTerrainRenderer : IRenderer
             climateUploadValid = false;
             ClearSelectionMemos();
             selectionMemosValid = false;
+            capturedL2Cursor = 0;
+            capturedScanMaxSq = 0;
             int maxDist = (int)(liveViewDistance * LodCoveragePolicy.KeepCircleScale * 3.0);
             if (maxDist < 2048) maxDist = 2048;
             if (climateField.Count > LodClimateField.MaxCells)
@@ -2263,6 +2308,7 @@ public class LodTerrainRenderer : IRenderer
 
             lastSelectedFrame.Remove(key);
             meshBornFrame.Remove(key);
+            farthestMeshedNeedsRescan = true;
             EvictedTotal++;
             lastPressureEvictFrame = frameCounter;
             EvictedOutside2xTotal++;
@@ -2397,6 +2443,8 @@ public class LodTerrainRenderer : IRenderer
                 dirtyPrune.Add(key);
                 continue;
             }
+            if (world.SeasonForcedRemesh.Contains(key))
+                continue;
             int dirtyLevel = LodWorld.KeyLevel(key);
             double distSq = NearestDistanceSqTo(key);
             double pruneDist = Math.Sqrt(distSq);
@@ -2679,8 +2727,24 @@ public class LodTerrainRenderer : IRenderer
     {
         if (budget <= 0) return 0;
         keepMeshScratch.Clear();
+        int dirtyN = world.RenderDirty.Count;
+        bool scanBudgeted = dirtyN > LodFrameBudget.SelectDirtyFullScanCap;
+        int examineBudget = scanBudgeted ? LodFrameBudget.SelectDirtyExamineBudget : dirtyN;
+        int examined = 0;
+        int skip = scanBudgeted && dirtyN > 0 ? keepScheduleCursor % dirtyN : 0;
+        int idx = 0;
         foreach (long key in world.RenderDirty)
         {
+            if (scanBudgeted)
+            {
+                int ord = idx++;
+                bool inWindow = ord >= skip && examined < examineBudget;
+                if (!inWindow && ord < skip && examined < examineBudget
+                    && ord + (dirtyN - skip) < examineBudget)
+                    inWindow = true;
+                if (!inWindow) continue;
+                examined++;
+            }
             if (HasAnyMesh(key)) continue;
             if (meshJobInFlight.Contains(key) || world.LoadsInFlight.Contains(key)) continue;
             if (YieldToCompanion(key)) continue;
@@ -2693,6 +2757,8 @@ public class LodTerrainRenderer : IRenderer
             else if (level >= 2 && keepCircle)
                 keepMeshScratch.Add(key);
         }
+        if (scanBudgeted && dirtyN > 0)
+            keepScheduleCursor = (skip + examined) % dirtyN;
         keepMeshScratch.Sort((a, b) =>
             NearestDistanceSqTo(a).CompareTo(NearestDistanceSqTo(b)));
         int started = 0;
@@ -2715,10 +2781,25 @@ public class LodTerrainRenderer : IRenderer
         float overdraw = GameMath.Clamp(OverdrawStart, 0.15f, 0.95f);
         double vanillaR = liveViewDistance * overdraw;
         int started = 0;
-        // Snapshot keys — TryStart may mutate RenderDirty.
         handoffUpgradeScratch.Clear();
+        int dirtyN = world.RenderDirty.Count;
+        bool scanBudgeted = dirtyN > LodFrameBudget.SelectDirtyFullScanCap;
+        int examineBudget = scanBudgeted ? LodFrameBudget.SelectDirtyExamineBudget : dirtyN;
+        int examined = 0;
+        int skip = scanBudgeted && dirtyN > 0 ? handoffScheduleCursor % dirtyN : 0;
+        int idx = 0;
         foreach (long key in world.RenderDirty)
         {
+            if (scanBudgeted)
+            {
+                int ord = idx++;
+                bool inWindow = ord >= skip && examined < examineBudget;
+                if (!inWindow && ord < skip && examined < examineBudget
+                    && ord + (dirtyN - skip) < examineBudget)
+                    inWindow = true;
+                if (!inWindow) continue;
+                examined++;
+            }
             if (LodWorld.KeyLevel(key) > 1) continue;
             if (HasAnyMesh(key)) continue;
             if (meshJobInFlight.Contains(key) || world.LoadsInFlight.Contains(key)) continue;
@@ -2726,6 +2807,8 @@ public class LodTerrainRenderer : IRenderer
             if (!InHandoffRing(d, vanillaR)) continue;
             handoffUpgradeScratch.Add(key);
         }
+        if (scanBudgeted && dirtyN > 0)
+            handoffScheduleCursor = (skip + examined) % dirtyN;
         handoffUpgradeScratch.Sort((a, b) =>
             NearestDistanceSqTo(a).CompareTo(NearestDistanceSqTo(b)));
         for (int i = 0; i < handoffUpgradeScratch.Count && budget > 0; i++)
@@ -2866,8 +2949,8 @@ public class LodTerrainRenderer : IRenderer
         {
             meshJobInFlight.Remove(result.Key);
 
-            if (sectionMeshes.Remove(result.Key, out MeshRef? old)) old.Dispose();
-            if (waterMeshes.Remove(result.Key, out MeshRef? oldWater)) oldWater.Dispose();
+            if (sectionMeshes.Remove(result.Key, out MeshRef? old)) { old.Dispose(); farthestMeshedNeedsRescan = true; }
+            if (waterMeshes.Remove(result.Key, out MeshRef? oldWater)) { oldWater.Dispose(); farthestMeshedNeedsRescan = true; }
             emptyMeshKeys.Remove(result.Key);
             if (result.IndexCount == 0 && result.WaterIndexCount == 0)
                 emptyMeshKeys.Add(result.Key);
@@ -2878,12 +2961,14 @@ public class LodTerrainRenderer : IRenderer
                     result.VertexCount, result.IndexCount);
                 if (!meshBornFrame.ContainsKey(result.Key))
                     meshBornFrame[result.Key] = frameCounter;
+                NoteMeshedDistance(result.Key);
             }
 
             if (result.WaterIndexCount > 0 && result.WaterXyz != null)
             {
                 waterMeshes[result.Key] = Upload(result.WaterXyz, result.WaterRgba!, result.WaterIndices!,
                     result.WaterVertexCount, result.WaterIndexCount);
+                NoteMeshedDistance(result.Key);
             }
 
             result.ReturnPooledBuffers();
@@ -3006,6 +3091,7 @@ public class LodTerrainRenderer : IRenderer
         ScheduleCost.Add(phaseStart);
 
         UploadFinishedMeshes();
+        PruneStaleMeshMetadata();
         // Pressure-only: idle turning with a fat cache must not punch mid-land holes.
         if (MeshPressureActive)
             EvictStaleMeshes();
@@ -3347,6 +3433,12 @@ public class LodTerrainRenderer : IRenderer
             return existing;
         if (TrySampleClimateCell(x, z, out LodClimateField.Sample sample))
         {
+            if (climateField.Count >= LodClimateField.MaxCells)
+            {
+                int maxDist = (int)(liveViewDistance * LodCoveragePolicy.KeepCircleScale * 3.0);
+                if (maxDist < 2048) maxDist = 2048;
+                climateField.EvictFar((int)camPos.X, (int)camPos.Z, maxDist);
+            }
             climateField.Put(x, z, sample);
             return sample;
         }
@@ -3477,6 +3569,42 @@ public class LodTerrainRenderer : IRenderer
         }
     }
 
+    /// <summary>
+    /// lastSelectedFrame / meshBornFrame grow with every key ever meshed or selected.
+    /// Without trimming they can hold millions of stale longs on huge explored worlds
+    /// (telemetry ~17 GB managed) even when live GPU mesh count is modest.
+    /// </summary>
+    void PruneStaleMeshMetadata()
+    {
+        int live = sectionMeshes.Count + waterMeshes.Count;
+        bool bloated = lastSelectedFrame.Count > live + 256
+            || meshBornFrame.Count > live + 256;
+        if (!bloated && frameCounter - lastMetadataPruneFrame < 120) return;
+
+        lastMetadataPruneFrame = frameCounter;
+        const int budget = 512;
+
+        metadataPruneScratch.Clear();
+        foreach (long key in lastSelectedFrame.Keys)
+        {
+            if (sectionMeshes.ContainsKey(key) || waterMeshes.ContainsKey(key)) continue;
+            metadataPruneScratch.Add(key);
+            if (metadataPruneScratch.Count >= budget) break;
+        }
+        foreach (long key in metadataPruneScratch)
+            lastSelectedFrame.Remove(key);
+
+        metadataPruneScratch.Clear();
+        foreach (long key in meshBornFrame.Keys)
+        {
+            if (sectionMeshes.ContainsKey(key) || waterMeshes.ContainsKey(key)) continue;
+            metadataPruneScratch.Add(key);
+            if (metadataPruneScratch.Count >= budget) break;
+        }
+        foreach (long key in metadataPruneScratch)
+            meshBornFrame.Remove(key);
+    }
+
     public void ClearMeshes()
     {
         foreach (MeshRef meshRef in sectionMeshes.Values) meshRef.Dispose();
@@ -3486,6 +3614,10 @@ public class LodTerrainRenderer : IRenderer
         emptyMeshKeys.Clear();
         meshJobInFlight.Clear();
         lastSelectedFrame.Clear();
+        meshBornFrame.Clear();
+        farthestMeshedNeedsRescan = true;
+        capturedL2Cursor = 0;
+        capturedScanMaxSq = 0;
         keepOriginValid = false;
         windowMovedThisFrame = false;
         snowLineY = pendingSnowLineY = 99999;

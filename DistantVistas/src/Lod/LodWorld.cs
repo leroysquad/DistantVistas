@@ -81,6 +81,12 @@ public class LodWorld
     /// <summary>Every key (all levels) that holds data or has any descendant with data. Drives quadtree descent.</summary>
     public readonly HashSet<long> HasDataSet = new();
 
+    /// <summary>
+    /// L2 keys in <see cref="HasDataSet"/> for incremental farthest-captured scans
+    /// without walking the full explored index every 60 frames.
+    /// </summary>
+    public readonly List<long> L2DataKeys = new();
+
     /// <summary>L0 keys known to hold only a thin/partial capture (pre-0.7.7 one-quadrant).</summary>
     public readonly HashSet<long> SparseL0Keys = new();
 
@@ -369,7 +375,8 @@ public class LodWorld
     {
         while (true)
         {
-            HasDataSet.Add(key);
+            if (HasDataSet.Add(key) && KeyLevel(key) == 2)
+                L2DataKeys.Add(key);
             if (KeyLevel(key) == MaxLevel)
             {
                 TopLevelKeys.Add(key);
@@ -511,6 +518,7 @@ public class LodWorld
         SaveDirty.Clear();
         MipDirty.Clear();
         HasDataSet.Clear();
+        L2DataKeys.Clear();
         TopLevelKeys.Clear();
         LoadsInFlight.Clear();
         LoadFailed.Clear();

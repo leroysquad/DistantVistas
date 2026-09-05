@@ -127,6 +127,9 @@ public static class LodMemoryBudget
         bool memHigh = managedMb >= ManagedPressureMb;
         if (memHigh && hitchStorm) return true;
         if (memHigh && managedMb >= ManagedPressureMb + ManagedPressureMb / 4) return true;
+        // Multi-GB heaps on long explored-world sessions must count even when frame
+        // time is still ~60 FPS (telemetry ~17 GB managed with p95 ~93 ms).
+        if (managedMb >= 8_000 && managedMb >= ManagedPressureMb * 2) return true;
         return false;
     }
     /// <summary>
@@ -150,12 +153,38 @@ public static class LodMemoryBudget
     {
         try
         {
+            if (OperatingSystem.IsLinux())
+            {
+                string line = ReadProcMemInfoLine("MemTotal:");
+                if (line != null
+                    && long.TryParse(line.AsSpan("MemTotal:".Length).Trim(), out long kb)
+                    && kb > 0)
+                    return kb * 1024L;
+            }
+        }
+        catch
+        {
+        }
+
+        try
+        {
             var info = GC.GetGCMemoryInfo();
+            // TotalAvailableMemoryBytes is free RAM, not installed — only use as fallback.
             if (info.TotalAvailableMemoryBytes > 0) return info.TotalAvailableMemoryBytes;
         }
         catch
         {
         }
         return 16L * 1024 * 1024 * 1024;
+    }
+
+    static string? ReadProcMemInfoLine(string prefix)
+    {
+        foreach (string line in File.ReadLines("/proc/meminfo"))
+        {
+            if (line.StartsWith(prefix, StringComparison.Ordinal))
+                return line;
+        }
+        return null;
     }
 }
