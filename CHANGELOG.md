@@ -1,3 +1,7 @@
+## 0.8.1
+- **CRITICAL: login overlay NRE on AfterFinalComposition.** `Render2DTexture(int, …)` uses VS's internal GUI quad mesh, which is null during `AfterFinalComposition` (and sometimes on early frames). All overlay draws now route through `TryDrawTexture` with an explicit `MeshRef` (`Gui.QuadMeshRef` or an owned `QuadMeshUtil` quad). Tinted solids use pre-baked Cairo colour textures via `TryDrawSolidColor` so we never call the tint overload that depends on the null internal quad.
+- **Unchanged:** login visit sweep enabled by default, camera pin, dual-pass overlay, fade-out release (0.8.0).
+
 ## 0.8.0
 - **Login visit sweep re-enabled by default.** `LoginVisitSweepEnabled` defaults to `true` again; the skip gate still bypasses the overlay when every visited L0 region is complete within the same season or 30 in-game days. Set `false` in `distantvistas.json` for immediate play without overlay.
 - **Viewport thrash fix.** The sweep now pins `Entity.CameraPos` (and clears `CameraPosOffset`) to the join pose while the entity quietly teleports for chunk streaming — the world no longer scrolls behind the loader. The full overlay (backdrop, title, panel) paints on **both** `Ortho` and `AfterFinalComposition` so sky/terrain cannot flash through between passes.

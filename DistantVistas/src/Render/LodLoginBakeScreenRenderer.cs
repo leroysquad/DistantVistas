@@ -46,10 +46,12 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     readonly LoadedTexture backdrop;
     readonly LoadedTexture titleImage;
     readonly LoadedTexture titleFallbackTex;
-    readonly LoadedTexture whiteSolid;
     readonly LoadedTexture percentTex;
     readonly LoadedTexture statusTex;
     readonly Vec4f tint = new();
+    readonly Dictionary<int, int> solidColorTextures = new();
+
+    MeshRef? ownedQuad;
 
     bool active;
     bool gfxReady;
@@ -66,7 +68,6 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         backdrop = new LoadedTexture(capi);
         titleImage = new LoadedTexture(capi);
         titleFallbackTex = new LoadedTexture(capi);
-        whiteSolid = new LoadedTexture(capi);
         percentTex = new LoadedTexture(capi);
         statusTex = new LoadedTexture(capi);
         percentFont = CairoFont.WhiteDetailText().WithFontSize(18);
@@ -175,8 +176,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
             int titleTexId = !titleMissing && titleImage.TextureId > 0
                 ? titleImage.TextureId
                 : titleFallbackTex.TextureId;
-            if (titleTexId > 0)
-                capi.Render.Render2DTexture(titleTexId, titleX, blockTop, titleW, titleH, 204);
+            TryDrawTexture(titleTexId, titleX, blockTop, titleW, titleH, 204);
         }
 
         tint.Set(PanelFill[0], PanelFill[1], PanelFill[2], PanelFill[3] * overlayAlpha);
@@ -206,18 +206,15 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
 
     bool DrawOpaqueCover(float w, float h)
     {
-        int subId = WhiteTextureId();
-        if (subId <= 0) return false;
         tint.Set(OpaqueCover[0], OpaqueCover[1], OpaqueCover[2], OpaqueCover[3] * overlayAlpha);
-        capi.Render.Render2DTexture(subId, 0, 0, w, h, 198, tint);
-        return true;
+        return TryDrawSolidColor(0, 0, w, h, 198, tint);
     }
 
     void DrawBackdrop(float w, float h)
     {
-        if (!backdropMissing && backdrop.TextureId > 0)
+        if (!backdropMissing && backdrop.TextureId > 0
+            && TryDrawTexture(backdrop.TextureId, 0, 0, w, h, 200))
         {
-            capi.Render.Render2DTexture(backdrop.TextureId, 0, 0, w, h, 200);
             tint.Set(0.04f, 0.05f, 0.08f, 0.45f * overlayAlpha);
             DrawSolid(0, 0, w, h, 199, tint);
             return;
@@ -227,39 +224,107 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         DrawSolid(0, 0, w, h, 200, tint);
     }
 
-    void DrawSolid(float x, float y, float width, float height, float z, Vec4f color)
-    {
-        int subId = WhiteTextureId();
-        if (subId <= 0) return;
-        capi.Render.Render2DTexture(subId, x, y, width, height, z, color);
-    }
+    void DrawSolid(float x, float y, float width, float height, float z, Vec4f color) =>
+        TryDrawSolidColor(x, y, width, height, z, color);
 
     void DrawText(LoadedTexture tex, float x, float y, float z)
     {
         if (tex.TextureId <= 0 || tex.Width <= 0) return;
-        capi.Render.Render2DLoadedTexture(tex, x, y, z);
+        if (!TryDrawLoadedTexture(tex, x, y, z)) return;
     }
 
-    int WhiteTextureId()
+    /// <summary>
+    /// VS routes <c>Render2DTexture(int, …)</c> through an internal quad that is null outside
+    /// ortho GUI setup (notably on <see cref="EnumRenderStage.AfterFinalComposition"/>).
+    /// Always supply an explicit <see cref="MeshRef"/> and pre-baked solid colours.
+    /// </summary>
+    bool TryDrawTexture(int textureId, float x, float y, float width, float height, float z)
     {
-        EnsureWhiteSolid();
-        return whiteSolid.TextureId;
+        if (textureId <= 0 || width <= 0 || height <= 0) return false;
+        MeshRef? quad = ResolveQuadMesh();
+        if (quad == null) return false;
+
+        try
+        {
+            capi.Render.Render2DTexture(quad, textureId, x, y, width, height, z);
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
     }
 
-    void EnsureWhiteSolid()
+    bool TryDrawSolidColor(float x, float y, float width, float height, float z, Vec4f color)
     {
-        if (whiteSolid.TextureId > 0) return;
+        if (width <= 0 || height <= 0 || color[3] <= 0.001f) return false;
+        int texId = SolidColorTextureId(color);
+        return texId > 0 && TryDrawTexture(texId, x, y, width, height, z);
+    }
+
+    bool TryDrawLoadedTexture(LoadedTexture tex, float x, float y, float z)
+    {
+        if (tex.TextureId <= 0) return false;
+        MeshRef? quad = ResolveQuadMesh();
+        if (quad == null) return false;
+
+        try
+        {
+            capi.Render.Render2DTexture(quad, tex.TextureId, x, y, tex.Width, tex.Height, z);
+            return true;
+        }
+        catch
+        {
+            try
+            {
+                capi.Render.Render2DLoadedTexture(tex, x, y, z);
+                return true;
+            }
+            catch
+            {
+                return false;
+            }
+        }
+    }
+
+    MeshRef? ResolveQuadMesh()
+    {
+        MeshRef? guiQuad = capi.Gui.QuadMeshRef;
+        if (guiQuad != null && !guiQuad.Disposed) return guiQuad;
+
+        if (ownedQuad != null && !ownedQuad.Disposed) return ownedQuad;
+
+        try
+        {
+            MeshData data = QuadMeshUtil.GetQuad();
+            ownedQuad = capi.Render.UploadMesh(data);
+            return ownedQuad;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    int SolidColorTextureId(Vec4f color)
+    {
+        int key = ColorUtil.ToRgba(
+            (int)Math.Clamp(color[3] * 255f, 0f, 255f),
+            (int)Math.Clamp(color[0] * 255f, 0f, 255f),
+            (int)Math.Clamp(color[1] * 255f, 0f, 255f),
+            (int)Math.Clamp(color[2] * 255f, 0f, 255f));
+        if (solidColorTextures.TryGetValue(key, out int cached)) return cached;
 
         using ImageSurface surface = new(Format.Argb32, 2, 2);
         using Context ctx = new(surface);
-        ctx.SetSourceRGBA(1, 1, 1, 1);
+        ctx.SetSourceRGBA(color[0], color[1], color[2], color[3]);
         ctx.Rectangle(0, 0, 2, 2);
         ctx.Fill();
 
         int texId = capi.Gui.LoadCairoTexture(surface, false);
-        whiteSolid.TextureId = texId;
-        whiteSolid.Width = 2;
-        whiteSolid.Height = 2;
+        if (texId > 0)
+            solidColorTextures[key] = texId;
+        return texId;
     }
 
     void RebuildText()
@@ -273,7 +338,6 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     void EnsureGraphicsLoaded()
     {
         if (gfxReady) return;
-        EnsureWhiteSolid();
         LoadedTexture bd = backdrop;
         LoadedTexture ti = titleImage;
         backdropMissing = !TryLoadTexture(capi, BackdropAsset, ref bd);
@@ -360,9 +424,12 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         backdrop.Dispose();
         titleImage.Dispose();
         titleFallbackTex.Dispose();
-        whiteSolid.Dispose();
         percentTex.Dispose();
         statusTex.Dispose();
+        if (ownedQuad != null && !ownedQuad.Disposed)
+            capi.Render.DeleteMesh(ownedQuad);
+        ownedQuad = null;
+        solidColorTextures.Clear();
         capi.Event.UnregisterRenderer(this, EnumRenderStage.Ortho);
         capi.Event.UnregisterRenderer(this, EnumRenderStage.AfterFinalComposition);
     }

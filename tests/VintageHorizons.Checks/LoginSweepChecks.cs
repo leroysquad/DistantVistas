@@ -175,8 +175,12 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeScreenRenderer.cs"));
         c.True(screen.Contains("OpaqueCover"),
             "screen renderer paints opaque base every frame");
-        c.True(screen.Contains("EnsureWhiteSolid"),
-            "screen renderer uses real white texture for solids");
+        c.True(screen.Contains("TryDrawTexture"),
+            "screen renderer guards Render2DTexture with explicit quad mesh");
+        c.True(screen.Contains("ResolveQuadMesh"),
+            "screen renderer resolves Gui or owned quad for 2D draws");
+        c.True(screen.Contains("TryDrawSolidColor"),
+            "screen renderer falls back to pre-baked solid Cairo colours");
         c.True(screen.Contains("DrawFullFrame"),
             "screen renderer draws full UI on ortho and after-final passes");
         c.True(screen.Contains("SetOverlayAlpha"),
