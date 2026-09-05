@@ -922,6 +922,7 @@ public sealed class LodLoginBake
         {
             GuiDialog dlg = open[i];
             if (dlg.DialogType == EnumDialogType.HUD) continue;
+            if (LodLoginBakeCharacterWait.IsProtectedDialog(dlg)) continue;
             dlg.TryClose();
         }
     }

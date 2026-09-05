@@ -137,6 +137,8 @@ public class DistantVistasModSystem : ModSystem
     LodLoginBakeOverlay? loginBakeOverlay;
     LodLoginBakePulse? loginBakePulse;
     LodLoginBake? loginBake;
+    long? loginSweepDeferListenerId;
+    bool loginSweepDeferred;
 
     public override void AssetsLoaded(ICoreAPI api)
     {
@@ -1066,6 +1068,46 @@ public class DistantVistasModSystem : ModSystem
         config.LoginVisitSweepEnabled
         || Environment.GetEnvironmentVariable("VINTAGEHORIZONS_LOGIN_SWEEP") == "1";
 
+    void DeferLoginVisitSweep()
+    {
+        if (loginSweepDeferred) return;
+
+        loginSweepDeferred = true;
+        Mod.Logger.Notification(
+            "[DistantVistas] Login visit sweep deferred — waiting for character creation / class selection.");
+        if (loginSweepDeferListenerId == null)
+            loginSweepDeferListenerId = capi.Event.RegisterGameTickListener(OnLoginSweepDeferTick, 250);
+    }
+
+    void OnLoginSweepDeferTick(float dt)
+    {
+        if (!loginSweepDeferred) return;
+
+        if (!LoginVisitSweepEnabled())
+        {
+            CancelLoginSweepDefer();
+            renderer.LoginBakeComplete = true;
+            LodLoginBakeSweepGate.ClearHandoverDeferral(capi, "disabled", force: true);
+            Mod.Logger.Notification(
+                "[DistantVistas] Login visit sweep disabled in config — entering play without overlay.");
+            return;
+        }
+
+        if (LodLoginBakeCharacterWait.IsPending(capi)) return;
+
+        CancelLoginSweepDefer();
+        StartLoginVisitSweepIfNeeded();
+    }
+
+    void CancelLoginSweepDefer()
+    {
+        loginSweepDeferred = false;
+        if (loginSweepDeferListenerId == null) return;
+
+        capi.Event.UnregisterGameTickListener(loginSweepDeferListenerId.Value);
+        loginSweepDeferListenerId = null;
+    }
+
     void StartLoginVisitSweepIfNeeded()
     {
         LodLoginSweepGate.Result sweepGate = LodLoginSweepGate.Decide(
@@ -1132,6 +1174,10 @@ public class DistantVistasModSystem : ModSystem
                 LodLoginBakeSweepGate.ClearHandoverDeferral(capi, "disabled", force: true);
                 Mod.Logger.Notification(
                     "[DistantVistas] Login visit sweep disabled in config — entering play without overlay.");
+            }
+            else if (LodLoginBakeCharacterWait.IsPending(capi))
+            {
+                DeferLoginVisitSweep();
             }
             else
             {
@@ -1356,6 +1402,7 @@ public class DistantVistasModSystem : ModSystem
 
     void OnLeaveWorld()
     {
+        CancelLoginSweepDefer();
         loginBake?.Dispose();
         loginBake = null;
         loginBakePulse?.Bind(null, PumpLoginBakeWhileSweeping);
@@ -1533,6 +1580,8 @@ public class DistantVistasModSystem : ModSystem
 
             // Nothing to unregister while deferring: that path registers no listener.
             if (deferringTo == null) capi.Event.UnregisterGameTickListener(tickListenerId);
+            if (loginSweepDeferListenerId != null)
+                capi.Event.UnregisterGameTickListener(loginSweepDeferListenerId.Value);
         });
 
         // Stops the storage writer before the connection it writes through.

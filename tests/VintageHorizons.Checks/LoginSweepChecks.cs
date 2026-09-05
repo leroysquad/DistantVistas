@@ -23,6 +23,7 @@ public static class LoginSweepChecks
         SweepTiming(c);
         CreativeMode(c);
         HudHide(c);
+        CharacterWait(c);
     }
 
     static void L0ChunkColumns(Check c)
@@ -580,5 +581,29 @@ public static class LoginSweepChecks
             "player hide tints entity render alpha to zero");
         c.True(playerHide.Contains(LodLoginBakePlayerHide.HideFpHandsKey),
             "player hide saves and restores hideFpHands");
+    }
+
+    static void CharacterWait(Check c)
+    {
+        string wait = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeCharacterWait.cs"));
+        c.True(wait.Contains("PlayerReadyFired"),
+            "character wait defers until player ready fired");
+        c.True(wait.Contains("GuiDialogCharacterBase"),
+            "character wait recognizes character dialog base type");
+        c.True(wait.Contains("IsProtectedDialog"),
+            "character wait exposes protected dialog check");
+
+        string mod = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "DistantVistasModSystem.cs"));
+        c.True(mod.Contains("DeferLoginVisitSweep"),
+            "level finalize defers sweep during character creation");
+        c.True(mod.Contains("LodLoginBakeCharacterWait.IsPending"),
+            "deferred sweep polls character wait helper");
+
+        string bake = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
+        c.True(bake.Contains("LodLoginBakeCharacterWait.IsProtectedDialog"),
+            "close-blocking-dialogs skips character/class selection");
     }
 }
