@@ -43,6 +43,17 @@ public sealed class LodLoginBakeHudHide
             bool wantHidden = savedHidden.Value;
             if (capi.HideGuis != wantHidden)
                 TrySetHideGuis(wantHidden);
+            if (capi.HideGuis != wantHidden)
+            {
+                // Toggle path can race with F4 / other .gui users — retry once.
+                TrySetHideGuis(wantHidden);
+                if (capi.HideGuis != wantHidden)
+                {
+                    capi.Logger.Warning(
+                        "[DistantVistas] Login visit sweep: HUD restore mismatch (HideGuis={0}, wanted={1})",
+                        capi.HideGuis, wantHidden);
+                }
+            }
         }
         finally
         {
@@ -64,7 +75,7 @@ public sealed class LodLoginBakeHudHide
     {
         try
         {
-            ClientMain clientMain = capi as ClientMain ?? (ClientMain)capi.World;
+            ClientMain clientMain = (ClientMain)capi.World;
             if (HideGuisProperty?.SetMethod != null)
             {
                 HideGuisProperty.SetValue(clientMain, hidden);

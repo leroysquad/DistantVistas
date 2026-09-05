@@ -29,6 +29,7 @@ public sealed class LodLoginBakeTimeFreeze
             savedCalendarSpeedMul = cal.CalendarSpeedMul;
             anchoredTotalHours = cal.TotalHours;
             frozen = true;
+            capi.Logger.Notification("[DistantVistas] Login visit sweep: time frozen");
         }
 
         cal.CalendarSpeedMul = 0f;
@@ -61,7 +62,7 @@ public sealed class LodLoginBakeTimeFreeze
             savedCalendarSpeedMul = null;
             anchoredTotalHours = null;
             frozen = false;
-            capi.Logger.Notification("[DistantVistas] Login visit sweep: time restored.");
+            capi.Logger.Notification("[DistantVistas] Login visit sweep: time restored");
         }
     }
 

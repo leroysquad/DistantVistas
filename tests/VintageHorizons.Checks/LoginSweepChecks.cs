@@ -463,12 +463,16 @@ public static class LoginSweepChecks
         c.True(gate.Contains("empty canvas needs bootstrap sweep"),
             "gate runs bootstrap on empty visited canvas");
         c.True(gate.Contains("still incomplete"),
-            "gate runs when audit finds misses");
+            "gate runs when audit finds misses and no in-window complete");
+        c.True(gate.Contains("skip re-canvas"),
+            "in-window complete marker skips full re-canvas even with leftovers");
         c.True(gate.Contains("no successful sweep recorded yet"),
             "gate runs when completion marker is missing");
         c.True(gate.Contains("outside same-season / 30-day window"),
             "gate runs when completion window expired");
-        c.True(gate.Contains("visited canvas complete within season window"),
+        c.True(gate.Contains("VisitedKeyCount >= visited"),
+            "in-window skip requires canvas not grown");
+        c.True(gate.Contains("visited canvas complete within season"),
             "gate skips when canvas is complete and in window");
 
         string mod = File.ReadAllText(Path.Combine(
@@ -587,8 +591,10 @@ public static class LoginSweepChecks
     {
         string wait = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeCharacterWait.cs"));
-        c.True(wait.Contains("PlayerReadyFired"),
-            "character wait defers until player ready fired");
+        c.True(wait.Contains("HasProtectedDialogOpen"),
+            "character wait IsPending is dialog-only (not !PlayerReadyFired)");
+        c.True(!wait.Contains("return !capi.PlayerReadyFired"),
+            "character wait must not gate IsPending on PlayerReadyFired (deadlock)");
         c.True(wait.Contains("GuiDialogCharacterBase"),
             "character wait recognizes character dialog base type");
         c.True(wait.Contains("IsProtectedDialog"),
@@ -600,6 +606,10 @@ public static class LoginSweepChecks
             "level finalize defers sweep during character creation");
         c.True(mod.Contains("LodLoginBakeCharacterWait.IsPending"),
             "deferred sweep polls character wait helper");
+        c.True(mod.Contains("AllowHandoverWhileCharacterPending"),
+            "character deferral immediately allows handover so Loading is not stuck");
+        c.True(mod.Contains("!LodLoginBakeCharacterWait.IsPending"),
+            "level finalize prefers Decide/skip before character deferral");
 
         string bake = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));

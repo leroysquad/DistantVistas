@@ -30,12 +30,23 @@ public static class LodLoginSweepGate
         if (visited == 0)
             return new Result(true, "empty canvas needs bootstrap sweep");
 
+        // Prefer skip when a successful sweep is still in-window and the canvas did not grow —
+        // even if FindMisses reports leftovers. User intent: do not re-canvas the same world
+        // within the season / 30-day window.
+        LodLoginSweepComplete? complete = LodLoginSweepComplete.TryLoad(capi);
+        if (complete != null
+            && complete.VisitedKeyCount >= visited
+            && LodLoginSweepWindow.IsWithin(capi.World, complete.Season, complete.SavedTotalDays))
+        {
+            return new Result(false,
+                "visited canvas complete within season/30-day window (skip re-canvas)");
+        }
+
         List<LodLoginBakeAudit.Miss> misses = LodLoginBakeAudit.FindMisses(
             world, pipeline, blocks, plantTintFallback, untintedOf);
         if (misses.Count > 0)
             return new Result(true, $"{misses.Count} visited region(s) still incomplete");
 
-        LodLoginSweepComplete? complete = LodLoginSweepComplete.TryLoad(capi);
         if (complete == null)
             return new Result(true, "no successful sweep recorded yet");
 

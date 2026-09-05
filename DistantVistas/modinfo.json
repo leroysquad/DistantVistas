@@ -2,7 +2,7 @@
     "type": "code",
     "modid": "distantvistas",
     "name": "Distant Vistas",
-    "version": "0.8.21",
+    "version": "0.8.22",
     "side": "Universal",
     "requiredOnClient": true,
     "requiredOnServer": false,
@@ -19,4 +19,3 @@
         "game": "1.22.5"
     }
 }
-

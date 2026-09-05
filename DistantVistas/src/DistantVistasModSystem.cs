@@ -1073,6 +1073,10 @@ public class DistantVistasModSystem : ModSystem
         if (loginSweepDeferred) return;
 
         loginSweepDeferred = true;
+        // Must allow handover immediately or Loading… never reaches RunningGame / char UI
+        // (Harmony blocks handover while IsLoginSweepEnabled), and the defer tick never sees
+        // dialogs close because the world never leaves the loader.
+        LodLoginBakeSweepGate.AllowHandoverWhileCharacterPending(capi);
         Mod.Logger.Notification(
             "[DistantVistas] Login visit sweep deferred — waiting for character creation / class selection.");
         if (loginSweepDeferListenerId == null)
@@ -1175,13 +1179,16 @@ public class DistantVistasModSystem : ModSystem
                 Mod.Logger.Notification(
                     "[DistantVistas] Login visit sweep disabled in config — entering play without overlay.");
             }
-            else if (LodLoginBakeCharacterWait.IsPending(capi))
+            else if (!LodLoginBakeCharacterWait.IsPending(capi))
             {
-                DeferLoginVisitSweep();
+                // Prefer Decide/skip (or start) before any character deferral. IsPending is
+                // dialog-only, so rejoins with a complete marker reach ClearHandoverDeferral
+                // on the skip path instead of waiting forever on Loading….
+                StartLoginVisitSweepIfNeeded();
             }
             else
             {
-                StartLoginVisitSweepIfNeeded();
+                DeferLoginVisitSweep();
             }
         }
         catch (Exception ex)

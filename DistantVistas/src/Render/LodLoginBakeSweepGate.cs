@@ -36,8 +36,22 @@ public static class LodLoginBakeSweepGate
 
     public static void Arm()
     {
+        // Sweep owns handover again — stop character-wait pass-through.
+        AllowHandoverPassThrough = false;
         SweepActive = true;
         SuppressRunningGameRender = true;
+    }
+
+    /// <summary>
+    /// While waiting on a real character/class dialog, release any blocked handover so
+    /// vanilla can enter RunningGame / show the UI, and keep pass-through on until
+    /// <see cref="Arm"/> starts the visit sweep.
+    /// </summary>
+    public static void AllowHandoverWhileCharacterPending(ICoreClientAPI capi)
+    {
+        if (HandoverDeferred)
+            ClearHandoverDeferral(capi, "character-wait", force: true);
+        AllowHandoverPassThrough = true;
     }
 
     public static void MarkHandoverDeferred() => HandoverDeferred = true;

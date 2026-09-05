@@ -13,8 +13,11 @@ public static class LodLoginBakeCharacterWait
     /// </summary>
     public static bool IsPending(ICoreClientAPI capi)
     {
-        if (HasProtectedDialogOpen(capi)) return true;
-        return !capi.PlayerReadyFired;
+        // Dialog-only. Do NOT gate on !PlayerReadyFired — that is almost always true on
+        // LevelFinalize before handover, which deferred the sweep while Harmony still
+        // blocked handOverRenderingToRunningGame (IsLoginSweepEnabled), so PlayerReady
+        // never fired and Loading… deadlocked on rejoins.
+        return HasProtectedDialogOpen(capi);
     }
 
     /// <summary>Character/class dialogs must never be closed by the sweep.</summary>
