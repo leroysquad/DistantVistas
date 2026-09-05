@@ -1,3 +1,4 @@
+using Cairo;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
@@ -14,20 +15,31 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     public static readonly AssetLocation BackdropAsset =
         new("distantvistas", "textures/gui/login-backdrop.png");
 
-    /// <summary>Arched single-color "Distant Vistas" title above the loading panel.</summary>
+    /// <summary>Rainbow-arched "Distant Vistas" title above the loading panel.</summary>
     public static readonly AssetLocation TitleAsset =
         new("distantvistas", "textures/gui/login-title-rainbow.png");
 
+    const string TitleText = "Distant Vistas";
     const double PanelW = 520;
     const double PanelH = 156;
     const float TitleGap = 28f;
     const float TitleMaxWidthFrac = 0.62f;
     const float TitleMaxWidthPx = 560f;
+    const int ArchedTitleW = 560;
+    const int ArchedTitleH = 150;
     static readonly float[] DarkFill = { 0.06f, 0.08f, 0.11f, 1f };
     static readonly float[] BarTrack = { 0.12f, 0.14f, 0.18f, 1f };
     static readonly float[] BarFill = { 0.28f, 0.55f, 0.82f, 1f };
     static readonly float[] PanelFill = { 0.10f, 0.12f, 0.16f, 0.92f };
-    static readonly double[] TitleFallbackColor = { 0.95, 0.86, 0.62, 1.0 };
+    static readonly double[][] Rainbow =
+    {
+        new[] { 1.00, 0.22, 0.22, 1.0 },
+        new[] { 1.00, 0.52, 0.12, 1.0 },
+        new[] { 1.00, 0.88, 0.18, 1.0 },
+        new[] { 0.22, 0.86, 0.38, 1.0 },
+        new[] { 0.28, 0.58, 1.00, 1.0 },
+        new[] { 0.62, 0.28, 0.95, 1.0 },
+    };
 
     readonly ICoreClientAPI capi;
     readonly LoadedTexture backdrop;
@@ -36,7 +48,6 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     readonly LoadedTexture percentTex;
     readonly LoadedTexture statusTex;
     readonly Vec4f tint = new();
-    readonly CairoFont titleFallbackFont;
     readonly CairoFont percentFont;
     readonly CairoFont statusFont;
 
@@ -57,9 +68,6 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         titleFallbackTex = new LoadedTexture(capi);
         percentTex = new LoadedTexture(capi);
         statusTex = new LoadedTexture(capi);
-        titleFallbackFont = CairoFont.WhiteDetailText()
-            .WithFontSize(28)
-            .WithColor(TitleFallbackColor);
         percentFont = CairoFont.WhiteDetailText().WithFontSize(18);
         statusFont = CairoFont.WhiteSmallText();
     }
@@ -112,8 +120,8 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         }
         else if (titleFallbackTex.TextureId > 0 && titleFallbackTex.Width > 0)
         {
-            titleW = titleFallbackTex.Width;
-            titleH = titleFallbackTex.Height;
+            titleW = Math.Min(w * TitleMaxWidthFrac, titleFallbackTex.Width);
+            titleH = titleW * titleFallbackTex.Height / titleFallbackTex.Width;
         }
 
         float blockH = titleH > 0 ? titleH + TitleGap + PanelH : PanelH;
@@ -127,7 +135,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
             if (!titleMissing && titleImage.TextureId > 0)
                 rapi.Render2DTexture(titleImage.TextureId, titleX, blockTop, titleW, titleH, 204);
             else
-                DrawText(titleFallbackTex, titleX, blockTop, 204);
+                rapi.Render2DTexture(titleFallbackTex.TextureId, titleX, blockTop, titleW, titleH, 204);
         }
 
         tint.Set(PanelFill[0], PanelFill[1], PanelFill[2], PanelFill[3]);
@@ -188,8 +196,6 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     {
         capi.Gui.TextTexture.GenOrUpdateTextTexture(percentLabel, percentFont, ref percentTex);
         capi.Gui.TextTexture.GenOrUpdateTextTexture(status, statusFont, ref statusTex);
-        if (titleMissing)
-            capi.Gui.TextTexture.GenOrUpdateTextTexture("Distant Vistas", titleFallbackFont, ref titleFallbackTex);
     }
 
     void EnsureGraphicsLoaded()
@@ -198,9 +204,72 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         backdropMissing = !TryLoadTexture(capi, BackdropAsset, ref backdrop);
         titleMissing = !TryLoadTexture(capi, TitleAsset, ref titleImage);
         if (titleMissing)
-            capi.Gui.TextTexture.GenOrUpdateTextTexture("Distant Vistas", titleFallbackFont, ref titleFallbackTex);
+            BuildArchedRainbowTitle();
         gfxReady = true;
         RebuildText();
+    }
+
+    /// <summary>
+    /// Fallback when <see cref="TitleAsset"/> is absent: rainbow-colored glyphs on a rainbow arc.
+    /// </summary>
+    void BuildArchedRainbowTitle()
+    {
+        titleFallbackTex.Dispose();
+
+        using ImageSurface surface = new(Format.Argb32, ArchedTitleW, ArchedTitleH);
+        using Context ctx = new(surface);
+
+        ctx.SetSourceRGBA(0, 0, 0, 0);
+        ctx.Paint();
+
+        CairoFont font = CairoFont.WhiteDetailText().WithFontSize(34);
+        font.SetupContext(ctx);
+
+        double cx = ArchedTitleW * 0.5;
+        double cy = ArchedTitleH * 0.82;
+        double radius = ArchedTitleW * 0.40;
+        int colorIdx = 0;
+
+        for (int i = 0; i < TitleText.Length; i++)
+        {
+            char c = TitleText[i];
+            if (c == ' ')
+            {
+                colorIdx++;
+                continue;
+            }
+
+            double t = i / (TitleText.Length - 1.0);
+            double angle = Math.PI * (1.0 - t);
+            double x = cx + radius * Math.Cos(angle);
+            double y = cy - radius * Math.Sin(angle);
+            double rot = angle - Math.PI * 0.5;
+            string glyph = c.ToString();
+            TextExtents extents = ctx.TextExtents(glyph);
+
+            ctx.Save();
+            ctx.Translate(x, y);
+            ctx.Rotate(rot);
+
+            double[] shade = Rainbow[colorIdx % Rainbow.Length];
+            ctx.SetSourceRGBA(0, 0, 0, 0.55);
+            ctx.MoveTo(-extents.XBearing - extents.Width * 0.5 + 1.5, -extents.YBearing + extents.Height * 0.5 + 1.5);
+            ctx.TextPath(glyph);
+            ctx.Fill();
+
+            ctx.SetSourceRGBA(shade[0], shade[1], shade[2], shade[3]);
+            ctx.MoveTo(-extents.XBearing - extents.Width * 0.5, -extents.YBearing + extents.Height * 0.5);
+            ctx.TextPath(glyph);
+            ctx.Fill();
+
+            ctx.Restore();
+            colorIdx++;
+        }
+
+        int texId = capi.Gui.LoadCairoTexture(surface, true);
+        titleFallbackTex.TextureId = texId;
+        titleFallbackTex.Width = ArchedTitleW;
+        titleFallbackTex.Height = ArchedTitleH;
     }
 
     static bool TryLoadTexture(ICoreClientAPI capi, AssetLocation path, ref LoadedTexture into)
