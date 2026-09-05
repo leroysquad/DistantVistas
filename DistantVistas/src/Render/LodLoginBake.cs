@@ -36,6 +36,10 @@ public sealed class LodLoginBake
     readonly LodLoginBakeOverlay overlay;
     readonly LodLoginBakeAudioMute audioMute;
     readonly LodLoginBakeTimeFreeze timeFreeze;
+    readonly LodLoginBakeGameMode gameMode;
+    readonly LodLoginBakeHudHide hudHide;
+    readonly LodLoginBakePlayerHide playerHide;
+    readonly LodLoginSweepTiming sweepTiming = new();
     readonly Block? plantTintFallback;
     readonly System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf;
     readonly Queue<long> pending = new();
@@ -96,14 +100,19 @@ public sealed class LodLoginBake
         this.untintedOf = untintedOf;
         audioMute = new LodLoginBakeAudioMute(capi);
         timeFreeze = new LodLoginBakeTimeFreeze(capi);
+        gameMode = new LodLoginBakeGameMode(capi);
+        hudHide = new LodLoginBakeHudHide(capi);
+        playerHide = new LodLoginBakePlayerHide(capi);
     }
 
     public void Begin()
     {
         pending.Clear();
-        foreach (long key in LodLoginSweep.VisitedL0Keys(pipeline.World))
+        foreach (long key in LodLoginSweepBootstrap.PlanKeys(
+                     pipeline.World, capi.World, LodLoginSweepTiming.InitialSecPerStop))
             pending.Enqueue(key);
         total = pending.Count;
+        sweepTiming.Begin();
         finished = 0;
         worldWaitTicks = 0;
         drainTicks = 0;
@@ -120,7 +129,10 @@ public sealed class LodLoginBake
         overlay.Show();
         audioMute.EnsureMuted();
         timeFreeze.EnsureFrozen();
-        overlay.UpdateProgress(Progress, "Waiting for world to load…");
+        gameMode.EnsureCreative();
+        hudHide.EnsureHidden();
+        playerHide.EnsureHidden();
+        overlay.UpdateProgress(Progress, StatusWithEta("Waiting for world to load…"));
 
         if (total == 0)
         {
@@ -161,9 +173,9 @@ public sealed class LodLoginBake
         if (!LodLoginSweep.IsWorldReady(capi.World))
         {
             overlay.UpdateProgress(Progress,
-                worldWaitTicks > LodLoginSweep.MaxWorldReadyTicks
+                StatusWithEta(worldWaitTicks > LodLoginSweep.MaxWorldReadyTicks
                     ? "World slow to load — continuing anyway…"
-                    : "Waiting for world and map to load…");
+                    : "Waiting for world and map to load…"));
             if (worldWaitTicks < LodLoginSweep.MaxWorldReadyTicks) return;
         }
 
@@ -205,7 +217,7 @@ public sealed class LodLoginBake
                     && stopTicks < LodLoginSweep.MaxChunkWaitTicks)
                 {
                     overlay.UpdateProgress(Progress,
-                        $"{VisitPrefix()}loading terrain… ({stopTicks})");
+                        StatusWithEta($"{VisitPrefix()}loading terrain… ({stopTicks})"));
                     return;
                 }
                 SweepColumnsAround(key);
@@ -220,7 +232,7 @@ public sealed class LodLoginBake
                     && stopTicks < LodLoginSweep.MaxCaptureWaitTicks)
                 {
                     overlay.UpdateProgress(Progress,
-                        $"{VisitPrefix()}capturing live terrain… ({Pct(finished, total)})");
+                        StatusWithEta($"{VisitPrefix()}capturing live terrain… ({Pct(finished, total)})"));
                     return;
                 }
                 stopPhase = StopPhase.Bake;
@@ -229,10 +241,11 @@ public sealed class LodLoginBake
             case StopPhase.Bake:
                 BakeAndPersist(key);
                 finished++;
+                sweepTiming.NoteFinished(finished);
                 stopPhase = StopPhase.Done;
                 currentKey = null;
                 overlay.UpdateProgress(Progress,
-                    $"{VisitPrefix()}{Pct(finished, total)}");
+                    StatusWithEta($"{VisitPrefix()}{Pct(finished, total)}"));
                 break;
         }
     }
@@ -265,7 +278,7 @@ public sealed class LodLoginBake
         phase = Phase.Auditing;
         auditTicks = 0;
         currentKey = null;
-        overlay.UpdateProgress(Progress, "Checking visited regions for gaps…");
+        overlay.UpdateProgress(Progress, StatusWithEta("Checking visited regions for gaps…"));
     }
 
     void TickAuditing()
@@ -275,7 +288,7 @@ public sealed class LodLoginBake
 
         if (auditTicks < AuditSettleTicks)
         {
-            overlay.UpdateProgress(Progress, "Checking visited regions for gaps…");
+            overlay.UpdateProgress(Progress, StatusWithEta("Checking visited regions for gaps…"));
             return;
         }
 
@@ -309,8 +322,9 @@ public sealed class LodLoginBake
         capi.Logger.Notification(
             "[DistantVistas] Login visit sweep: retrying {0} missed regions (pass {1}).",
             total, resweepRound);
+        sweepTiming.Begin();
         overlay.UpdateProgress(Progress,
-            $"Retrying {total} missed region{(total == 1 ? "" : "s")} (pass {resweepRound})…");
+            StatusWithEta($"Retrying {total} missed region{(total == 1 ? "" : "s")} (pass {resweepRound})…"));
         BeginNextStop();
     }
 
@@ -332,7 +346,7 @@ public sealed class LodLoginBake
         (double x, double y, double z) = LodLoginSweep.VisitPosition(capi.World, key);
         TeleportPlayer(x, y, z);
         overlay.UpdateProgress(Progress,
-            $"{VisitPrefix()}moving to region… ({Pct(finished, total)})");
+            StatusWithEta($"{VisitPrefix()}moving to region… ({Pct(finished, total)})"));
     }
 
     void SweepColumnsAround(long l0Key)
@@ -477,12 +491,43 @@ public sealed class LodLoginBake
         {
             // Best-effort.
         }
+
+        try
+        {
+            gameMode.Restore();
+        }
+        catch
+        {
+            // Best-effort.
+        }
+
+        try
+        {
+            hudHide.Restore();
+        }
+        catch
+        {
+            // Best-effort.
+        }
+
+        try
+        {
+            playerHide.Restore();
+        }
+        catch
+        {
+            // Best-effort.
+        }
     }
 
     void HoldPlayerControls()
     {
         audioMute.EnsureMuted();
         timeFreeze.EnsureFrozen();
+        gameMode.EnsureCreative();
+        hudHide.EnsureHidden();
+        playerHide.EnsureHidden();
+        overlay.EnsureInputBlocked();
         CloseBlockingDialogs();
 
         IClientPlayer player = capi.World.Player;
@@ -533,8 +578,8 @@ public sealed class LodLoginBake
         controls.MovespeedMultiplier = 0f;
         controls.WalkVector.Set(0, 0, 0);
         controls.FlyVector.Set(0, 0, 0);
-        controls.IsFlying = false;
-        controls.NoClip = false;
+        controls.IsFlying = true;
+        controls.NoClip = true;
         controls.Gliding = false;
         controls.DetachedMode = false;
 
@@ -554,7 +599,7 @@ public sealed class LodLoginBake
         for (int i = open.Count - 1; i >= 0; i--)
         {
             GuiDialog dlg = open[i];
-            if (dlg == overlay || dlg.DialogType == EnumDialogType.HUD) continue;
+            if (dlg.DialogType == EnumDialogType.HUD) continue;
             dlg.TryClose();
         }
     }
@@ -578,6 +623,11 @@ public sealed class LodLoginBake
 
     static string Pct(int done, int total) =>
         total <= 0 ? "0%" : $"{done * 100 / total}%";
+
+    string StatusWithEta(string detail) =>
+        phase == Phase.Sweeping && total > 0
+            ? detail + sweepTiming.EtaSuffix(finished, total)
+            : detail;
 
     public void Dispose() => Teardown(success: false);
 }

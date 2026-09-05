@@ -3,46 +3,18 @@ using Vintagestory.API.Client;
 namespace DistantVistas;
 
 /// <summary>
-/// Coordinates the render-layer fullscreen cover and an input-blocking dialog. Visuals are
-/// drawn by <see cref="LodLoginBakeScreenRenderer"/> every frame; this dialog captures
-/// keyboard, mouse and inventory shortcuts that movement multipliers cannot stop.
+/// Coordinates the render-layer fullscreen cover and a deferred input-blocking HUD guard.
+/// Visuals are drawn by <see cref="LodLoginBakeScreenRenderer"/> every frame.
 /// </summary>
-public sealed class LodLoginBakeOverlay : GuiDialog, IDisposable
+public sealed class LodLoginBakeOverlay : IDisposable
 {
     readonly LodLoginBakeScreenRenderer screen;
+    readonly LodLoginBakeInputGuard inputGuard;
 
-    public LodLoginBakeOverlay(ICoreClientAPI capi, LodLoginBakeScreenRenderer screen) : base(capi)
+    public LodLoginBakeOverlay(ICoreClientAPI capi, LodLoginBakeScreenRenderer screen)
     {
         this.screen = screen;
-    }
-
-    public override string ToggleKeyCombinationCode => "";
-
-    public override bool PrefersUngrabbedMouse => false;
-
-    public override bool DisableMouseGrab => false;
-
-    public override double InputOrder => 0;
-
-    public override double DrawOrder => 1.04;
-
-    public override bool CaptureAllInputs() => true;
-
-    public override bool CaptureRawMouse() => true;
-
-    public override bool ShouldReceiveKeyboardEvents() => true;
-
-    public override bool ShouldReceiveMouseEvents() => true;
-
-    public override bool OnEscapePressed() => true;
-
-    public void ComposeDialog()
-    {
-        ElementBounds full = ElementBounds.Fill.WithParent(capi.Gui.WindowBounds);
-        SingleComposer = capi.Gui
-            .CreateCompo("dvistas-login-sweep", capi.Gui.WindowBounds)
-            .AddGameOverlay(full, new[] { 0.0, 0.0, 0.0, 0.0 })
-            .Compose();
+        inputGuard = new LodLoginBakeInputGuard(capi);
     }
 
     public void UpdateProgress(float fraction, string detail) =>
@@ -52,20 +24,16 @@ public sealed class LodLoginBakeOverlay : GuiDialog, IDisposable
     {
         screen.Active = true;
         screen.SetProgress(0f, "Starting…");
-        if (IsOpened()) return;
-        ComposeDialog();
-        TryOpen();
+        inputGuard.RequestShow();
     }
+
+    public void EnsureInputBlocked() => inputGuard.TryEnsureOpen();
 
     public void Hide()
     {
         screen.Active = false;
-        if (IsOpened()) TryClose();
+        inputGuard.RequestHide();
     }
 
-    public new void Dispose()
-    {
-        Hide();
-        base.Dispose();
-    }
+    public void Dispose() => Hide();
 }

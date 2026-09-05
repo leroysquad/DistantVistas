@@ -13,6 +13,10 @@ public static class LoginSweepChecks
         TimeFreezeKey(c);
         TeardownHook(c);
         AuditMisses(c);
+        OverlayGuard(c);
+        SweepTiming(c);
+        CreativeMode(c);
+        HudHide(c);
     }
 
     static void L0ChunkColumns(Check c)
@@ -104,5 +108,64 @@ public static class LoginSweepChecks
         c.Eq(LodLoginBakeAudit.MissReason.EmptyCapture,
             LodLoginBakeAudit.Classify(world, null!, key, blocks, null, untinted),
             "zero captured columns is a miss");
+    }
+
+    static void OverlayGuard(Check c)
+    {
+        string overlay = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeOverlay.cs"));
+        c.True(!overlay.Contains(": GuiDialog"),
+            "login overlay coordinator is not a fragile GuiDialog");
+        c.True(overlay.Contains("LodLoginBakeInputGuard"),
+            "login overlay uses deferred input guard");
+
+        string guard = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeInputGuard.cs"));
+        c.True(guard.Contains("TryEnsureOpen"),
+            "input guard retries open when viewport is ready");
+        c.True(guard.Contains("SafeBounds"),
+            "input guard uses render/window bounds fallback");
+    }
+
+    static void SweepTiming(Check c)
+    {
+        c.Eq(90.0, LodLoginSweepTiming.TargetMinSec, "sweep target min seconds");
+        c.Eq(150.0, LodLoginSweepTiming.TargetMaxSec, "sweep target max seconds");
+        c.True(LodLoginSweepTiming.BootstrapCellBudget(3.5) >= 12,
+            "bootstrap budgets at least a dozen cells");
+
+        string bake = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
+        c.True(bake.Contains("LodLoginSweepBootstrap.PlanKeys"),
+            "login bake plans sweep keys with bootstrap sizing");
+        c.True(bake.Contains("StatusWithEta"),
+            "login bake progress includes ETA suffix");
+    }
+
+    static void CreativeMode(Check c)
+    {
+        string bake = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
+        c.True(bake.Contains("gameMode.EnsureCreative()"),
+            "login bake enables creative during sweep");
+        c.True(bake.Contains("gameMode.Restore()"),
+            "login bake restores prior gamemode on teardown");
+
+        string hud = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeHudHide.cs"));
+        c.True(hud.Contains("HideGuis"),
+            "HUD hide saves prior HideGuis state");
+        c.True(hud.Contains(".gui"),
+            "HUD hide uses the .gui client toggle");
+    }
+
+    static void HudHide(Check c)
+    {
+        string bake = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
+        c.True(bake.Contains("hudHide.EnsureHidden()"),
+            "login bake hides HUD during sweep");
+        c.True(bake.Contains("playerHide.EnsureHidden()"),
+            "login bake hides local player view during sweep");
     }
 }
