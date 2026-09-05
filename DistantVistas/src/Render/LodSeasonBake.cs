@@ -255,7 +255,82 @@ public static class LodSeasonBake
     }
 
     /// <summary>
+    /// Login visit sweep: lock palette RGB from vanilla <c>GetColor</c> at each column
+    /// top while chunks are loaded. No shader reproduction or greener stable guesses —
+    /// rows stay unbaked when GetColor is unavailable so the audit re-queues the cell.
+    /// </summary>
+    public static int BakeSectionFromVisit(
+        ICoreClientAPI capi,
+        LodSection section,
+        long sectionKey,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf)
+    {
+        IClientWorldAccessor world = capi.World;
+        SnowVote vote = ComputeSnowVote(section, world.Blocks, sectionKey);
+        int changed = 0;
+        for (int pid = 0; pid < section.Palette.Count; pid++)
+        {
+            LodPaletteEntry entry = section.Palette[pid];
+            if (entry.BlockId <= 0 || entry.BlockId >= world.Blocks.Length) continue;
+            Block block = world.Blocks[entry.BlockId];
+            if (!section.TryFindPaletteTop(sectionKey, pid, out int x, out int y, out int z)) continue;
+
+            (int untinted, _) = untintedOf(block);
+            untinted = LodPaletteRepair.KeepCapturedColor(
+                untinted, untinted, LodBlockPolicy.IsClimateUntinted(block));
+
+            if (!CanBake(block, untinted, plantTintFallback))
+            {
+                if ((entry.Flags & LodPaletteEntry.FlagBaked) != 0)
+                {
+                    entry.Flags = (byte)(entry.Flags & ~LodPaletteEntry.FlagBaked);
+                    entry.TintSlot = 0;
+                    section.Palette[pid] = entry;
+                    changed++;
+                }
+                continue;
+            }
+
+            int baked = SampleVanillaColor(capi, block, x, y, z);
+            if (baked == 0)
+            {
+                if ((entry.Flags & LodPaletteEntry.FlagBaked) != 0)
+                {
+                    entry.Flags = (byte)(entry.Flags & ~LodPaletteEntry.FlagBaked);
+                    entry.TintSlot = 0;
+                    section.Palette[pid] = entry;
+                    changed++;
+                }
+                continue;
+            }
+
+            baked = LodPaletteRepair.KeepCapturedColor(
+                baked, untinted, LodBlockPolicy.IsClimateUntinted(block));
+
+            if (vote.MajoritySnow && IsSnowEligibleGround(block))
+                baked = BlendTowardSnow(baked, 0.72f);
+
+            if (baked == entry.Color && (entry.Flags & LodPaletteEntry.FlagBaked) != 0
+                && entry.TintSlot == LodTintRegistry.SlotNone)
+            {
+                continue;
+            }
+
+            entry.Color = baked;
+            entry.Flags = (byte)(entry.Flags | LodPaletteEntry.FlagBaked);
+            entry.TintSlot = LodTintRegistry.SlotNone;
+            section.Palette[pid] = entry;
+            changed++;
+        }
+
+        if (changed > 0) section.InvalidatePaletteSnapshot();
+        return changed;
+    }
+
+    /// <summary>
     /// Bake every tintable palette entry in a cached section. Returns how many colours changed.
+    /// Uses shader reproduction when GetColor is unavailable (legacy / off-visit paths only).
     /// </summary>
     public static int BakeSection(
         ICoreClientAPI capi,

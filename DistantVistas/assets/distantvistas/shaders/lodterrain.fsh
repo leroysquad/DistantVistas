@@ -97,7 +97,7 @@ void main()
     bool translucent = band > 0 && band < 3;
     bool baked = band == 3;
 
-    vec3 albedo = vertexColor.rgb * tint;
+    vec3 albedo = baked ? vertexColor.rgb : vertexColor.rgb * tint;
     float outAlpha = band == 2 ? THIN_ALPHA : (band == 1 ? WATER_ALPHA : 1.0);
     float upness = clamp(normal.y, 0.0, 1.0);
     // Foam / missing-tex water stores near-white and then looks like ice.

@@ -680,7 +680,7 @@ public class DistantVistasModSystem : ModSystem
     {
         if (stableColorByBlockId.TryGetValue(block.BlockId, out int cached)) return cached;
 
-        if (TryTopSoilColor(block, out int composite, out _))
+        if (TryTopSoilColor(block, out int composite, out _, legacyGreenerBias: true))
         {
             stableColorByBlockId[block.BlockId] = composite;
             return composite;
@@ -738,7 +738,8 @@ public class DistantVistasModSystem : ModSystem
     /// LOD has one vertex colour, so store that composite and dilute the live tint by
     /// the dirt share that must stay untinted (winter brown grass must not brown the dirt).
     /// </summary>
-    bool TryTopSoilColor(Block block, out int composite, out LodUntintedShare share)
+    bool TryTopSoilColor(Block block, out int composite, out LodUntintedShare share,
+        bool legacyGreenerBias = false)
     {
         composite = 0;
         share = LodUntintedShare.None;
@@ -755,7 +756,9 @@ public class DistantVistasModSystem : ModSystem
         TextureMean grass = MeanOf(overlay, overlayId);
         if (grass.Coverage <= 0f) return false;
 
-        float a = LodTopSoil.GreenerCoverage(grass.Coverage);
+        float a = legacyGreenerBias
+            ? LodTopSoil.GreenerCoverage(grass.Coverage)
+            : grass.Coverage;
         composite = unchecked((int)0xFF000000)
             | Channel(soil.B, grass.B, a) << 16 | Channel(soil.G, grass.G, a) << 8 | Channel(soil.R, grass.R, a);
         share = new LodUntintedShare(

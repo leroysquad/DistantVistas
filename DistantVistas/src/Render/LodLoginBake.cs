@@ -127,6 +127,7 @@ public sealed class LodLoginBake
         windowMedians.Clear();
 
         overlay.Show();
+        pipeline.DeferLegacyHeal = true;
         audioMute.EnsureMuted();
         timeFreeze.EnsureFrozen();
         gameMode.EnsureCreative();
@@ -371,7 +372,7 @@ public sealed class LodLoginBake
         }
         if (section == null) return;
 
-        LodSeasonBake.BakeSection(
+        LodSeasonBake.BakeSectionFromVisit(
             capi, section, l0Key, plantTintFallback, untintedOf);
 
         world.MarkChanged(l0Key);
@@ -443,6 +444,7 @@ public sealed class LodLoginBake
 
         released = true;
         phase = Phase.Done;
+        pipeline.DeferLegacyHeal = false;
 
         if (success)
             renderer.LoginBakeComplete = true;

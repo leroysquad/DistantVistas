@@ -188,6 +188,8 @@ public static class StaticAssetChecks
         c.True(fsh.Contains("COARSE_PLATE_COLUMNS"), "lodterrain.fsh gates plate noise to coarse LOD");
         c.True(fsh.Contains("grassPullWeight"), "lodterrain.fsh receives grassPullWeight for coarse plant-pull");
         c.True(fsh.Contains("bool baked = band == 3"), "lodterrain.fsh skips snow/noise on baked band");
+        c.True(fsh.Contains("baked ? vertexColor.rgb"),
+            "lodterrain.fsh uses stored RGB directly on baked band");
         c.True(fsh.Contains("band == 1") && fsh.Contains("0.18, 0.38, 0.50"),
             "lodterrain.fsh recolors foam-white water to lake blue");
         c.True(vsh.Contains("lookDown"),

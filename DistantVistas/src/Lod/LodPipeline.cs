@@ -99,6 +99,12 @@ public class LodPipeline
     /// <summary>Upgrade legacy live-tint palette rows after load (join refresh).</summary>
     public System.Func<LodSection, long, int>? HealLegacyPalette;
 
+    /// <summary>
+    /// While the login visit sweep runs, skip approximate legacy heal — the sweep
+    /// stores exact GetColor samples per column instead.
+    /// </summary>
+    public bool DeferLegacyHeal { get; set; }
+
     /// <summary>Palette entries given a colour on load because the cache had none.</summary>
     public int PaletteEntriesRepaired { get; private set; }
 
@@ -567,11 +573,14 @@ public class LodPipeline
     void AfterSectionLoaded(long key, LodSection section, ref int repaired)
     {
         repaired += RepairUncoloredPalette?.Invoke(section) ?? 0;
-        int healed = HealLegacyPalette?.Invoke(section, key) ?? 0;
-        if (healed > 0)
+        if (!DeferLegacyHeal)
         {
-            repaired += healed;
-            World.RenderDirty.Add(key);
+            int healed = HealLegacyPalette?.Invoke(section, key) ?? 0;
+            if (healed > 0)
+            {
+                repaired += healed;
+                World.RenderDirty.Add(key);
+            }
         }
     }
 

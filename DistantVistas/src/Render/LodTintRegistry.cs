@@ -78,8 +78,8 @@ public static class LodTopSoil
     public static float Dilute(float share, float tint) => share + (1f - share) * tint;
 
     /// <summary>
-    /// Slight coverage boost for topsoil composite so stable captures read greener
-    /// than dirt-heavy atlas means (0.8.45 bake; kept in 0.8.46).
+    /// Slight coverage boost for legacy stable topsoil composites only. Visit-sweep
+    /// capture uses raw coverage and stores exact GetColor instead.
     /// </summary>
     public static float GreenerCoverage(float coverage) =>
         Math.Min(1f, coverage * 1.06f + 0.03f);

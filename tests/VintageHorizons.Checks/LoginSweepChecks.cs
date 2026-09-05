@@ -77,10 +77,19 @@ public static class LoginSweepChecks
 
         string season = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSeasonBake.cs"));
+        c.True(season.Contains("BakeSectionFromVisit"),
+            "visit sweep uses exact GetColor bake path");
         c.True(season.Contains("block.GetColor(capi, pos)"),
-            "login bake samples vanilla GetColor at column top");
-        c.True(season.Contains("ApplyColorMapOnRgba(\n            climate, (string?)null,"),
-            "login bake fallback samples climate without season on white");
+            "visit bake samples vanilla GetColor at column top");
+        c.True(bake.Contains("BakeSectionFromVisit"),
+            "login bake calls visit-only exact bake");
+        c.True(bake.Contains("DeferLegacyHeal = true"),
+            "legacy heal is deferred during visit sweep");
+
+        string pipeline = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Lod", "LodPipeline.cs"));
+        c.True(pipeline.Contains("DeferLegacyHeal"),
+            "pipeline can defer approximate legacy heal");
     }
 
     static void AuditMisses(Check c)

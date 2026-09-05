@@ -4,7 +4,8 @@ namespace DistantVistas;
 /// Coarse climate at XZ. Vanilla paints grass, leaves, and bushes from
 /// GetClimateAt at that vertex. One keep-origin table painted the whole far
 /// field, so the fade snapped green and mountain canopies stayed lime on
-/// olive grass. Same sample for every vegetation slot on one hill; the slot
+/// olive grass. Cells are 40 blocks on XZ with four-corner bilinear upload per
+/// section draw. Same sample for every vegetation slot on one hill; the slot
 /// table still holds dirt-share dilution and per-species season maps.
 /// </summary>
 public sealed class LodClimateField
