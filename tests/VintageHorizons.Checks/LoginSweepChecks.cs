@@ -506,8 +506,8 @@ public static class LoginSweepChecks
         c.Eq(2048, LodLoginBakeViewBoost.MaxVanillaViewDistance, "sweep view boost ceiling");
         c.True(viewBoost.Contains("FarViewDistanceCap"),
             "view boost clears DV far cap during sweep");
-        c.True(viewBoost.Contains("OverdrawStart"),
-            "view boost lowers overdraw for wider cover");
+        c.True(viewBoost.Contains("ApplyZFar"),
+            "view boost refreshes camera z-far after far-cap change");
 
         string hud = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeHudHide.cs"));

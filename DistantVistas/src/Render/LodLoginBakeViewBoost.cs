@@ -26,6 +26,7 @@ public sealed class LodLoginBakeViewBoost
     float savedOverdrawStart;
     bool applied;
     int boostedViewDistance;
+    bool loggedBoost;
 
     public LodLoginBakeViewBoost(ICoreClientAPI capi, LodTerrainRenderer renderer)
     {
@@ -62,6 +63,8 @@ public sealed class LodLoginBakeViewBoost
         if (!applied)
         {
             savedDesiredViewDistance = data.DesiredViewDistance;
+            savedLastApprovedViewDistance = data.LastApprovedViewDistance;
+            hadLastApproved = data.LastApprovedViewDistance > 0;
             savedFarViewDistanceCap = renderer.FarViewDistanceCap;
             savedOverdrawStart = renderer.OverdrawStart;
             applied = true;
@@ -81,6 +84,21 @@ public sealed class LodLoginBakeViewBoost
         float overdraw = GameMath.Clamp(SweepOverdrawStart, 0.15f, 0.95f);
         if (Math.Abs(renderer.OverdrawStart - overdraw) > 0.001f)
             renderer.OverdrawStart = overdraw;
+
+        if (!loggedBoost)
+        {
+            loggedBoost = true;
+            capi.Logger.Notification(
+                "[DistantVistas] Login sweep view boost: vanilla {0}→{1} blocks, FarViewDistanceCap {2}→0 (unlimited), OverdrawStart {3:0.00}→{4:0.00}, chunk sweep radius {5}.",
+                savedDesiredViewDistance ?? target,
+                target,
+                savedFarViewDistanceCap,
+                savedOverdrawStart,
+                overdraw,
+                ChunkSweepRadiusChunks);
+        }
+
+        try { renderer.ApplyZFar(); } catch { }
     }
 
     public void Restore()
@@ -93,17 +111,21 @@ public sealed class LodLoginBakeViewBoost
             if (savedDesiredViewDistance.HasValue)
             {
                 data.DesiredViewDistance = savedDesiredViewDistance.Value;
+                if (hadLastApproved)
+                    data.LastApprovedViewDistance = savedLastApprovedViewDistance;
                 capi.World.Player.Entity.UpdatePartitioning();
             }
 
             renderer.FarViewDistanceCap = savedFarViewDistanceCap;
             renderer.OverdrawStart = savedOverdrawStart;
+            try { renderer.ApplyZFar(); } catch { }
         }
         finally
         {
             savedDesiredViewDistance = null;
             boostedViewDistance = 0;
             applied = false;
+            loggedBoost = false;
         }
     }
 
