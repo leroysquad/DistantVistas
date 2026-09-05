@@ -1,3 +1,6 @@
+## 0.8.17
+- **Tighter login visit sweep (0.8.16 follow-up).** Season revisit target window **~3–5 minutes** (`TargetMinSec` 180, `TargetMaxSec` 300). `RevisitMaxVisitStops` = **75** at ~4s/stop (60–100 range depending on measured stop rate; `MaxVisitStops` ceiling 100). Example: 291 regions → `Refreshing visited land (season) (75 of 291)` ≈ **5 min**. Bootstrap (~2.5 min / 38 stops), view-distance boost+restore, splash, deadlock fixes, oversized resume replan unchanged from 0.8.16.
+
 ## 0.8.16
 - **CRITICAL: login visit sweep wall-clock budget (0.8.15 playtest).** Season revisit with 291 visited L0 regions queued every key (~20s/stop from `MaxChunkWaitTicks=400`) — hours, not minutes. Fix: hard **≤10 minute** revisit budget (`RevisitMaxVisitStops` = 150 at ~4s/stop, spatial subsample across the canvas like bootstrap). Bootstrap stays on its shorter ~2.5 min cap (`BootstrapMaxVisitStops` = 38). UI shows `Refreshing visited land (season) (150 of 291)` when subsampled.
 - **Faster per-stop waits.** `MaxChunkWaitTicks` 400→80 (~4s max), `MaxCaptureWaitTicks` 120→48 (~2.4s), teleport/bake settle ticks trimmed. Enough time to capture live terrain; typical stop ~4s instead of ~20s.

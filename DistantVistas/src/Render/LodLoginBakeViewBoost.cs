@@ -63,8 +63,6 @@ public sealed class LodLoginBakeViewBoost
         if (!applied)
         {
             savedDesiredViewDistance = data.DesiredViewDistance;
-            savedLastApprovedViewDistance = data.LastApprovedViewDistance;
-            hadLastApproved = data.LastApprovedViewDistance > 0;
             savedFarViewDistanceCap = renderer.FarViewDistanceCap;
             savedOverdrawStart = renderer.OverdrawStart;
             applied = true;
@@ -111,8 +109,6 @@ public sealed class LodLoginBakeViewBoost
             if (savedDesiredViewDistance.HasValue)
             {
                 data.DesiredViewDistance = savedDesiredViewDistance.Value;
-                if (hadLastApproved)
-                    data.LastApprovedViewDistance = savedLastApprovedViewDistance;
                 capi.World.Player.Entity.UpdatePartitioning();
             }
 

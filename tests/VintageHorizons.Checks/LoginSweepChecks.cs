@@ -71,8 +71,8 @@ public static class LoginSweepChecks
         c.Eq(1, targeted.Keys.Count, "incomplete plan dedupes keys");
         c.True(targeted.ModeLabel.Contains("incomplete"), "incomplete plan label");
 
-        c.Eq(150, LodLoginSweepBootstrap.RevisitMaxVisitStops,
-            "revisit cap targets ~10 min at 4s/stop");
+        c.Eq(75, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "revisit cap targets ~5 min at 4s/stop");
         c.True(LodLoginSweepBootstrap.RevisitMaxVisitStops > LodLoginSweepBootstrap.BootstrapMaxVisitStops,
             "revisit budget exceeds bootstrap budget");
     }
@@ -449,8 +449,8 @@ public static class LoginSweepChecks
 
     static void SweepTiming(Check c)
     {
-        c.Eq(300.0, LodLoginSweepTiming.TargetMinSec, "sweep target min seconds");
-        c.Eq(600.0, LodLoginSweepTiming.TargetMaxSec, "sweep target max seconds");
+        c.Eq(180.0, LodLoginSweepTiming.TargetMinSec, "sweep target min seconds");
+        c.Eq(300.0, LodLoginSweepTiming.TargetMaxSec, "sweep target max seconds");
         c.Eq(150.0, LodLoginSweepTiming.BootstrapTargetMaxSec, "bootstrap target max seconds");
         c.Eq(6000, LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks,
             "empty-canvas bootstrap probe radius default");
@@ -458,8 +458,8 @@ public static class LoginSweepChecks
             "6000 blocks is ~94 L0 cells radius at 64-block footprint");
         c.Eq(38, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
             "bootstrap visit cap targets ~2.5 min at 4s/stop");
-        c.Eq(150, LodLoginSweepBootstrap.RevisitMaxVisitStops,
-            "revisit visit cap targets ~10 min at 4s/stop");
+        c.Eq(75, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "revisit visit cap targets ~5 min at 4s/stop");
         c.Eq(80, LodLoginSweep.MaxChunkWaitTicks, "chunk wait capped ~4s at 50ms pulse");
         c.Eq(48, LodLoginSweep.MaxCaptureWaitTicks, "capture wait capped ~2.4s at 50ms pulse");
 

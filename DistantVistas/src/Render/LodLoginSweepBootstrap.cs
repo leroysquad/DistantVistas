@@ -55,7 +55,7 @@ public static class LodLoginSweepBootstrap
         LodLoginSweepTiming.BootstrapCellBudget(LodLoginSweepTiming.InitialSecPerStop);
 
     /// <summary>
-    /// Hard cap on season-revisit stops (~10 min at <see cref="LodLoginSweepTiming.InitialSecPerStop"/>).
+    /// Hard cap on season-revisit stops (~5 min at <see cref="LodLoginSweepTiming.InitialSecPerStop"/>).
     /// Large visited canvases are spatially subsampled — never every L0 key.
     /// </summary>
     public static int RevisitMaxVisitStops =>

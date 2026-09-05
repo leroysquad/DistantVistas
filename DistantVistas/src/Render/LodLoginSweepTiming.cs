@@ -4,16 +4,16 @@ namespace DistantVistas;
 
 /// <summary>
 /// Measures per-stop timing during the login visit sweep and formats ETA strings.
-/// Target window: ~5–10 minutes wall-clock for season revisit on large canvases;
+/// Target window: ~3–5 minutes wall-clock for season revisit on large canvases;
 /// empty-canvas bootstrap uses a shorter <see cref="BootstrapTargetMaxSec"/> budget.
 /// </summary>
 public sealed class LodLoginSweepTiming
 {
-    /// <summary>Lower bound of the revisit sweep target window (5 minutes).</summary>
-    public const double TargetMinSec = 300.0;
+    /// <summary>Lower bound of the revisit sweep target window (3 minutes).</summary>
+    public const double TargetMinSec = 180.0;
 
-    /// <summary>Hard upper bound of the revisit sweep target window (10 minutes).</summary>
-    public const double TargetMaxSec = 600.0;
+    /// <summary>Hard upper bound of the revisit sweep target window (5 minutes).</summary>
+    public const double TargetMaxSec = 300.0;
 
     /// <summary>Shorter budget for empty-canvas bootstrap (~2.5 min at typical stop rate).</summary>
     public const double BootstrapTargetMaxSec = 150.0;
@@ -22,7 +22,8 @@ public sealed class LodLoginSweepTiming
     public const double InitialSecPerStop = 4.0;
 
     public const int MinVisitStops = 24;
-    public const int MaxVisitStops = 150;
+    /// <summary>Revisit ceiling — yields 60–100 stops depending on measured sec/stop.</summary>
+    public const int MaxVisitStops = 100;
 
     readonly Stopwatch clock = new();
     readonly List<double> stopDurations = new();
@@ -66,7 +67,7 @@ public sealed class LodLoginSweepTiming
 
     /// <summary>
     /// Max visit stops for a sweep given a wall-clock budget and measured/estimated stop rate.
-    /// At <see cref="InitialSecPerStop"/> and <see cref="TargetMaxSec"/>, yields 150 stops (~10 min).
+    /// At <see cref="InitialSecPerStop"/> and <see cref="TargetMaxSec"/>, yields 75 stops (~5 min).
     /// </summary>
     public static int VisitStopBudget(double secPerStop, double targetMaxSec) =>
         (int)Math.Clamp(
