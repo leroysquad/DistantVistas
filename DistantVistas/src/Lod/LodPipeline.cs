@@ -176,6 +176,42 @@ public class LodPipeline
     }
 
     /// <summary>
+    /// Login visit sweep: always re-queue a column so live loaded terrain replaces cache.
+    /// </summary>
+    public void QueueColumnForce(int cx, int cz)
+    {
+        if (!Active) return;
+        if (pendingColumns.Count >= MaxPendingColumns)
+        {
+            Interlocked.Increment(ref columnsDropped);
+            return;
+        }
+
+        long key = ((long)cz << 32) | (uint)cx;
+        if (queuedColumns.TryAdd(key, 0)) pendingColumns.Enqueue(key);
+    }
+
+    /// <summary>Force re-capture of every vanilla chunk column covering an L0 section.</summary>
+    public void QueueL0SectionForce(long l0Key)
+    {
+        if (LodWorld.KeyLevel(l0Key) != 0) return;
+        foreach ((int cx, int cz) in LodLoginSweep.ChunkColumnsForL0(l0Key))
+            QueueColumnForce(cx, cz);
+    }
+
+    /// <summary>True when no capture work remains for an L0 section's four chunk columns.</summary>
+    public bool IsL0SectionCaptureIdle(long l0Key)
+    {
+        if (Worker.PendingCaptures > 0 || !Worker.CaptureResults.IsEmpty) return false;
+        foreach ((int cx, int cz) in LodLoginSweep.ChunkColumnsForL0(l0Key))
+        {
+            long key = ((long)cz << 32) | (uint)cx;
+            if (queuedColumns.ContainsKey(key)) return false;
+        }
+        return true;
+    }
+
+    /// <summary>
     /// Whether a loaded chunk column has anything to teach the cache. Safe from any thread.
     ///
     /// A level-0 section spans 2x2 vanilla chunks (64 blocks). Skipping whenever the

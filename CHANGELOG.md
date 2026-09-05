@@ -1,3 +1,7 @@
+## 0.7.80
+- **Login visit sweep (replaces cache bake at finalize).** Full-screen opaque Distant Vistas loading UI covers the viewport while the client waits for the world/map to stream, then teleports the player (invisibly) to every visited L0 region so vanilla loads real terrain and the mod re-captures + season-bakes what is actually there now. Progress shows N/total and status; original pose is restored before release. No mid-play season remap after sweep (unchanged from 0.7.79).
+- **Discarded:** immediate SQLite palette bake on `LevelFinalize` — cached rows lack current-season truth until chunks load and the player visits.
+
 ## 0.7.79
 - **Login-time season bake.** On join, every cached visited section is painted once through Vintage Story's own `ApplyColorMapOnRgba` climate + season maps at each block's real X/Y/Z. A loading overlay with progress bar holds the player until the bake queue finishes and frame time settles; only then is play released. Baked palettes carry `FlagBaked` and tint slot 0 so the shader does not re-tint until the next relog.
 - **No mid-play season remap.** After login bake, live `RefreshSeason` / gradual month repaint is off for visited land. Newly discovered chunks still use the live shader path until the next login. Alpine snow-line overlay is disabled once baked; ground snow on a section follows a majority vote over snow-eligible surface columns (grass/topsoil, not bushes).

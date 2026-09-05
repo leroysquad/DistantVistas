@@ -1047,8 +1047,8 @@ public class DistantVistasModSystem : ModSystem
         loginBake.Begin();
 
         Mod.Logger.Notification(
-            "Level finalized. Login bake started ({0} cached sections{1}).",
-            pipeline.CachedSectionsLoaded, renderer.AutoUnpause ? ", auto-unpause on" : "");
+            "Level finalized. Login visit sweep started ({0} sections in cache).",
+            pipeline.CachedSectionsLoaded);
 
         capi.Event.RegisterCallback(_ => LogStats("Stats after 30s"), 30000);
 

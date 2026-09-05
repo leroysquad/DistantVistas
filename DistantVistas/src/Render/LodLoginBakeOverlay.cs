@@ -3,7 +3,7 @@ using Vintagestory.API.Client;
 namespace DistantVistas;
 
 /// <summary>
-/// Full-screen join overlay shown while visited LOD land is season-baked at login.
+/// Full-viewport join overlay while visited land is re-captured behind an opaque screen.
 /// </summary>
 public class LodLoginBakeOverlay : GuiDialog
 {
@@ -20,29 +20,29 @@ public class LodLoginBakeOverlay : GuiDialog
 
     public void ComposeDialog()
     {
-        ElementBounds dialogBounds = ElementStdBounds.AutosizedMainDialog.WithAlignment(EnumDialogArea.CenterMiddle);
-        ElementBounds bgBounds = ElementBounds.Fill.WithFixedPadding(GuiStyle.ElementToDialogPadding);
-        bgBounds.WithParent(dialogBounds);
+        ElementBounds dialogBounds = capi.Gui.WindowBounds;
+        ElementBounds overlayBounds = ElementBounds.Fill.WithParent(dialogBounds);
 
-        ElementBounds titleBounds = ElementBounds.Fixed(0, 8, 420, 30);
-        titleBounds.WithParent(bgBounds);
+        double panelW = 520;
+        double panelH = 200;
+        ElementBounds panelBounds = ElementBounds
+            .Fixed((dialogBounds.InnerWidth - panelW) / 2, (dialogBounds.InnerHeight - panelH) / 2,
+                panelW, panelH)
+            .WithParent(dialogBounds);
 
-        ElementBounds textBounds = ElementBounds.Fixed(0, 40, 420, 30);
-        textBounds.WithParent(bgBounds);
-
-        ElementBounds barBounds = ElementStdBounds.Statbar(EnumDialogArea.None, 380);
-        barBounds.WithParent(bgBounds).FixedYOffset = 80;
-
-        ElementBounds detailBounds = ElementBounds.Fixed(0, 120, 420, 24);
-        detailBounds.WithParent(bgBounds);
+        ElementBounds titleBounds = ElementBounds.Fixed(0, 0, panelW, 36).WithParent(panelBounds);
+        ElementBounds subtitleBounds = ElementBounds.Fixed(0, 38, panelW, 28).WithParent(panelBounds);
+        ElementBounds barBounds = ElementStdBounds.Statbar(EnumDialogArea.None, panelW - 40)
+            .WithParent(panelBounds).WithFixedOffset(20, 88);
+        ElementBounds detailBounds = ElementBounds.Fixed(0, 130, panelW, 48).WithParent(panelBounds);
 
         SingleComposer = capi.Gui
-            .CreateCompo("dvistas-login-bake", dialogBounds)
-            .AddShadedDialogBG(bgBounds, true, 5, 0.92f)
-            .AddStaticText("Distant Vistas is loading…", CairoFont.WhiteDetailText(), titleBounds)
-            .AddStaticText("Painting visited land for the current season. This runs once per login.",
-                CairoFont.WhiteSmallishText(), textBounds)
-            .AddStatbar(barBounds, new[] { 0.35, 0.62, 0.88 }, ProgressKey)
+            .CreateCompo("dvistas-login-sweep", dialogBounds)
+            .AddGameOverlay(overlayBounds, new[] { 0.06, 0.08, 0.11, 1.0 })
+            .AddStaticText("Distant Vistas", CairoFont.WhiteDetailText(), titleBounds)
+            .AddStaticText("Preparing visited land for this season…",
+                CairoFont.WhiteSmallishText(), subtitleBounds)
+            .AddStatbar(barBounds, new[] { 0.28, 0.55, 0.82 }, ProgressKey)
             .AddDynamicText("", CairoFont.WhiteSmallText(), detailBounds, StatusKey)
             .Compose();
 
