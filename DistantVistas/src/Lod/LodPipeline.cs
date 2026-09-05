@@ -15,7 +15,7 @@ namespace DistantVistas;
 /// <param name="cx">Chunk column X, for sampling position.</param>
 /// <param name="cz">Chunk column Z, for sampling position.</param>
 /// <param name="sampleY">Y of the run's top, for sampling position.</param>
-public delegate (int Color, byte TintSlot) LodPaletteDescriber(int blockId, int blockX, int blockY, int blockZ);
+public delegate (int Color, byte TintSlot, bool Baked) LodPaletteDescriber(int blockId, int blockX, int blockY, int blockZ);
 
 /// <summary>Which live tint applies to a block. The server has none and answers 0.</summary>
 public delegate byte LodTintSlotResolver(Block block);
@@ -98,6 +98,9 @@ public class LodPipeline
 
     /// <summary>Palette entries given a colour on load because the cache had none.</summary>
     public int PaletteEntriesRepaired { get; private set; }
+
+    /// <summary>Drop resident GPU mesh after login bake remesh.</summary>
+    public System.Action<long>? InvalidateGpuMesh;
 
     readonly ConcurrentDictionary<long, byte> queuedColumns = new();
     readonly ConcurrentQueue<long> pendingColumns = new();
@@ -719,8 +722,14 @@ public class LodPipeline
     {
         Block block = api.World.Blocks[blockId];
         (int x, int y, int z) = CaptureBlockPos(sectionKey, col, run);
-        (int color, byte tintSlot) = describePalette(blockId, x, y, z);
-        return section.FindOrAddPaletteEntry(blockId, color, LodBlockPolicy.FlagsFor(block), tintSlot);
+        (int color, byte tintSlot, bool baked) = describePalette(blockId, x, y, z);
+        byte flags = LodBlockPolicy.FlagsFor(block);
+        if (baked)
+        {
+            flags |= LodPaletteEntry.FlagBaked;
+            tintSlot = (byte)LodTintRegistry.SlotNone;
+        }
+        return section.FindOrAddPaletteEntry(blockId, color, flags, tintSlot);
     }
 
     // ---- Persistence ----

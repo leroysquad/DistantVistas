@@ -24,6 +24,7 @@ public static class Program
         ("pure", "tint clamp", TintClampChecks.Run),
         ("pure", "spatial climate", ClimateFieldChecks.Run),
         ("pure", "snow overlay", SnowOverlayChecks.Run),
+        ("pure", "login season bake", SeasonBakeChecks.Run),
         ("pure", "server config", ConfigChecks.Run),
         ("pure", "lod mod deferral", DeferralChecks.Run),
         ("pure", "fov occlusion", OcclusionChecks.Run),

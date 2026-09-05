@@ -126,6 +126,9 @@ public class DistantVistasModSystem : ModSystem
     /// </summary>
     LodAssistClient? assist;
 
+    LodLoginBakeOverlay? loginBakeOverlay;
+    LodLoginBake? loginBake;
+
     public override void AssetsLoaded(ICoreAPI api)
     {
         if (api.Side != EnumAppSide.Client) return;
@@ -214,6 +217,8 @@ public class DistantVistasModSystem : ModSystem
         renderer.HeightOcclusion.SampleCount = config.FovOcclusionSamples;
         renderer.HeightOcclusion.PeekMarginBlocks = config.FovOcclusionPeekMargin;
         renderer.HeightOcclusion.MaxTestsPerFrame = config.FovOcclusionMaxTestsPerFrame;
+        pipeline.InvalidateGpuMesh = renderer.InvalidateGpuMesh;
+        loginBakeOverlay = new LodLoginBakeOverlay(capi);
         // Real holes (captured land with no mesh at any rung) are reported with
         // the state of the keys involved, so a screenshot of sky has a log line.
         renderer.SetHoleLogger(msg => Mod.Logger.Notification(msg));
@@ -372,6 +377,15 @@ public class DistantVistasModSystem : ModSystem
     void OnGameTick(float dt)
     {
         if (!pipeline.Active) return;
+
+        if (loginBake?.Active == true)
+        {
+            loginBake.Tick(dt);
+            PumpServerAssist();
+            PumpLocalOffers();
+            pipeline.Tick();
+            return;
+        }
 
         sessionTelemetry?.Tick(pipeline, renderer, deferringTo, Mod.Info.Version);
 
@@ -614,16 +628,11 @@ public class DistantVistasModSystem : ModSystem
     }
 
     /// <summary>
-    /// The client half of palette registration: the untinted average colour from the
-    /// texture atlas, plus which live tint applies. Stored untinted on purpose, so the
-    /// shader can follow the calendar instead of freezing the season it was captured in.
-    /// A server has no atlas and cannot answer this at all (DESIGN.md Ã‚Â§10.4).
-    ///
-    /// The position is used ONLY for blocks whose colour depends on a block entity
-    /// (chisels). Everything else is a stable atlas mean so the near LOD ring does not
-    /// tile random grass pixels against the foreground.
+    /// Client palette registration for newly captured blocks: stable untinted atlas mean
+    /// plus a live tint slot. Login bake handles visited cache separately on join.
+    /// A server has no atlas and cannot answer this at all (DESIGN.md §10.4).
     /// </summary>
-    (int Color, byte TintSlot) DescribePalette(int blockId, int blockX, int blockY, int blockZ)
+    (int Color, byte TintSlot, bool Baked) DescribePalette(int blockId, int blockX, int blockY, int blockZ)
     {
         Block block = capi.World.Blocks[blockId];
 
@@ -650,7 +659,8 @@ public class DistantVistasModSystem : ModSystem
         byte slot = LodPaletteRepair.IsRockLikeAlbedo(color) || LodPaletteRepair.IsSnowOrIceAlbedo(color)
             ? (byte)LodTintRegistry.SlotNone
             : (byte)TintSlotOf(block);
-        return (color, slot);
+        // Newly discovered land keeps the live shader path until the next relog bake.
+        return (color, slot, false);
     }
 
     /// <summary>
@@ -1032,8 +1042,12 @@ public class DistantVistasModSystem : ModSystem
         // vanilla-server case it exists to stay out of the way of.
         assist?.Greet();
 
+        loginBake = new LodLoginBake(
+            capi, pipeline, renderer, loginBakeOverlay!, tints.PlantTintFallback, UntintedForRebake);
+        loginBake.Begin();
+
         Mod.Logger.Notification(
-            "Level finalized. LOD capture active (render distance: unlimited, {0} sections from cache{1}).",
+            "Level finalized. Login bake started ({0} cached sections{1}).",
             pipeline.CachedSectionsLoaded, renderer.AutoUnpause ? ", auto-unpause on" : "");
 
         capi.Event.RegisterCallback(_ => LogStats("Stats after 30s"), 30000);
@@ -1236,8 +1250,18 @@ public class DistantVistasModSystem : ModSystem
         renderer?.ResetPhaseCosts();
     }
 
+    (int Color, LodUntintedShare Share) UntintedForRebake(Block block)
+    {
+        if (TryTopSoilColor(block, out int composite, out LodUntintedShare share))
+            return (composite, share);
+        return (StableColorOf(block), LodUntintedShare.None);
+    }
+
     void OnLeaveWorld()
     {
+        loginBake?.Dispose();
+        loginBake = null;
+        renderer.LoginBakeComplete = false;
         assist?.Reset();
         // Belongs to the world being left: the next one is a different savegame with a
         // different sibling cache, and holding this open would keep a file handle on a

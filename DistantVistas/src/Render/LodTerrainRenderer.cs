@@ -164,6 +164,9 @@ public class LodTerrainRenderer : IRenderer
     /// <summary>Dev/testing: keep the game unpaused even without window focus.</summary>
     public bool AutoUnpause;
 
+    /// <summary>Login bake finished: visited land keeps baked colours until relog.</summary>
+    public bool LoginBakeComplete { get; set; }
+
     // Climate tints: sampled on a lattice one slot per frame so the field mean
     // is not one hashed row. Season is NOT in this table - that is a live
     // shader clock (seasonRel / seasonTints) uploaded every draw, same idea as
@@ -2568,7 +2571,8 @@ public class LodTerrainRenderer : IRenderer
         // Pressure-only: idle turning with a fat cache must not punch mid-land holes.
         if (MeshPressureActive)
             EvictStaleMeshes();
-        RefreshSeasonalState();
+        if (!LoginBakeComplete)
+            RefreshSeasonalState();
 
         if (drawList.Count == 0) return;
 
@@ -2595,13 +2599,16 @@ public class LodTerrainRenderer : IRenderer
         // climate field at that vertex XZ so mountain leaves match mountain grass.
         climatePos.Set((int)lastKeepOriginX, capi.World.SeaLevel, (int)lastKeepOriginZ);
         float seasonRel = 0.5f;
-        try
+        if (!LoginBakeComplete)
         {
-            seasonRel = capi.World.Calendar.GetSeasonRel(climatePos);
-            tints.RefreshSeason(capi.World, climatePos.X, climatePos.Z);
-        }
-        catch
-        {
+            try
+            {
+                seasonRel = capi.World.Calendar.GetSeasonRel(climatePos);
+                tints.RefreshSeason(capi.World, climatePos.X, climatePos.Z);
+            }
+            catch
+            {
+            }
         }
         if (!keepClimateValid)
             CaptureKeepClimate(climatePos.X, climatePos.Z);
@@ -2637,7 +2644,7 @@ public class LodTerrainRenderer : IRenderer
             prog.Uniform("tintYLow", tints.SampleYLow);
             prog.Uniform("tintYHigh", tints.SampleYHigh);
         }
-        prog.Uniform("snowLineY", snowLineY);
+        prog.Uniform("snowLineY", LoginBakeComplete ? LodSnow.Disabled : snowLineY);
 
         float cullDistSq = float.MaxValue;
         if (FarViewDistanceCap > 0)
@@ -2885,6 +2892,16 @@ public class LodTerrainRenderer : IRenderer
     bool HasNeighbourData(long key, int dx, int dz) =>
         world.HasDataSet.Contains(LodWorld.NeighborKey(key, dx, dz));
 
+    public void InvalidateGpuMesh(long key)
+    {
+        if (sectionMeshes.Remove(key, out MeshRef? mesh)) mesh.Dispose();
+        if (waterMeshes.Remove(key, out MeshRef? water)) water.Dispose();
+        emptyMeshKeys.Remove(key);
+        meshJobInFlight.Remove(key);
+        lastSelectedFrame.Remove(key);
+        meshBornFrame.Remove(key);
+    }
+
     public void ClearMeshes()
     {
         foreach (MeshRef meshRef in sectionMeshes.Values) meshRef.Dispose();
@@ -2902,6 +2919,7 @@ public class LodTerrainRenderer : IRenderer
         climateField.Clear();
         keepClimate = LodClimateField.Identity;
         keepClimateValid = false;
+        LoginBakeComplete = false;
     }
 
     public void Dispose()

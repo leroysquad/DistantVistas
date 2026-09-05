@@ -1,3 +1,8 @@
+## 0.7.79
+- **Login-time season bake.** On join, every cached visited section is painted once through Vintage Story's own `ApplyColorMapOnRgba` climate + season maps at each block's real X/Y/Z. A loading overlay with progress bar holds the player until the bake queue finishes and frame time settles; only then is play released. Baked palettes carry `FlagBaked` and tint slot 0 so the shader does not re-tint until the next relog.
+- **No mid-play season remap.** After login bake, live `RefreshSeason` / gradual month repaint is off for visited land. Newly discovered chunks still use the live shader path until the next login. Alpine snow-line overlay is disabled once baked; ground snow on a section follows a majority vote over snow-eligible surface columns (grass/topsoil, not bushes).
+- **Discarded approach.** Discover-bake at capture plus budgeted month repaint (0.7.79 draft line) was dropped in favour of one login sweep — simpler truth model, no idle remesh storms when the calendar changes.
+
 ## 0.7.78
 - **Turn hitch frame budgets.** Look-only (no 64-block origin shift) no longer walks or mesh-requests tiles entirely behind the camera and outside the 15° lead cone; GPU meshes stay pinned. Per-frame memo for lead cone, frustum-in-view, land-like, and captured-beyond probes cuts repeated sqrt/frustum work during the quadtree walk. RenderDirty prune spreads to every 4th frame while idle so prune + walk + schedule do not stack on every yaw tick. FOV occlusion cache is lazy per tile (~10° yaw slack per entry) instead of wiping the whole table on small turns. Lead-cone L0 promote cap 2/frame (was 3). Cake ban, occlusion fail-open, pressure-only eviction, and 0.7.77 hysteresis unchanged.
 

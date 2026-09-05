@@ -11,7 +11,9 @@ public struct LodPaletteEntry
 {
     public int BlockId;
 
-    /// <summary>Untinted base color; seasonal/climate tint is applied live in the shader.</summary>
+    /// <summary>
+    /// Base colour for live-tint sections; final baked RGB when <see cref="FlagBaked"/>.
+    /// </summary>
     public int Color;
 
     public byte Flags;
@@ -38,6 +40,12 @@ public struct LodPaletteEntry
     /// and the ground shows through it.
     /// </summary>
     public const byte FlagThin = 16;
+
+    /// <summary>
+    /// Palette colour already includes climate + season maps from login bake.
+    /// Tint slot 0; shader must not multiply live tints again.
+    /// </summary>
+    public const byte FlagBaked = 32;
 }
 
 /// <summary>
@@ -349,6 +357,28 @@ public class LodSection
         snapPaletteFlags = flags;
         snapPaletteTintSlots = slots;
         snapPaletteCount = n;
+    }
+
+    public void InvalidatePaletteSnapshot() => snapPaletteCount = -1;
+
+    /// <summary>
+    /// World position of the top block of the first run that uses <paramref name="paletteId"/>.
+    /// </summary>
+    public bool TryFindPaletteTop(long sectionKey, int paletteId, out int x, out int y, out int z)
+    {
+        int cols = GridSize * GridSize;
+        for (int col = 0; col < cols; col++)
+        {
+            if (!Captured[col]) continue;
+            foreach (ulong run in ColumnRuns(col))
+            {
+                if (RunPaletteId(run) != paletteId) continue;
+                (x, y, z) = LodPipeline.CaptureBlockPos(sectionKey, col, run);
+                return true;
+            }
+        }
+        x = y = z = 0;
+        return false;
     }
 
     /// <summary>
