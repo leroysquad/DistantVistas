@@ -238,6 +238,11 @@ public class DistantVistasModSystem : ModSystem
             "distantvistas-login-vanilla-final");
         loginBakePulse = new LodLoginBakePulse();
         loginVanillaLoading.OnRenderPulse = dt => loginBakePulse.Pulse(dt);
+        LodLoginBakeHarmony.RenderPulse = dt =>
+        {
+            loginBakePulse.BeginFrame();
+            loginBakePulse.Pulse(dt);
+        };
         loginBakeOverlay = new LodLoginBakeOverlay(capi, loginVanillaLoading);
         // Real holes (captured land with no mesh at any rung) are reported with
         // the state of the keys involved, so a screenshot of sky has a log line.

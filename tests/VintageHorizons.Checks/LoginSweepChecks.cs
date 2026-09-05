@@ -77,15 +77,17 @@ public static class LoginSweepChecks
         string hold = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeVanillaLoadingHold.cs"));
         c.True(hold.Contains("GuiScreenLoadingGame"),
-            "login sweep holds vanilla world loading screen");
+            "login sweep knows about vanilla world loading screen");
         c.True(hold.Contains("loadingText"),
             "vanilla hold updates ScreenManager.loadingText");
         c.True(hold.Contains("LoadScreenNoLoadCall"),
-            "vanilla hold re-opens loader via ScreenManager");
+            "vanilla hold switches to running-game screen via ScreenManager");
         c.True(hold.Contains("FormatLoadingText"),
             "vanilla hold appends DV status to loading lines");
-        c.True(!hold.Contains("never construct"),
-            "vanilla hold can create loading screen when cache is empty");
+        c.True(hold.Contains("stock loading cover"),
+            "vanilla hold uses stock overlay instead of blocking vanilla loader draw");
+        c.True(hold.Contains("async-sound"),
+            "vanilla hold documents async-sound bypass");
 
         string gate = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeSweepGate.cs"));
@@ -109,6 +111,10 @@ public static class LoginSweepChecks
             "harmony defers running-game handover during sweep");
         c.True(harmony.Contains("RenderToPrimary"),
             "harmony skips running-game primary render during sweep");
+        c.True(harmony.Contains("OnNewFrame"),
+            "harmony pulses sweep before ScreenManager screen draw");
+        c.True(harmony.Contains("GuiScreenLoadingGame"),
+            "harmony skips vanilla loading-screen draw during sweep");
 
         string screen = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeScreenRenderer.cs"));
@@ -218,9 +224,9 @@ public static class LoginSweepChecks
         string hold = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeVanillaLoadingHold.cs"));
         c.True(hold.Contains("GuiScreenLoadingGame"),
-            "vanilla hold resolves native loading screen");
-        c.True(hold.Contains("HandoverDeferred"),
-            "vanilla hold reuses deferred loading screen when still current");
+            "vanilla hold documents deferred loader bypass");
+        c.True(hold.Contains("GuiScreenRunningGame"),
+            "vanilla hold switches to running-game screen during sweep");
         c.True(hold.Contains("AfterFinalComposition"),
             "vanilla hold paints ortho and after-final passes");
 
@@ -251,8 +257,8 @@ public static class LoginSweepChecks
             "input guard retries open when viewport is ready");
         c.True(guard.Contains("SafeBounds"),
             "input guard uses render/window bounds fallback");
-        c.True(hold.Contains("RenderToDefaultFramebuffer"),
-            "vanilla hold re-renders native loading UI each frame");
+        c.True(!hold.Contains("RenderToDefaultFramebuffer"),
+            "vanilla hold does not call blocking vanilla loader draw");
 
         string driver = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakePulse.cs"));
@@ -260,6 +266,8 @@ public static class LoginSweepChecks
             "render pulse drives sweep while game ticks stall");
         c.True(driver.Contains("PollCancelFromRender"),
             "render pulse polls Esc each frame");
+        c.True(driver.Contains("BeginFrame"),
+            "render pulse coalesces OnNewFrame and overlay pulses");
 
         string status = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepStatusWriter.cs"));
@@ -274,6 +282,8 @@ public static class LoginSweepChecks
             "mod wires render pulse from vanilla hold");
         c.True(mod.Contains("OnRenderPulse"),
             "mod connects vanilla hold render pulse");
+        c.True(mod.Contains("LodLoginBakeHarmony.RenderPulse"),
+            "mod wires ScreenManager.OnNewFrame pulse");
     }
 
     static void QuietTeleports(Check c)

@@ -1,3 +1,6 @@
+## 0.8.14
+- **CRITICAL: login visit sweep stuck at Preparing 1% (0.8.13).** While handover was deferred the client stayed on `GuiScreenLoadingGame`; `ScreenManager.Render` blocked in `RenderToDefaultFramebuffer` waiting for async sounds, so `LodLoginBakePulse` never ran and warmup never reached `warmup complete — entering visit teleports`. Fix: Harmony skips vanilla loading-screen draw during sweep; sweep immediately switches to `GuiScreenRunningGame` (world draws still suppressed) and paints the stock Loading… cover; pulse runs from `ScreenManager.OnNewFrame` **before** any screen draw as well as from the overlay renderer.
+
 ## 0.8.13
 - **CRITICAL: login visit sweep skipped forever (0.8.12).** `LodLoginSweepGate` returned skip when the visited canvas had no audit misses — even when `login-sweep-complete.json` was missing — and the skip path called `RecordSuccess`, permanently stamping a fake completion. Fix: run sweep when no prior successful sweep is recorded; only skip when the complete marker exists, visited count has not grown, still within the season/day window, and audit finds no misses. `RecordSuccess` is written only when a sweep actually finishes (`LodLoginBake.ReleaseResources`).
 

@@ -16,6 +16,9 @@ public static class LodLoginBakeHarmony
     /// <summary>When true, block <see cref="GuiScreenRunningGame.handOverRenderingToRunningGame"/>.</summary>
     public static Func<bool>? IsLoginSweepEnabled { get; set; }
 
+    /// <summary>Advance sweep ticks at the start of each ScreenManager frame, before any screen draw.</summary>
+    public static Action<float>? RenderPulse { get; set; }
+
     public static void Apply(Vintagestory.API.Common.Mod mod)
     {
         if (harmony != null) return;
@@ -28,9 +31,24 @@ public static class LodLoginBakeHarmony
         harmony?.UnpatchAll(harmony?.Id);
         harmony = null;
         IsLoginSweepEnabled = null;
+        RenderPulse = null;
     }
 
     static bool SkipRunningGameRender() => LodLoginBakeSweepGate.SuppressRunningGameRender;
+
+    static bool SkipLoadingGameDraw() => LodLoginBakeSweepGate.SweepActive;
+
+    [HarmonyPatch(typeof(ScreenManager), "OnNewFrame")]
+    sealed class PulseBeforeScreenFrame
+    {
+        static void Prefix(float dt) => RenderPulse?.Invoke(dt);
+    }
+
+    [HarmonyPatch(typeof(GuiScreenLoadingGame), "RenderToDefaultFramebuffer")]
+    sealed class SkipLoadingGameRenderDuringSweep
+    {
+        static bool Prefix() => !SkipLoadingGameDraw();
+    }
 
     [HarmonyPatch(typeof(GuiScreenRunningGame), "handOverRenderingToRunningGame")]
     sealed class DeferHandoverToRunningGame
