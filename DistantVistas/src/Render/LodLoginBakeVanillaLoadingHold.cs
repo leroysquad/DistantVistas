@@ -15,13 +15,6 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
     static readonly FieldInfo? CachedScreensField = typeof(ScreenManager).GetField(
         "CachedScreens", BindingFlags.Instance | BindingFlags.NonPublic);
 
-    static readonly MethodInfo? LoadAndCacheScreenMethod = typeof(ScreenManager).GetMethod(
-        "LoadAndCacheScreen",
-        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
-        binder: null,
-        types: new[] { typeof(Type) },
-        modifiers: null);
-
     readonly ICoreClientAPI capi;
     LodLoginBakeStockLoadingFallback? stockFallback;
 
@@ -178,33 +171,19 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
 
     static GuiScreenLoadingGame? FindCachedLoadingScreen(ScreenManager sm)
     {
-        // Prefer the live cache dictionary — LoadAndCacheScreen can construct a fresh
-        // GuiScreenLoadingGame and re-trigger async sound loading on empty cache.
-        if (CachedScreensField?.GetValue(sm) is System.Collections.IDictionary dict)
-        {
-            Type loadingType = typeof(GuiScreenLoadingGame);
-            foreach (System.Collections.DictionaryEntry entry in dict)
-            {
-                if (entry.Key is Type t && t == loadingType && entry.Value is GuiScreenLoadingGame loading)
-                    return loading;
-            }
-        }
-
-        return TryLoadAndCacheScreen(sm);
-    }
-
-    static GuiScreenLoadingGame? TryLoadAndCacheScreen(ScreenManager sm)
-    {
-        if (LoadAndCacheScreenMethod == null) return null;
-        try
-        {
-            object? result = LoadAndCacheScreenMethod.Invoke(sm, new object[] { typeof(GuiScreenLoadingGame) });
-            return result as GuiScreenLoadingGame;
-        }
-        catch
-        {
+        // Only scan CachedScreens — LoadAndCacheScreen can construct a fresh screen and
+        // re-trigger OnScreenLoaded / async sound loading when the cache is empty.
+        if (CachedScreensField?.GetValue(sm) is not System.Collections.IDictionary dict)
             return null;
+
+        Type loadingType = typeof(GuiScreenLoadingGame);
+        foreach (System.Collections.DictionaryEntry entry in dict)
+        {
+            if (entry.Key is Type t && t == loadingType && entry.Value is GuiScreenLoadingGame loading)
+                return loading;
         }
+
+        return null;
     }
 
     public void Dispose()

@@ -42,10 +42,10 @@ public static class LodLoginSweepGate
         if (complete != null)
         {
             if (complete.VisitedKeyCount < visited)
-                return new Result(true, "visited canvas grew since last successful sweep");
+                return new Result(true, "visited canvas grew since last successful sweep", misses);
 
             if (!LodLoginSweepWindow.IsWithin(capi.World, complete.Season, complete.SavedTotalDays))
-                return new Result(true, "outside same-season / 30-day window since last sweep");
+                return new Result(true, "outside same-season / 30-day window since last sweep", misses);
         }
 
         return new Result(false, "visited canvas complete within season window");

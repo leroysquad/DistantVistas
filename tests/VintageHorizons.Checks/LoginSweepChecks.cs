@@ -80,15 +80,14 @@ public static class LoginSweepChecks
             "login sweep holds vanilla world loading screen");
         c.True(hold.Contains("loadingText"),
             "vanilla hold updates ScreenManager.loadingText");
-        c.True(hold.Contains("LoadAndCacheScreen"),
-            "vanilla hold uses engine cache API when available");
+        c.True(hold.Contains("CachedScreens"),
+            "vanilla hold resolves loading screen from CachedScreens");
+        c.True(!hold.Contains("LoadAndCacheScreen"),
+            "vanilla hold does not call LoadAndCacheScreen (sound-trap risk)");
         c.True(hold.Contains("OnRenderPulse"),
             "vanilla hold pulses sweep before blocking draw");
         c.True(hold.Contains("EnumRenderStage.Ortho") && hold.Contains("AfterFinalComposition"),
             "vanilla hold splits ortho pulse from after-final draw");
-        c.True(hold.IndexOf("CachedScreens", StringComparison.Ordinal)
-                < hold.IndexOf("TryLoadAndCacheScreen", StringComparison.Ordinal),
-            "vanilla hold prefers CachedScreens before LoadAndCacheScreen");
         c.True(!hold.Contains("new GuiScreenLoadingGame"),
             "vanilla hold does not construct fresh loading screens");
 
@@ -382,6 +381,8 @@ public static class LoginSweepChecks
             "gate skips when canvas is complete and in window");
         c.True(gate.Contains("Misses"),
             "gate result carries miss list for reuse");
+        c.True(gate.Contains("outside same-season / 30-day window since last sweep", misses)"),
+            "gate passes audited empty miss list for season revisit");
 
         string mod = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "DistantVistasModSystem.cs"));
