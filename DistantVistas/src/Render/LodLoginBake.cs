@@ -19,7 +19,7 @@ namespace DistantVistas;
 /// </summary>
 public sealed class LodLoginBake
 {
-    public enum Phase { OverlayWarmup, WaitingForWorld, Sweeping, Auditing, Draining, Stabilizing, Done }
+    public enum Phase { OverlayWarmup, WaitingForWorld, Sweeping, Auditing, Draining, Stabilizing, FadingOut, Done }
 
     enum StopPhase { Teleport, TeleportSettle, WaitChunks, Capture, Bake, BakeSettle, Done }
 
@@ -33,6 +33,7 @@ public sealed class LodLoginBake
     const double StabilizeTimeoutSec = 12.0;
     const int MaxDrainTicks = 600;
     const int AuditSettleTicks = 4;
+    const float FadeOutSeconds = 0.85f;
 
     readonly ICoreClientAPI capi;
     readonly LodPipeline pipeline;
@@ -54,6 +55,7 @@ public sealed class LodLoginBake
     readonly List<double> stabilizeWindow = new(128);
     readonly List<double> windowMedians = new(8);
     readonly EntityPos restorePos = new();
+    readonly Vec3d restoreCameraPos = new();
     readonly Stopwatch stabilizeClock = new();
 
     int total;
@@ -64,6 +66,9 @@ public sealed class LodLoginBake
     int auditTicks;
     int resweepRound;
     bool retryingMisses;
+    bool releaseSuccess;
+    bool releaseKeepResume;
+    float fadeElapsed;
     LodLoginSweepPlanMode sweepMode = LodLoginSweepPlanMode.RevisitVisited;
     string sweepModeLabel = "Revisiting visited land";
     Phase phase = Phase.WaitingForWorld;
@@ -314,6 +319,9 @@ public sealed class LodLoginBake
                 break;
             case Phase.Stabilizing:
                 TickStabilizing(dt);
+                break;
+            case Phase.FadingOut:
+                TickFadingOut(dt);
                 break;
         }
     }
@@ -603,131 +611,111 @@ public sealed class LodLoginBake
     void Finish()
     {
         overlay.UpdateProgress(1f, "Ready.");
-        Teardown(success: true);
+        BeginFadeOut(success: true);
         capi.Logger.Notification(
             "[DistantVistas] Login visit sweep finished: {0}/{1} regions captured and locked until relog.",
             finished, total);
     }
 
+    void BeginFadeOut(bool success, bool keepResume = false)
+    {
+        releaseSuccess = success;
+        releaseKeepResume = keepResume;
+        fadeElapsed = 0f;
+        overlay.SetOverlayAlpha(1f);
+        phase = Phase.FadingOut;
+
+        try { worldHide.Restore(); } catch { }
+        try { RestorePlayerPose(); } catch { }
+        try { audioMute.Restore(); } catch { }
+        try { timeFreeze.Restore(); } catch { }
+        try { gameMode.Restore(); } catch { }
+        try { hudHide.Restore(); } catch { }
+        try { playerHide.Restore(); } catch { }
+        try { seasonSamples.Dispose(); } catch { }
+
+        pipeline.DeferLegacyHeal = false;
+        overlay.UpdateProgress(1f, success ? "Ready." : "Entering play…");
+    }
+
+    void TickFadingOut(float dt)
+    {
+        fadeElapsed += Math.Max(0f, dt);
+        float t = Math.Min(1f, fadeElapsed / FadeOutSeconds);
+        overlay.SetOverlayAlpha(1f - t);
+        overlay.EnsureInputBlocked();
+        HoldPlayerCameraOnly();
+
+        if (t < 1f) return;
+        CompleteRelease();
+    }
+
+    void HoldPlayerCameraOnly()
+    {
+        if (!restoreCaptured) return;
+        LockPlayerCamera(capi, capi.World.Player, restorePos, restoreCameraPos);
+    }
+
+    void CompleteRelease()
+    {
+        if (released) return;
+
+        released = true;
+        phase = Phase.Done;
+        renderer.LoginBakeOverlayActive = false;
+
+        if (releaseSuccess)
+        {
+            renderer.LoginBakeComplete = true;
+            LodLoginSweepComplete.RecordSuccess(capi, pipeline.World);
+        }
+
+        if (releaseSuccess || !releaseKeepResume)
+            LodLoginSweepResume.Delete(capi);
+
+        try { overlay.Hide(); } catch { }
+        try { ReleasePlayerControls(); } catch { }
+    }
+
     /// <summary>
-    /// Single idempotent teardown for success, abort, error, and world leave.
-    /// Undoes overlay, pose, controls, audio mute, and calendar freeze with no leftovers.
+    /// Single idempotent teardown for abort, error, cancel, and world leave.
+    /// Successful completion fades out via <see cref="BeginFadeOut"/> first.
     /// </summary>
     void Teardown(bool success, bool keepResume = false)
     {
         if (released) return;
+
+        if (success)
+        {
+            BeginFadeOut(success, keepResume);
+            return;
+        }
 
         released = true;
         phase = Phase.Done;
         pipeline.DeferLegacyHeal = false;
         renderer.LoginBakeOverlayActive = false;
 
-        if (success)
-        {
-            renderer.LoginBakeComplete = true;
-            LodLoginSweepComplete.RecordSuccess(capi, pipeline.World);
-        }
+        if (keepResume)
+            SaveResumeSnapshot();
 
-        if (success || !keepResume)
+        try { worldHide.Restore(); } catch { }
+        try { overlay.Hide(); } catch { }
+        try { RestorePlayerPose(); } catch { }
+        try { ReleasePlayerControls(); } catch { }
+        try { audioMute.Restore(); } catch { }
+        try { timeFreeze.Restore(); } catch { }
+        try { gameMode.Restore(); } catch { }
+        try { hudHide.Restore(); } catch { }
+        try { playerHide.Restore(); } catch { }
+        try { seasonSamples.Dispose(); } catch { }
+
+        if (!keepResume)
             LodLoginSweepResume.Delete(capi);
-
-        try
-        {
-            worldHide.Restore();
-        }
-        catch
-        {
-            // Best-effort.
-        }
-
-        try
-        {
-            overlay.Hide();
-        }
-        catch
-        {
-            // Best-effort.
-        }
-
-        try
-        {
-            RestorePlayerPose();
-        }
-        catch
-        {
-            // Best-effort.
-        }
-
-        try
-        {
-            ReleasePlayerControls();
-        }
-        catch
-        {
-            // Best-effort.
-        }
-
-        try
-        {
-            audioMute.Restore();
-        }
-        catch
-        {
-            // Best-effort.
-        }
-
-        try
-        {
-            timeFreeze.Restore();
-        }
-        catch
-        {
-            // Best-effort.
-        }
-
-        try
-        {
-            gameMode.Restore();
-        }
-        catch
-        {
-            // Best-effort.
-        }
-
-        try
-        {
-            hudHide.Restore();
-        }
-        catch
-        {
-            // Best-effort.
-        }
-
-        try
-        {
-            playerHide.Restore();
-        }
-        catch
-        {
-            // Best-effort.
-        }
-
-        try
-        {
-            seasonSamples.Dispose();
-        }
-        catch
-        {
-            // Best-effort.
-        }
     }
 
     void HoldPlayerControls()
     {
-        audioMute.EnsureMuted();
-        timeFreeze.EnsureFrozen();
-        gameMode.EnsureCreative();
-        hudHide.EnsureHidden();
         overlay.EnsureInputBlocked();
         CloseBlockingDialogs();
 
@@ -735,14 +723,27 @@ public sealed class LodLoginBake
         EntityPlayer entity = player.Entity;
         EntityControls controls = entity.Controls;
 
+        if (phase == Phase.FadingOut)
+        {
+            HoldPlayerCameraOnly();
+            BlockPlayerInput(controls);
+            return;
+        }
+
+        audioMute.EnsureMuted();
+        timeFreeze.EnsureFrozen();
+        gameMode.EnsureCreative();
+        hudHide.EnsureHidden();
+
         if (!restoreCaptured)
         {
             restorePos.SetFrom(entity.Pos);
+            restoreCameraPos.Set(entity.CameraPos);
             restoreCaptured = true;
         }
 
         HoldPlayerPose(entity);
-        LockPlayerCamera(capi, player, restorePos);
+        LockPlayerCamera(capi, player, restorePos, restoreCameraPos);
         BlockPlayerInput(controls);
         playerHide.EnsureHidden();
     }
@@ -763,6 +764,7 @@ public sealed class LodLoginBake
         restorePos.SetPos(resume.RestoreX, resume.RestoreY, resume.RestoreZ);
         restorePos.Yaw = resume.RestoreYaw;
         restorePos.Pitch = resume.RestorePitch;
+        restoreCameraPos.Set(capi.World.Player.Entity.CameraPos);
         restoreCaptured = true;
     }
 
@@ -814,12 +816,19 @@ public sealed class LodLoginBake
         }
     }
 
-    static void LockPlayerCamera(ICoreClientAPI capi, IClientPlayer player, EntityPos pose)
+    static void LockPlayerCamera(
+        ICoreClientAPI capi,
+        IClientPlayer player,
+        EntityPos pose,
+        Vec3d cameraPos)
     {
+        EntityPlayer entity = player.Entity;
         player.CameraYaw = pose.Yaw;
         player.CameraPitch = pose.Pitch;
-        player.Entity.Pos.Yaw = pose.Yaw;
-        player.Entity.Pos.Pitch = pose.Pitch;
+        entity.Pos.Yaw = pose.Yaw;
+        entity.Pos.Pitch = pose.Pitch;
+        entity.CameraPos.Set(cameraPos);
+        entity.CameraPosOffset.Set(0, 0, 0);
         capi.Input.MouseYaw = pose.Yaw;
         capi.Input.MousePitch = pose.Pitch;
     }

@@ -105,8 +105,12 @@ public static class LoginSweepChecks
             "login bake teardown is idempotent");
         c.True(bake.Contains("Teardown(success: false, keepResume: true)"),
             "dispose routes through Teardown");
-        c.True(bake.Contains("Teardown(success: true)"),
-            "finish routes through Teardown");
+        c.True(bake.Contains("Phase.FadingOut"),
+            "login bake fades overlay out before release");
+        c.True(bake.Contains("restoreCameraPos"),
+            "login bake pins camera while entity teleports for chunk load");
+        c.True(bake.Contains("CameraPos.Set"),
+            "login bake writes frozen camera position each tick");
 
         string season = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSeasonBake.cs"));
@@ -173,8 +177,10 @@ public static class LoginSweepChecks
             "screen renderer paints opaque base every frame");
         c.True(screen.Contains("EnsureWhiteSolid"),
             "screen renderer uses real white texture for solids");
-        c.True(screen.Contains("AfterFinalComposition"),
-            "screen renderer also draws on after-final pass");
+        c.True(screen.Contains("DrawFullFrame"),
+            "screen renderer draws full UI on ortho and after-final passes");
+        c.True(screen.Contains("SetOverlayAlpha"),
+            "screen renderer supports fade-out alpha");
         c.True(screen.Contains("RequiredHealthyFrames"),
             "screen renderer tracks overlay health");
 
@@ -313,9 +319,9 @@ public static class LoginSweepChecks
         c.True(mod.Contains("Login visit sweep skipped"),
             "skipped sweep logs and drops into play");
         c.True(mod.Contains("LoginVisitSweepEnabled"),
-            "sweep gated by config default-off flag");
-        c.False(new DistantVistasConfig().LoginVisitSweepEnabled,
-            "login visit sweep disabled by default");
+            "sweep gated by config flag");
+        c.True(new DistantVistasConfig().LoginVisitSweepEnabled,
+            "login visit sweep enabled by default");
 
         string bake = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));

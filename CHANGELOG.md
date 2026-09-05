@@ -1,3 +1,9 @@
+## 0.8.0
+- **Login visit sweep re-enabled by default.** `LoginVisitSweepEnabled` defaults to `true` again; the skip gate still bypasses the overlay when every visited L0 region is complete within the same season or 30 in-game days. Set `false` in `distantvistas.json` for immediate play without overlay.
+- **Viewport thrash fix.** The sweep now pins `Entity.CameraPos` (and clears `CameraPosOffset`) to the join pose while the entity quietly teleports for chunk streaming — the world no longer scrolls behind the loader. The full overlay (backdrop, title, panel) paints on **both** `Ortho` and `AfterFinalComposition` so sky/terrain cannot flash through between passes.
+- **Clean release.** Successful sweeps restore pose, HUD, audio, gamemode, and chunk visibility, then **fade the overlay out** (~0.85s) before unlocking controls. Abort/cancel still release immediately.
+- **Unchanged:** targeted incomplete-only revisit, miss-list re-sweep, Esc cancel/resume, `LodLoginBakeInputLock` crash fix, per-column `GetColor` bake, dense season JSONL samples.
+
 ## 0.7.99
 - **Login visit sweep OFF by default (safe build).** `LoginVisitSweepEnabled` in `distantvistas.json` defaults to `false` — restores **0.7.78-style immediate play** with no overlay, teleports, or join thrash. Set `true` or `VINTAGEHORIZONS_LOGIN_SWEEP=1` only when testing.
 - **When sweep is enabled:** overlay must paint **8 consecutive opaque frames** before any teleport; aborts into play if the loading screen never becomes healthy. Opaque cover draws on **Ortho + AfterFinalComposition**; vanilla chunks are **hidden** except the active L0 target during capture; longer teleport/bake settle; LOD draw still suppressed.

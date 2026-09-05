@@ -70,10 +70,11 @@ public class DistantVistasConfig
     public int FovOcclusionMaxTestsPerFrame = 48;
 
     /// <summary>
-    /// Login visit sweep on join (overlay + teleports + season bake). OFF by default —
-    /// set true only when testing. Restores 0.7.78-style immediate play when false.
+    /// Login visit sweep on join (overlay + teleports + season bake). ON by default —
+    /// skipped automatically when the visited canvas is complete within the season window.
+    /// Set false in distantvistas.json for immediate 0.7.78-style play without overlay.
     /// </summary>
-    public bool LoginVisitSweepEnabled = false;
+    public bool LoginVisitSweepEnabled = true;
 }
 
 /// <summary>
@@ -1096,8 +1097,7 @@ public class DistantVistasModSystem : ModSystem
         {
             renderer.LoginBakeComplete = true;
             Mod.Logger.Notification(
-                "[DistantVistas] Login visit sweep is OFF (0.7.78-style play). " +
-                "Set LoginVisitSweepEnabled in distantvistas.json or VINTAGEHORIZONS_LOGIN_SWEEP=1 to test.");
+                "[DistantVistas] Login visit sweep disabled in config — entering play without overlay.");
         }
         else
         {

@@ -56,6 +56,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     bool backdropMissing;
     bool titleMissing;
     float fraction;
+    float overlayAlpha = 1f;
     string status = "";
     string percentLabel = "0%";
 
@@ -106,6 +107,10 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         RebuildText();
     }
 
+    /// <summary>Fade the overlay out on release (1 = opaque, 0 = hidden).</summary>
+    public void SetOverlayAlpha(float alpha) =>
+        overlayAlpha = Math.Clamp(alpha, 0f, 1f);
+
     /// <summary>Call as early as LevelFinalize allows so the first painted frame is already opaque.</summary>
     public void PrepareImmediate()
     {
@@ -115,15 +120,10 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
 
     public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
     {
-        if (!active) return;
+        if (!active || overlayAlpha <= 0f) return;
 
-        if (stage == EnumRenderStage.AfterFinalComposition)
-        {
-            DrawOpaqueCoverOnly();
-            return;
-        }
-
-        if (stage != EnumRenderStage.Ortho) return;
+        bool safetyPass = stage == EnumRenderStage.AfterFinalComposition;
+        if (stage != EnumRenderStage.Ortho && !safetyPass) return;
 
         EnsureGraphicsLoaded();
 
@@ -132,18 +132,22 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         float h = rapi.FrameHeight;
         if (w <= 0 || h <= 0)
         {
-            ConsecutiveOpaqueFrames = 0;
+            if (!safetyPass) ConsecutiveOpaqueFrames = 0;
             return;
         }
 
+        bool drewOpaque = DrawFullFrame(w, h, countHealth: !safetyPass);
+        if (!drewOpaque && !safetyPass)
+            ConsecutiveOpaqueFrames = 0;
+    }
+
+    bool DrawFullFrame(float w, float h, bool countHealth)
+    {
         bool drewOpaque = DrawOpaqueCover(w, h);
-        if (!drewOpaque)
-        {
-            ConsecutiveOpaqueFrames = 0;
-            return;
-        }
+        if (!drewOpaque) return false;
 
-        ConsecutiveOpaqueFrames++;
+        if (countHealth)
+            ConsecutiveOpaqueFrames++;
 
         DrawBackdrop(w, h);
 
@@ -172,47 +176,41 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
                 ? titleImage.TextureId
                 : titleFallbackTex.TextureId;
             if (titleTexId > 0)
-                rapi.Render2DTexture(titleTexId, titleX, blockTop, titleW, titleH, 204);
+                capi.Render.Render2DTexture(titleTexId, titleX, blockTop, titleW, titleH, 204);
         }
 
-        tint.Set(PanelFill[0], PanelFill[1], PanelFill[2], PanelFill[3]);
+        tint.Set(PanelFill[0], PanelFill[1], PanelFill[2], PanelFill[3] * overlayAlpha);
         DrawSolid(panelX, panelY, PanelW, PanelH, 205, tint);
 
         float pad = 20f;
         float barY = panelY + 52f;
         float barW = PanelW - pad * 2f;
         float barH = 18f;
-        tint.Set(BarTrack[0], BarTrack[1], BarTrack[2], BarTrack[3]);
+        tint.Set(BarTrack[0], BarTrack[1], BarTrack[2], BarTrack[3] * overlayAlpha);
         DrawSolid(panelX + pad, barY, barW, barH, 206, tint);
         if (fraction > 0)
         {
-            tint.Set(BarFill[0], BarFill[1], BarFill[2], BarFill[3]);
+            tint.Set(BarFill[0], BarFill[1], BarFill[2], BarFill[3] * overlayAlpha);
             DrawSolid(panelX + pad, barY, barW * fraction, barH, 207, tint);
         }
 
-        DrawText(percentTex, panelX + PanelW - pad - percentTex.Width, panelY + 14f, 208);
-        DrawText(statusTex, panelX + pad, panelY + 84f, 209);
+        float textAlpha = overlayAlpha;
+        if (textAlpha > 0.01f)
+        {
+            DrawText(percentTex, panelX + PanelW - pad - percentTex.Width, panelY + 14f, 208);
+            DrawText(statusTex, panelX + pad, panelY + 84f, 209);
+        }
+
+        return true;
     }
 
     bool DrawOpaqueCover(float w, float h)
     {
         int subId = WhiteTextureId();
         if (subId <= 0) return false;
-        tint.Set(OpaqueCover[0], OpaqueCover[1], OpaqueCover[2], OpaqueCover[3]);
+        tint.Set(OpaqueCover[0], OpaqueCover[1], OpaqueCover[2], OpaqueCover[3] * overlayAlpha);
         capi.Render.Render2DTexture(subId, 0, 0, w, h, 198, tint);
         return true;
-    }
-
-    /// <summary>Paint only the opaque base (used on AfterFinalComposition as a safety pass).</summary>
-    public void DrawOpaqueCoverOnly()
-    {
-        if (!active) return;
-        EnsureGraphicsLoaded();
-        float w = capi.Render.FrameWidth;
-        float h = capi.Render.FrameHeight;
-        if (w <= 0 || h <= 0) return;
-        if (DrawOpaqueCover(w, h))
-            ConsecutiveOpaqueFrames++;
     }
 
     void DrawBackdrop(float w, float h)
@@ -220,12 +218,12 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         if (!backdropMissing && backdrop.TextureId > 0)
         {
             capi.Render.Render2DTexture(backdrop.TextureId, 0, 0, w, h, 200);
-            tint.Set(0.04f, 0.05f, 0.08f, 0.45f);
+            tint.Set(0.04f, 0.05f, 0.08f, 0.45f * overlayAlpha);
             DrawSolid(0, 0, w, h, 199, tint);
             return;
         }
 
-        tint.Set(DarkFill[0], DarkFill[1], DarkFill[2], DarkFill[3]);
+        tint.Set(DarkFill[0], DarkFill[1], DarkFill[2], DarkFill[3] * overlayAlpha);
         DrawSolid(0, 0, w, h, 200, tint);
     }
 

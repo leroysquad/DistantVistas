@@ -26,6 +26,9 @@ public sealed class LodLoginBakeOverlay : IDisposable
     public void UpdateProgress(float fraction, string detail) =>
         screen.SetProgress(fraction, detail);
 
+    public void SetOverlayAlpha(float alpha) =>
+        screen.SetOverlayAlpha(alpha);
+
     public void Show()
     {
         screen.Active = true;
