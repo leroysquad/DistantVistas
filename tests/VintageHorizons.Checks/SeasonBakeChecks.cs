@@ -22,7 +22,7 @@ public static class SeasonBakeChecks
 
     static void MultiplyRgbScalesChannels(Check c)
     {
-        int grey = 0xFF808080;
+        int grey = unchecked((int)0xFF808080);
         int outc = LodSeasonBake.MultiplyRgb(grey, 0.5f, 1f, 0.25f);
         c.Eq(0x40, outc & 0xFF, "red channel scales");
         c.Eq(0x80, (outc >> 8) & 0xFF, "green channel unchanged at 1.0");

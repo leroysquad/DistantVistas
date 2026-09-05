@@ -1053,13 +1053,28 @@ public class DistantVistasModSystem : ModSystem
         // vanilla-server case it exists to stay out of the way of.
         assist?.Greet();
 
-        loginBake = new LodLoginBake(
-            capi, pipeline, renderer, loginBakeOverlay!, tints.PlantTintFallback, UntintedForRebake);
-        loginBake.Begin();
+        LodLoginSweepGate.Result sweepGate = LodLoginSweepGate.Decide(
+            capi, pipeline.World, pipeline, capi.World.Blocks,
+            tints.PlantTintFallback, UntintedForRebake);
 
-        Mod.Logger.Notification(
-            "Level finalized. Login visit sweep started ({0} sections in cache).",
-            pipeline.CachedSectionsLoaded);
+        if (!sweepGate.RunSweep)
+        {
+            renderer.LoginBakeComplete = true;
+            LodLoginSweepComplete.RecordSuccess(capi, pipeline.World);
+            Mod.Logger.Notification(
+                "[DistantVistas] Login visit sweep skipped — {0}. Entering play ({1} sections in cache).",
+                sweepGate.Reason, pipeline.CachedSectionsLoaded);
+        }
+        else
+        {
+            loginBake = new LodLoginBake(
+                capi, pipeline, renderer, loginBakeOverlay!, tints.PlantTintFallback, UntintedForRebake);
+            loginBake.Begin();
+
+            Mod.Logger.Notification(
+                "Level finalized. Login visit sweep started ({0} sections in cache) — {1}.",
+                pipeline.CachedSectionsLoaded, sweepGate.Reason);
+        }
 
         capi.Event.RegisterCallback(_ => LogStats("Stats after 30s"), 30000);
 

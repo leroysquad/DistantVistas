@@ -94,17 +94,7 @@ public sealed class LodLoginSweepResume
     public bool IsEligible(IClientWorldAccessor world)
     {
         if (Pending.Count == 0) return false;
-
-        IGameCalendar cal = world.Calendar;
-        var pos = new BlockPos(
-            (int)world.Player.Entity.Pos.X,
-            world.SeaLevel,
-            (int)world.Player.Entity.Pos.Z);
-        string currentSeason = SeasonSlug(cal.GetSeason(pos));
-        if (string.Equals(currentSeason, Season, StringComparison.OrdinalIgnoreCase))
-            return true;
-
-        return cal.TotalDays - SavedTotalDays <= MaxResumeDayGap;
+        return LodLoginSweepWindow.IsWithin(world, Season, SavedTotalDays);
     }
 
     public static LodLoginSweepResume CaptureCalendar(ICoreClientAPI capi)

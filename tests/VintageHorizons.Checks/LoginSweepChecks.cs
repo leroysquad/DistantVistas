@@ -19,6 +19,7 @@ public static class LoginSweepChecks
         QuietTeleports(c);
         SeasonSampleExport(c);
         SweepResume(c);
+        SweepSkipGate(c);
         SweepTiming(c);
         CreativeMode(c);
         HudHide(c);
@@ -87,11 +88,11 @@ public static class LoginSweepChecks
     {
         string bake = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
-        c.True(bake.Contains("void Teardown(bool success)"),
+        c.True(bake.Contains("void Teardown(bool success"),
             "login bake uses a single Teardown path");
         c.True(bake.Contains("if (released) return"),
             "login bake teardown is idempotent");
-        c.True(bake.Contains("Dispose() => Teardown(success: false)"),
+        c.True(bake.Contains("Teardown(success: false, keepResume: true)"),
             "dispose routes through Teardown");
         c.True(bake.Contains("Teardown(success: true)"),
             "finish routes through Teardown");
@@ -227,6 +228,38 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeInputGuard.cs"));
         c.True(guard.Contains("OnCancelRequested"),
             "escape routes to cancel/resume handler");
+    }
+
+    static void SweepSkipGate(Check c)
+    {
+        c.Eq("ModData/distantvistas/login-sweep-complete.json", LodLoginSweepComplete.RelPath,
+            "completion record under ModData/distantvistas");
+        c.Eq(30.0, LodLoginSweepWindow.MaxDayGap, "skip window matches resume day gap");
+
+        string gate = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepGate.cs"));
+        c.True(gate.Contains("resuming cancelled mid-sweep checkpoint"),
+            "gate always runs when an eligible resume exists");
+        c.True(gate.Contains("empty canvas needs bootstrap sweep"),
+            "gate runs bootstrap on empty visited canvas");
+        c.True(gate.Contains("still incomplete"),
+            "gate runs when audit finds misses");
+        c.True(gate.Contains("outside same-season / 30-day window"),
+            "gate runs when completion window expired");
+        c.True(gate.Contains("visited canvas complete within season window"),
+            "gate skips when canvas is complete and in window");
+
+        string mod = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "DistantVistasModSystem.cs"));
+        c.True(mod.Contains("LodLoginSweepGate.Decide"),
+            "level finalize consults sweep gate before overlay");
+        c.True(mod.Contains("Login visit sweep skipped"),
+            "skipped sweep logs and drops into play");
+
+        string bake = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
+        c.True(bake.Contains("LodLoginSweepComplete.RecordSuccess"),
+            "successful sweep records completion for future skips");
     }
 
     static void SweepTiming(Check c)

@@ -1,3 +1,7 @@
+## 0.7.96
+- **Skip sweep when canvas is already complete.** If every visited L0 region passes the miss audit and login is still the **same season** or within **30 in-game days** of the last successful sweep, the overlay is not shown — play starts immediately with persisted canvases. Sweep still runs for incomplete/missed regions, an expired season/day window, empty-canvas bootstrap, or resuming a cancelled mid-sweep checkpoint (`login-sweep-resume.json`). Successful sweeps record `ModData/distantvistas/login-sweep-complete.json` for the gate.
+- **0.7.95 crash fix retained.** `LodLoginBakeInputLock` still blocks input via `StopAllMovement()` and a guarded action list — no raw `InWorld*MouseDown` enum iteration.
+
 ## 0.7.95
 - **CRITICAL: BlockPlayerInput crash on VS 1.22.7.** Stopped iterating raw `EnumEntityAction` ints past indexer bounds; `LodLoginBakeInputLock` uses `StopAllMovement()` plus named properties and a guarded action list.
 - **Cancel / resume sweep saver.** Press **Esc** during the loader to pause and save remaining L0 keys to `ModData/distantvistas/login-sweep-resume.json`. On next login, resumes under the same overlay when still the **same season** or within **30 in-game days**; otherwise starts fresh. Progress also autosaves after each visited region and on world leave.

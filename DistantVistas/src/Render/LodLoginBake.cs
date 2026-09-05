@@ -515,7 +515,10 @@ public sealed class LodLoginBake
         pipeline.DeferLegacyHeal = false;
 
         if (success)
+        {
             renderer.LoginBakeComplete = true;
+            LodLoginSweepComplete.RecordSuccess(capi, pipeline.World);
+        }
 
         if (success || !keepResume)
             LodLoginSweepResume.Delete(capi);
