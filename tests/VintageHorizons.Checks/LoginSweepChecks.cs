@@ -327,8 +327,8 @@ public static class LoginSweepChecks
             "login bake does not abort on cover paint timeout");
         c.True(bake.Contains("LodLoginBakeWorldHide"),
             "login bake hides vanilla chunks during sweep");
-        c.True(bake.Contains("LodLoginBakePlayerMove.ApplyQuiet"),
-            "login bake uses quiet client entity moves");
+        c.True(bake.Contains("ChunkSweepRadiusChunks"),
+            "login bake scales column sweep to boosted view distance");
         c.True(bake.Contains("LodLoginBakePlayerMove.ApplyQuietFrom"),
             "login bake restores pose with quiet client moves");
 
@@ -494,6 +494,20 @@ public static class LoginSweepChecks
             "login bake enables creative during sweep");
         c.True(bake.Contains("gameMode.Restore()"),
             "login bake restores prior gamemode on teardown");
+        c.True(bake.Contains("LodLoginBakeViewBoost"),
+            "login bake temporarily boosts view distance for sweep cover");
+        c.True(bake.Contains("viewBoost.Restore"),
+            "login bake restores view distance after sweep");
+        c.True(bake.Contains("viewBoost.EnsureBoosted"),
+            "login bake keeps view boost active during sweep");
+
+        string viewBoost = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeViewBoost.cs"));
+        c.Eq(2048, LodLoginBakeViewBoost.MaxVanillaViewDistance, "sweep view boost ceiling");
+        c.True(viewBoost.Contains("FarViewDistanceCap"),
+            "view boost clears DV far cap during sweep");
+        c.True(viewBoost.Contains("OverdrawStart"),
+            "view boost lowers overdraw for wider cover");
 
         string hud = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeHudHide.cs"));

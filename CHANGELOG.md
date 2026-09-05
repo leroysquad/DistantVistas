@@ -2,6 +2,7 @@
 - **CRITICAL: login visit sweep wall-clock budget (0.8.15 playtest).** Season revisit with 291 visited L0 regions queued every key (~20s/stop from `MaxChunkWaitTicks=400`) — hours, not minutes. Fix: hard **≤10 minute** revisit budget (`RevisitMaxVisitStops` = 150 at ~4s/stop, spatial subsample across the canvas like bootstrap). Bootstrap stays on its shorter ~2.5 min cap (`BootstrapMaxVisitStops` = 38). UI shows `Refreshing visited land (season) (150 of 291)` when subsampled.
 - **Faster per-stop waits.** `MaxChunkWaitTicks` 400→80 (~4s max), `MaxCaptureWaitTicks` 120→48 (~2.4s), teleport/bake settle ticks trimmed. Enough time to capture live terrain; typical stop ~4s instead of ~20s.
 - **Oversized resume reclaim.** Pre-0.8.16 checkpoints with 280+ pending revisit keys are discarded on load and replanned into the new budget — Esc cancel/resume still works within the cap. Incomplete-only repair passes are unchanged (never subsampled).
+- **View-distance boost during sweep.** Temporarily raises vanilla `DesiredViewDistance` to the server-approved max (up to 2048 blocks), clears `FarViewDistanceCap` for unlimited DV draw, and lowers `OverdrawStart` to 0.35 for wider cover. Chunk stream/sweep radius scales with boosted view distance. All settings restore on finish, Esc, or cancel — play FPS unchanged.
 - **0.8.14–0.8.15 retained:** async-sound deadlock fix, full DV splash (backdrop+title+bar), Esc cancel/resume.
 
 ## 0.8.15

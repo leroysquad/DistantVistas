@@ -45,6 +45,7 @@ public sealed class LodLoginBake
     readonly LodLoginBakeHudHide hudHide;
     readonly LodLoginBakePlayerHide playerHide;
     readonly LodLoginBakeWorldHide worldHide;
+    readonly LodLoginBakeViewBoost viewBoost;
     readonly LodSeasonSampleExporter seasonSamples;
     readonly LodLoginSweepTiming sweepTiming = new();
     readonly LodLoginSweepStatusWriter statusWriter;
@@ -125,6 +126,7 @@ public sealed class LodLoginBake
         hudHide = new LodLoginBakeHudHide(capi);
         playerHide = new LodLoginBakePlayerHide(capi);
         worldHide = new LodLoginBakeWorldHide(capi);
+        viewBoost = new LodLoginBakeViewBoost(capi, renderer);
         seasonSamples = new LodSeasonSampleExporter(capi);
         statusWriter = new LodLoginSweepStatusWriter(capi);
         overlay.OnCancelRequested = CancelAndSave;
@@ -248,10 +250,11 @@ public sealed class LodLoginBake
         windowMedians.Clear();
 
         capi.Logger.Notification(
-            "[DistantVistas] LOGIN VISIT SWEEP ARMED — mode={0}, regions={1}, overlay warming up.",
-            sweepModeLabel, total);
+            "[DistantVistas] LOGIN VISIT SWEEP ARMED — mode={0}, regions={1}, view={2} blocks, overlay warming up.",
+            sweepModeLabel, total, viewBoost.BoostedViewDistanceBlocks);
 
         pipeline.DeferLegacyHeal = true;
+        viewBoost.EnsureBoosted();
         audioMute.EnsureMuted();
         timeFreeze.EnsureFrozen();
         gameMode.EnsureCreative();
@@ -474,6 +477,8 @@ public sealed class LodLoginBake
                 stopTicks++;
                 if (stopTicks == 1)
                     worldHide.RevealL0(key);
+                if (stopTicks % 2 == 0)
+                    SweepColumnsAround(key);
                 if (!LodLoginSweep.AllMapChunksLoaded(capi.World.BlockAccessor, key)
                     && stopTicks < LodLoginSweep.MaxChunkWaitTicks)
                 {
@@ -620,6 +625,9 @@ public sealed class LodLoginBake
 
         (double x, double y, double z) = LodLoginSweep.VisitPosition(capi.World, key);
         TeleportPlayer(x, y, z, requestChunks: false);
+        int revealRadius = viewBoost.ChunkVisibleRadius;
+        LodLoginBakePlayerMove.RequestChunkColumnsVisible(
+            capi, x, z, capi.World.Player.Entity.Pos.Dimension, revealRadius);
         UpdateProgress(Progress,
             StatusWithEta($"{VisitPrefix()}moving to region… ({Pct(finished, total)})"));
     }
@@ -629,7 +637,7 @@ public sealed class LodLoginBake
         (double x, _, double z) = LodLoginSweep.VisitPosition(capi.World, l0Key);
         int cx = (int)Math.Floor(x / GlobalConstants.ChunkSize);
         int cz = (int)Math.Floor(z / GlobalConstants.ChunkSize);
-        pipeline.SweepLoadedColumns(cx, cz, 2);
+        pipeline.SweepLoadedColumns(cx, cz, viewBoost.ChunkSweepRadiusChunks);
     }
 
     /// <summary>
@@ -744,6 +752,7 @@ public sealed class LodLoginBake
         try { gameMode.Restore(); } catch { }
         try { hudHide.Restore(); } catch { }
         try { playerHide.Restore(); } catch { }
+        try { viewBoost.Restore(); } catch { }
         try { seasonSamples.Dispose(); } catch { }
 
         statusWriter.TouchAdvance(
@@ -779,6 +788,7 @@ public sealed class LodLoginBake
         timeFreeze.EnsureFrozen();
         gameMode.EnsureCreative();
         hudHide.EnsureHidden();
+        viewBoost.EnsureBoosted();
 
         if (!restoreCaptured)
         {

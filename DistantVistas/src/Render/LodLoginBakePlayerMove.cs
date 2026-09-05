@@ -25,7 +25,8 @@ public static class LodLoginBakePlayerMove
         double x,
         double y,
         double z,
-        bool requestChunks = true)
+        bool requestChunks = true,
+        int chunkVisibleRadius = ChunkVisibleRadius)
     {
         entity.Pos.SetPos(x, y, z);
         entity.Pos.Motion.Set(0, 0, 0);
@@ -33,14 +34,15 @@ public static class LodLoginBakePlayerMove
         entity.UpdatePartitioning();
 
         if (requestChunks)
-            RequestChunkColumnsVisible(capi, x, z, entity.Pos.Dimension);
+            RequestChunkColumnsVisible(capi, x, z, entity.Pos.Dimension, chunkVisibleRadius);
     }
 
     public static void ApplyQuietFrom(
         ICoreClientAPI capi,
         EntityPlayer entity,
         EntityPos pose,
-        bool requestChunks = true)
+        bool requestChunks = true,
+        int chunkVisibleRadius = ChunkVisibleRadius)
     {
         entity.Pos.SetFrom(pose);
         entity.Pos.Motion.Set(0, 0, 0);
@@ -48,7 +50,7 @@ public static class LodLoginBakePlayerMove
         entity.UpdatePartitioning();
 
         if (requestChunks)
-            RequestChunkColumnsVisible(capi, pose.X, pose.Z, entity.Pos.Dimension);
+            RequestChunkColumnsVisible(capi, pose.X, pose.Z, entity.Pos.Dimension, chunkVisibleRadius);
     }
 
     /// <summary>Hold pose between ticks without re-requesting chunks every frame.</summary>
@@ -58,14 +60,19 @@ public static class LodLoginBakePlayerMove
         entity.Pos.Motion.Set(0, 0, 0);
     }
 
-    static void RequestChunkColumnsVisible(ICoreClientAPI capi, double x, double z, int dimension)
+    public static void RequestChunkColumnsVisible(
+        ICoreClientAPI capi,
+        double x,
+        double z,
+        int dimension,
+        int chunkVisibleRadius)
     {
         int cx = (int)Math.Floor(x / GlobalConstants.ChunkSize);
         int cz = (int)Math.Floor(z / GlobalConstants.ChunkSize);
         IClientWorldAccessor world = capi.World;
-        for (int dz = -ChunkVisibleRadius; dz <= ChunkVisibleRadius; dz++)
+        for (int dz = -chunkVisibleRadius; dz <= chunkVisibleRadius; dz++)
         {
-            for (int dx = -ChunkVisibleRadius; dx <= ChunkVisibleRadius; dx++)
+            for (int dx = -chunkVisibleRadius; dx <= chunkVisibleRadius; dx++)
             {
                 int tx = cx + dx;
                 int tz = cz + dz;
