@@ -6,8 +6,8 @@ using Vintagestory.Client.NoObf;
 namespace DistantVistas;
 
 /// <summary>
-/// Covers the login visit sweep with a stock-looking loading overlay and keeps
-/// <see cref="ScreenManager.loadingText"/> updated. During the sweep the client stays on
+/// Covers the login visit sweep with the Distant Vistas splash (backdrop + title + progress bar)
+/// and keeps <see cref="ScreenManager.loadingText"/> updated. During the sweep the client stays on
 /// <see cref="GuiScreenRunningGame"/> (world draws suppressed via Harmony) so
 /// <see cref="GuiScreenLoadingGame.RenderToDefaultFramebuffer"/> cannot block the render
 /// thread waiting for async sounds.
@@ -25,7 +25,7 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
         modifiers: null);
 
     readonly ICoreClientAPI capi;
-    readonly LodLoginBakeStockLoadingFallback stockFallback;
+    readonly LodLoginBakeSplashOverlay splashOverlay;
 
     GuiScreenRunningGame? runningScreen;
     ScreenManager? screenManager;
@@ -38,8 +38,8 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
     /// <summary>Fired at the start of each draw pass, before any overlay draw.</summary>
     public Action<float>? OnRenderPulse;
 
-    public bool IsReady => stockFallback.IsReady;
-    public bool HasRendered => stockFallback.HasRendered;
+    public bool IsReady => splashOverlay.IsReady;
+    public bool HasRendered => splashOverlay.HasRendered;
     /// <summary>Always false — vanilla loader draw is bypassed during sweep.</summary>
     public bool UsesVanillaScreen => false;
 
@@ -49,7 +49,7 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
     public LodLoginBakeVanillaLoadingHold(ICoreClientAPI capi)
     {
         this.capi = capi;
-        stockFallback = new LodLoginBakeStockLoadingFallback(capi);
+        splashOverlay = new LodLoginBakeSplashOverlay(capi);
     }
 
     public void Show()
@@ -64,7 +64,7 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
     public void Hide()
     {
         active = false;
-        stockFallback.Hide();
+        splashOverlay.Hide();
     }
 
     public void SetProgress(float fraction, string detail)
@@ -72,7 +72,7 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
         lastFraction = Math.Clamp(fraction, 0f, 1f);
         dvDetail = detail ?? "";
         ApplyLoadingText();
-        stockFallback.SetProgress(lastFraction, FormatDetailWithPercent(dvDetail, lastFraction));
+        splashOverlay.SetProgress(lastFraction, FormatDetailWithPercent(dvDetail, lastFraction));
     }
 
     public void SetOverlayAlpha(float alpha) { }
@@ -89,7 +89,7 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
 
         EnsureRunningScreenCurrent();
         ApplyLoadingText();
-        stockFallback.OnRenderFrame(deltaTime, stage);
+        splashOverlay.OnRenderFrame(deltaTime, stage);
     }
 
     void EnsureRunningScreenCurrent()
@@ -172,25 +172,25 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
             if (!TryActivateRunningScreen())
             {
                 capi.Logger.Warning(
-                    "[DistantVistas] Login sweep: could not switch to running-game screen — stock overlay only.");
+                    "[DistantVistas] Login sweep: could not switch to running-game screen — splash overlay only.");
             }
 
-            stockFallback.Show();
+            splashOverlay.Show();
             ApplyLoadingText();
 
             if (!loggedResolve)
             {
                 loggedResolve = true;
                 capi.Logger.Notification(
-                    "[DistantVistas] Login sweep: stock loading cover + ScreenManager.loadingText (running-game screen, vanilla loader bypassed).");
+                    "[DistantVistas] Login sweep: DV splash loading cover + ScreenManager.loadingText (running-game screen, vanilla loader bypassed).");
             }
         }
         catch (Exception ex)
         {
             capi.Logger.Warning(
-                "[DistantVistas] Login sweep: overlay setup failed ({0}) — stock cover only.",
+                "[DistantVistas] Login sweep: overlay setup failed ({0}) — splash cover only.",
                 ex.Message);
-            stockFallback.Show();
+            splashOverlay.Show();
         }
     }
 
@@ -215,7 +215,7 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
     public void Dispose()
     {
         active = false;
-        stockFallback.Dispose();
+        splashOverlay.Dispose();
         capi.Event.UnregisterRenderer(this, EnumRenderStage.Ortho);
         capi.Event.UnregisterRenderer(this, EnumRenderStage.AfterFinalComposition);
     }

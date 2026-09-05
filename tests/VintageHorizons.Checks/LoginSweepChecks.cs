@@ -84,8 +84,8 @@ public static class LoginSweepChecks
             "vanilla hold switches to running-game screen via ScreenManager");
         c.True(hold.Contains("FormatLoadingText"),
             "vanilla hold appends DV status to loading lines");
-        c.True(hold.Contains("stock loading cover"),
-            "vanilla hold uses stock overlay instead of blocking vanilla loader draw");
+        c.True(hold.Contains("DV splash loading cover"),
+            "vanilla hold paints DV splash instead of blocking vanilla loader draw");
         c.True(hold.Contains("async-sound"),
             "vanilla hold documents async-sound bypass");
 
@@ -119,9 +119,9 @@ public static class LoginSweepChecks
         string screen = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeScreenRenderer.cs"));
         c.True(screen.Contains("stockOnly"),
-            "custom DV splash is fallback-only via stockOnly flag");
-        c.True(screen.Contains("stock-looking"),
-            "screen renderer documented as stock fallback, not primary UX");
+            "screen renderer supports stock-only dev fallback via stockOnly flag");
+        c.True(screen.Contains("Login visit sweep splash"),
+            "screen renderer is the primary DV splash, not stock-only UX");
     }
 
     static void AudioMuteKeys(Check c)
@@ -230,21 +230,23 @@ public static class LoginSweepChecks
         c.True(hold.Contains("AfterFinalComposition"),
             "vanilla hold paints ortho and after-final passes");
 
-        string fallback = File.ReadAllText(Path.Combine(
-            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeStockLoadingFallback.cs"));
-        c.True(fallback.Contains("stockOnly: true"),
-            "stock fallback uses minimal renderer, not DV splash");
+        string splash = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeSplashOverlay.cs"));
+        c.True(splash.Contains("stockOnly: false"),
+            "splash overlay uses full DV renderer, not bare stock cover");
+        c.True(splash.Contains("LodLoginBakeSplashOverlay"),
+            "splash overlay helper wraps full screen renderer");
 
         string screen = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeScreenRenderer.cs"));
         c.True(screen.Contains("DrawStockLayout"),
-            "fallback renderer draws stock Loading… layout");
+            "screen renderer retains stock Loading… layout for stockOnly mode");
         c.True(screen.Contains("TryDrawWithInternalQuad"),
-            "fallback renderer uses ortho internal quad tint path");
+            "splash renderer uses ortho internal quad tint path first");
         c.True(screen.Contains("TryDrawWithExplicitQuad"),
-            "fallback renderer uses explicit MeshRef on after-final pass");
+            "splash renderer uses explicit MeshRef on after-final pass");
         c.True(screen.Contains("HasEverPaintedOpaque"),
-            "fallback renderer tracks whether ortho ever painted");
+            "splash renderer tracks whether ortho ever painted");
 
         string renderer = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodTerrainRenderer.cs"));

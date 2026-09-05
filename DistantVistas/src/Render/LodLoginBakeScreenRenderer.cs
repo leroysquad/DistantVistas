@@ -6,8 +6,8 @@ using Vintagestory.API.MathTools;
 namespace DistantVistas;
 
 /// <summary>
-/// Legacy custom splash renderer — used only as a stock-looking fallback when the
-/// vanilla <see cref="GuiScreenLoadingGame"/> cannot be re-rendered.
+/// Login visit sweep splash: backdrop, arched title, progress bar, and status text.
+/// When <paramref name="stockOnly"/> is true, draws a minimal stock Loading… layout instead.
 /// </summary>
 public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
 {
@@ -290,12 +290,14 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     }
 
     /// <summary>
-    /// Draw order: explicit <see cref="MeshRef"/> (safe on AfterFinalComposition), then ortho
-    /// internal-quad tint path (proven on <see cref="EnumRenderStage.Ortho"/> before 0.8.1).
+    /// Draw order: ortho internal-quad tint path first (proven on <see cref="EnumRenderStage.Ortho"/>),
+    /// then explicit <see cref="MeshRef"/> (required on <see cref="EnumRenderStage.AfterFinalComposition"/>).
     /// </summary>
     bool TryDrawTexture(int textureId, float x, float y, float width, float height, float z, bool orthoPass)
     {
         if (textureId <= 0 || width <= 0 || height <= 0) return false;
+        if (orthoPass && TryDrawWithInternalQuad(textureId, x, y, width, height, z, null))
+            return true;
         if (TryDrawWithExplicitQuad(textureId, x, y, width, height, z)) return true;
         return orthoPass && TryDrawWithInternalQuad(textureId, x, y, width, height, z, null);
     }
@@ -304,14 +306,22 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     {
         if (width <= 0 || height <= 0 || color[3] <= 0.001f) return false;
 
+        if (orthoPass)
+        {
+            int whiteId = EnsureWhiteTexture();
+            if (whiteId > 0 && TryDrawWithInternalQuad(whiteId, x, y, width, height, z, color))
+                return true;
+        }
+
         int bakedId = SolidColorTextureId(color);
         if (bakedId > 0 && TryDrawWithExplicitQuad(bakedId, x, y, width, height, z))
             return true;
 
         if (!orthoPass) return false;
 
-        int whiteId = EnsureWhiteTexture();
-        return whiteId > 0 && TryDrawWithInternalQuad(whiteId, x, y, width, height, z, color);
+        int fallbackWhite = EnsureWhiteTexture();
+        return fallbackWhite > 0
+            && TryDrawWithInternalQuad(fallbackWhite, x, y, width, height, z, color);
     }
 
     bool TryDrawLoadedTexture(LoadedTexture tex, float x, float y, float z, bool orthoPass)

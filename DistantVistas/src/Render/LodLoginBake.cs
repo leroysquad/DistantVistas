@@ -283,7 +283,7 @@ public sealed class LodLoginBake
             if (overlay.HasRendered)
             {
                 capi.Logger.Notification(
-                    "[DistantVistas] Login visit sweep: vanilla loading screen active.");
+                    "[DistantVistas] Login visit sweep: Distant Vistas loading splash active.");
             }
             else
             {

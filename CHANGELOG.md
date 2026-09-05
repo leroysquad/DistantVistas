@@ -1,3 +1,6 @@
+## 0.8.15
+- **Login visit sweep splash restored (0.8.14 regression).** The running-game overlay again paints the full Distant Vistas join screen every visit: landscape backdrop, arched title art, progress bar, and Preparing/Visiting/Finishing status — not the bare black stock-only cover from 0.8.14. Ortho draw now prefers the proven internal-quad tint path before explicit `MeshRef` quads so `HasEverPaintedOpaque` cannot silently stay false while the world is hidden. 0.8.14 deadlock fixes retained: Harmony still skips `GuiScreenLoadingGame.RenderToDefaultFramebuffer`, sweep stays on `GuiScreenRunningGame`, and pulse still runs from `ScreenManager.OnNewFrame` before any screen draw.
+
 ## 0.8.14
 - **CRITICAL: login visit sweep stuck at Preparing 1% (0.8.13).** While handover was deferred the client stayed on `GuiScreenLoadingGame`; `ScreenManager.Render` blocked in `RenderToDefaultFramebuffer` waiting for async sounds, so `LodLoginBakePulse` never ran and warmup never reached `warmup complete — entering visit teleports`. Fix: Harmony skips vanilla loading-screen draw during sweep; sweep immediately switches to `GuiScreenRunningGame` (world draws still suppressed) and paints the stock Loading… cover; pulse runs from `ScreenManager.OnNewFrame` **before** any screen draw as well as from the overlay renderer.
 

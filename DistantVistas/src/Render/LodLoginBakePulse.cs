@@ -5,7 +5,7 @@ namespace DistantVistas;
 /// <summary>
 /// Advances login visit sweep logic on the render thread. Pulses from
 /// <see cref="LodLoginBakeHarmony.RenderPulse"/> (ScreenManager.OnNewFrame prefix, before
-/// any screen draw) and from the stock loading overlay renderer. Vanilla
+/// any screen draw) and from the splash overlay renderer. Vanilla
 /// <see cref="GuiScreenLoadingGame.RenderToDefaultFramebuffer"/> can stall waiting for
 /// async sound and prevent later render-stage callbacks from firing.
 /// </summary>
