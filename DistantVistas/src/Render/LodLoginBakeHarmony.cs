@@ -19,7 +19,7 @@ public static class LodLoginBakeHarmony
     /// <summary>Advance sweep ticks at the start of each ScreenManager frame, before any screen draw.</summary>
     public static Action<float>? RenderPulse { get; set; }
 
-    /// <summary>Paint DV splash before RunningGame framebuffer present while world draws are suppressed.</summary>
+    /// <summary>Paint DV splash from OnNewFrame while sweep is active, and as backup before RunningGame framebuffer present.</summary>
     public static Action? PaintSplashCover { get; set; }
 
     public static void Apply(Vintagestory.API.Common.Mod mod)
@@ -45,7 +45,14 @@ public static class LodLoginBakeHarmony
     [HarmonyPatch(typeof(ScreenManager), "OnNewFrame")]
     sealed class PulseBeforeScreenFrame
     {
-        static void Prefix(float dt) => RenderPulse?.Invoke(dt);
+        static void Prefix(float dt)
+        {
+            RenderPulse?.Invoke(dt);
+            // Present-path backup alone is unreliable while world draws are suppressed —
+            // paint every frame from the frame pulse so the splash reaches the screen.
+            if (LodLoginBakeSweepGate.SweepActive)
+                PaintSplashCover?.Invoke();
+        }
     }
 
     [HarmonyPatch(typeof(GuiScreenLoadingGame), "RenderToDefaultFramebuffer")]

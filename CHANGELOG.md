@@ -1,3 +1,6 @@
+## 0.8.20
+- **CRITICAL: login splash black screen (0.8.19 playtest).** Sweep ticks advanced from `ScreenManager.OnNewFrame`, but splash paint only ran on `GuiScreenRunningGame.RenderToDefaultFramebuffer` Prefix — that present path often never runs while world draws are suppressed, so `HasEverPaintedOpaque` stayed false and the screen stayed black. Fix: paint the DV splash every frame from `OnNewFrame` / `RenderPulse` while the sweep is active (framebuffer-prefix backup retained). Vanilla chunk hide is deferred until the first opaque splash frame. Miss-retry cap, 3–5 min revisit budget, view-distance boost, and deadlock fixes unchanged from 0.8.19.
+
 ## 0.8.19
 - **Login visit sweep miss-retry cap (0.8.18 playtest).** After the budgeted main pass (~3–5 min revisit target), the audit phase retried the same ~12 incomplete regions for 4+ extra passes. `MaxResweepRounds` capped from 8 → **1**; when the limit is hit the sweep calls `BeginDraining` and continues into play instead of looping. Splash opaque paint, 3–5 min revisit budget, and view-distance boost unchanged.
 

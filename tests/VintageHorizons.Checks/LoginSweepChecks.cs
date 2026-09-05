@@ -118,6 +118,8 @@ public static class LoginSweepChecks
             "harmony skips running-game primary render during sweep");
         c.True(harmony.Contains("OnNewFrame"),
             "harmony pulses sweep before ScreenManager screen draw");
+        c.True(harmony.Contains("SweepActive") && harmony.Contains("PaintSplashCover"),
+            "harmony paints splash from OnNewFrame while sweep active");
         c.True(harmony.Contains("PaintSplashBeforeRunningFramebuffer"),
             "harmony paints splash before running-game framebuffer present");
         c.True(harmony.Contains("PaintSplashCover"),
@@ -347,6 +349,8 @@ public static class LoginSweepChecks
             "login bake never aborts solely on unpainted cover");
         c.True(!bake.Contains("cover never painted"),
             "login bake does not abort on cover paint timeout");
+        c.True(bake.Contains("worldHideApplied"),
+            "login bake delays world hide until splash has painted");
         c.True(bake.Contains("LodLoginBakeWorldHide"),
             "login bake hides vanilla chunks during sweep");
         c.True(bake.Contains("ChunkSweepRadiusChunks"),

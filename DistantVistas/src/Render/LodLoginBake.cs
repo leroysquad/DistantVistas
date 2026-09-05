@@ -81,6 +81,7 @@ public sealed class LodLoginBake
     bool resuming;
     bool loggedTeleportBegin;
     bool loggedWarmupComplete;
+    bool worldHideApplied;
     bool escWasDown;
 
     public Phase CurrentPhase => phase;
@@ -244,6 +245,7 @@ public sealed class LodLoginBake
         overlayWarmupTicks = 0;
         loggedTeleportBegin = false;
         loggedWarmupComplete = false;
+        worldHideApplied = false;
         escWasDown = false;
         progressUi.Reset();
         stabilizeWindow.Clear();
@@ -309,7 +311,11 @@ public sealed class LodLoginBake
                 "[DistantVistas] Login visit sweep: warmup complete — entering visit teleports.");
         }
 
-        worldHide.HideAllLoaded();
+        if (!worldHideApplied && overlay.HasRendered)
+        {
+            worldHideApplied = true;
+            worldHide.HideAllLoaded();
+        }
 
         if (total == 0)
         {
