@@ -3,21 +3,25 @@ using System.Text;
 using System.Text.Json;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
 
 namespace DistantVistas;
 
 /// <summary>
 /// Append-friendly JSONL export of per-column season research samples during the login
-/// visit sweep. Batched writes keep allocation and IO overhead low.
+/// visit sweep. Every L0 stop writes a stop header plus one row per column in the cell
+/// (dense coverage, including uncaptured gaps). Batched writes keep IO overhead low.
 /// </summary>
 public sealed class LodSeasonSampleExporter : IDisposable
 {
     public const string SamplesSubdir = "ModData/distantvistas/season-samples";
-    public const int SchemaVersion = 1;
+    public const int SchemaVersion = 2;
 
-    /// <summary>1 = every captured column; 2/4 = sparser subsample for slow disks.</summary>
+    /// <summary>1 = every column in the L0 cell; 2/4 = sparser subsample for slow disks.</summary>
     public const int ColumnStride = 1;
+
+    public const int TotalColumnsPerStop = LodSection.GridSize * LodSection.GridSize;
 
     public const int FlushEveryLines = 96;
 
@@ -51,7 +55,6 @@ public sealed class LodSeasonSampleExporter : IDisposable
 
     public void RecordSection(long sectionKey, LodSection section)
     {
-        if (section.CapturedColumns == 0) return;
         EnsureFileOpen();
 
         IClientWorldAccessor world = capi.World;
@@ -61,15 +64,11 @@ public sealed class LodSeasonSampleExporter : IDisposable
         int sz = LodWorld.KeySz(sectionKey);
         CalendarSnapshot cal = CalendarSnapshot.Capture(world);
 
-        int cols = LodSection.GridSize * LodSection.GridSize;
-        for (int col = 0; col < cols; col += ColumnStride)
-        {
-            if (!section.Captured[col]) continue;
-            if (!section.TryGetTopRun(col, out ulong topRun)) continue;
+        WriteStopLine(sectionKey, section, snowVote, cal);
 
-            WriteColumnLine(
-                sectionKey, sx, sz, col, topRun, section, blocks, world,
-                snowVote, cal);
+        for (int col = 0; col < TotalColumnsPerStop; col += ColumnStride)
+        {
+            WriteColumnRecord(sectionKey, sx, sz, col, section, blocks, world, snowVote, cal);
 
             if (linesSinceFlush >= FlushEveryLines)
                 FlushBatch();
@@ -120,8 +119,6 @@ public sealed class LodSeasonSampleExporter : IDisposable
     void WriteSessionHeader(int plannedStops)
     {
         Utf8JsonWriter w = writer!;
-        IGameCalendar cal = capi.World.Calendar;
-        climatePos.Set((int)capi.World.Player.Entity.Pos.X, capi.World.SeaLevel, (int)capi.World.Player.Entity.Pos.Z);
         CalendarSnapshot snap = CalendarSnapshot.Capture(capi.World);
 
         w.WriteStartObject();
@@ -133,34 +130,158 @@ public sealed class LodSeasonSampleExporter : IDisposable
         w.WriteString("sweepPlan", sweepMode.ToString());
         w.WriteNumber("plannedStops", plannedStops);
         w.WriteNumber("columnStride", ColumnStride);
+        w.WriteNumber("columnsPerStop", TotalColumnsPerStop);
         WriteCalendar(w, snap, climatePos.X, climatePos.Z);
         w.WriteEndObject();
         batchStream.Write(Newline);
         linesSinceFlush++;
     }
 
-    void WriteColumnLine(
+    void WriteStopLine(
+        long sectionKey,
+        LodSection section,
+        LodSeasonBake.SnowVote snowVote,
+        CalendarSnapshot cal)
+    {
+        int sx = LodWorld.KeySx(sectionKey);
+        int sz = LodWorld.KeySz(sectionKey);
+        int level = LodWorld.KeyLevel(sectionKey);
+        int footprint = LodWorld.KeyFootprintBlocks(sectionKey);
+        int minX = sx * footprint;
+        int minZ = sz * footprint;
+        int maxX = minX + footprint - 1;
+        int maxZ = minZ + footprint - 1;
+
+        Utf8JsonWriter w = writer!;
+        w.WriteStartObject();
+        w.WriteString("type", "stop");
+        w.WriteNumber("schema", SchemaVersion);
+        w.WriteNumber("sectionKey", sectionKey);
+        w.WriteNumber("level", level);
+        w.WriteNumber("sx", sx);
+        w.WriteNumber("sz", sz);
+        w.WriteNumber("minX", minX);
+        w.WriteNumber("minZ", minZ);
+        w.WriteNumber("maxX", maxX);
+        w.WriteNumber("maxZ", maxZ);
+        w.WriteNumber("footprintBlocks", footprint);
+        w.WriteNumber("capturedColumns", section.CapturedColumns);
+        w.WriteNumber("totalColumns", TotalColumnsPerStop);
+        w.WriteNumber("provisionalQuadrants", section.ProvisionalQuadrants);
+
+        w.WriteStartArray("quadrantCaptured");
+        for (int q = 0; q < LodSection.QuadrantCount; q++)
+            w.WriteNumberValue(section.QuadrantCapturedCount(q));
+        w.WriteEndArray();
+
+        w.WriteStartArray("quadrantProvisional");
+        for (int q = 0; q < LodSection.QuadrantCount; q++)
+            w.WriteBooleanValue(section.IsProvisionalQuadrant(q));
+        w.WriteEndArray();
+
+        w.WriteStartArray("chunks");
+        foreach ((int cx, int cz) in LodLoginSweep.ChunkColumnsForL0(sectionKey))
+        {
+            w.WriteStartObject();
+            w.WriteNumber("cx", cx);
+            w.WriteNumber("cz", cz);
+            int qx = Math.Clamp((cx * GlobalConstants.ChunkSize - minX) / LodSection.QuadrantColumns, 0, 1);
+            int qz = Math.Clamp((cz * GlobalConstants.ChunkSize - minZ) / LodSection.QuadrantColumns, 0, 1);
+            w.WriteNumber("quadrant", qz * 2 + qx);
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
+
+        if (section.HasSurfaceBounds)
+        {
+            w.WriteNumber("surfaceYMin", section.SurfaceYMin);
+            w.WriteNumber("surfaceYMax", section.SurfaceYMax);
+            w.WriteNumber("surfaceRelief", section.SurfaceRelief);
+        }
+
+        w.WriteBoolean("snowVoteMajority", snowVote.MajoritySnow);
+        w.WriteNumber("snowVoteEligible", snowVote.Eligible);
+        w.WriteNumber("snowVoteSnowy", snowVote.Snowy);
+
+        WriteCalendar(w, cal, minX + footprint / 2, minZ + footprint / 2);
+        w.WriteEndObject();
+        batchStream.Write(Newline);
+        linesSinceFlush++;
+    }
+
+    void WriteColumnRecord(
         long sectionKey,
         int sx,
         int sz,
         int col,
-        ulong topRun,
         LodSection section,
         IList<Block> blocks,
         IClientWorldAccessor world,
         LodSeasonBake.SnowVote snowVote,
         CalendarSnapshot cal)
     {
+        ColumnMeta meta = ColumnMeta.From(sectionKey, col);
+        bool captured = section.Captured[col];
+        bool provisional = section.IsProvisionalQuadrant(meta.Quadrant);
+        ulong topRun = 0;
+        bool hasTopRun = captured && section.TryGetTopRun(col, out topRun);
+
+        Utf8JsonWriter w = writer!;
+        w.WriteStartObject();
+        w.WriteString("type", "column");
+        w.WriteNumber("schema", SchemaVersion);
+        w.WriteNumber("sectionKey", sectionKey);
+        w.WriteNumber("sx", sx);
+        w.WriteNumber("sz", sz);
+        w.WriteNumber("col", col);
+        w.WriteNumber("localX", meta.LocalX);
+        w.WriteNumber("localZ", meta.LocalZ);
+        w.WriteNumber("x", meta.X);
+        w.WriteNumber("z", meta.Z);
+        w.WriteNumber("quadrant", meta.Quadrant);
+        w.WriteNumber("chunkCx", meta.ChunkCx);
+        w.WriteNumber("chunkCz", meta.ChunkCz);
+
+        w.WriteBoolean("captured", captured);
+        w.WriteBoolean("provisionalQuadrant", provisional);
+        w.WriteBoolean("hasTopRun", hasTopRun);
+        w.WriteBoolean("columnComplete", captured && hasTopRun && !provisional);
+
+        WriteCalendar(w, cal, meta.X, meta.Z);
+
+        if (!hasTopRun)
+        {
+            w.WriteEndObject();
+            batchStream.Write(Newline);
+            linesSinceFlush++;
+            return;
+        }
+
         int pid = LodSection.RunPaletteId(topRun);
-        if (pid < 0 || pid >= section.Palette.Count) return;
+        if (pid < 0 || pid >= section.Palette.Count)
+        {
+            w.WriteString("coverage", "invalidPalette");
+            w.WriteEndObject();
+            batchStream.Write(Newline);
+            linesSinceFlush++;
+            return;
+        }
 
         LodPaletteEntry entry = section.Palette[pid];
-        if (entry.BlockId <= 0 || entry.BlockId >= blocks.Count) return;
+        if (entry.BlockId <= 0 || entry.BlockId >= blocks.Count)
+        {
+            w.WriteString("coverage", "invalidBlock");
+            w.WriteEndObject();
+            batchStream.Write(Newline);
+            linesSinceFlush++;
+            return;
+        }
 
         Block surface = blocks[entry.BlockId];
         (int x, int y, int z) = LodPipeline.CaptureBlockPos(sectionKey, col, topRun);
-        int localX = col % LodSection.GridSize;
-        int localZ = col / LodSection.GridSize;
+        int yTop = LodSection.RunYTop(topRun);
+        int yBottom = LodSection.RunYBottom(topRun);
+        int runCount = section.RunCount(col);
 
         SnowColumn snow = AnalyzeSnowColumn(section, blocks, col);
         CanopyColumn canopy = FindCanopyColumn(section, blocks, col, sectionKey, capi, surface, topRun);
@@ -173,42 +294,59 @@ public sealed class LodSeasonSampleExporter : IDisposable
 
         ClimateSnapshot? climate = TryClimate(world, x, y, z);
 
-        Utf8JsonWriter w = writer!;
-        w.WriteStartObject();
-        w.WriteString("type", "column");
-        w.WriteNumber("sectionKey", sectionKey);
-        w.WriteNumber("sx", sx);
-        w.WriteNumber("sz", sz);
-        w.WriteNumber("col", col);
-        w.WriteNumber("localX", localX);
-        w.WriteNumber("localZ", localZ);
-        w.WriteNumber("x", x);
         w.WriteNumber("y", y);
-        w.WriteNumber("z", z);
-
-        WriteCalendar(w, cal, x, z);
+        w.WriteNumber("surfaceYTop", yTop);
+        w.WriteNumber("surfaceYBottom", yBottom);
+        w.WriteNumber("runCount", runCount);
 
         w.WriteNumber("surfaceBlockId", entry.BlockId);
-        if (surface.Code != null) w.WriteString("surfaceBlock", surface.Code.ToShortString());
+        if (surface.Code != null)
+        {
+            w.WriteString("surfaceBlock", surface.Code.ToShortString());
+            w.WriteString("surfaceBlockDomain", surface.Code.Domain);
+            w.WriteString("surfaceBlockPath", surface.Code.Path);
+        }
 
         w.WriteNumber("surfaceRgb", surfaceRgb);
+        w.WriteNumber("paletteFlags", entry.Flags);
+        w.WriteNumber("tintSlot", entry.TintSlot);
         w.WriteBoolean("surfaceBaked", (entry.Flags & LodPaletteEntry.FlagBaked) != 0);
+        w.WriteBoolean("surfaceWater", (entry.Flags & LodPaletteEntry.FlagWater) != 0);
+        w.WriteBoolean("surfaceThin", (entry.Flags & LodPaletteEntry.FlagThin) != 0);
+        w.WriteBoolean("surfaceSkip", (entry.Flags & LodPaletteEntry.FlagSkip) != 0);
+        w.WriteBoolean("groundSnowEligible", LodSeasonBake.IsSnowEligibleGround(surface));
+        w.WriteBoolean("surfaceLeafLike", IsLeafLike(surface));
 
         if (LodSeasonBake.IsSnowEligibleGround(surface))
             w.WriteNumber("grassSoilRgb", surfaceRgb);
 
         w.WriteBoolean("groundSnow", snow.GroundSnow);
         w.WriteNumber("snowDepthBlocks", snow.DepthBlocks);
-        if (snow.TopSnowBlockId > 0) w.WriteNumber("snowBlockId", snow.TopSnowBlockId);
+        if (snow.TopSnowBlockId > 0)
+        {
+            w.WriteNumber("snowBlockId", snow.TopSnowBlockId);
+            if (snow.TopSnowBlockId < blocks.Count && blocks[snow.TopSnowBlockId].Code != null)
+                w.WriteString("snowBlock", blocks[snow.TopSnowBlockId].Code!.ToShortString());
+        }
 
         w.WriteBoolean("snowVoteMajority", snowVote.MajoritySnow);
         w.WriteNumber("snowVoteEligible", snowVote.Eligible);
         w.WriteNumber("snowVoteSnowy", snowVote.Snowy);
 
+        if (TrySubsurface(section, blocks, col, topRun, out SubsurfaceColumn subsurface))
+        {
+            w.WriteNumber("subsurfaceBlockId", subsurface.BlockId);
+            if (subsurface.BlockCode != null) w.WriteString("subsurfaceBlock", subsurface.BlockCode);
+            w.WriteNumber("subsurfaceY", subsurface.Y);
+            w.WriteNumber("subsurfaceRgb", subsurface.Rgb);
+        }
+
         if (canopy.Found)
         {
             w.WriteNumber("canopyBlockId", canopy.BlockId);
             if (canopy.BlockCode != null) w.WriteString("canopyBlock", canopy.BlockCode);
+            if (canopy.BlockDomain != null) w.WriteString("canopyBlockDomain", canopy.BlockDomain);
+            if (canopy.BlockPath != null) w.WriteString("canopyBlockPath", canopy.BlockPath);
             w.WriteNumber("canopyY", canopy.Y);
             w.WriteNumber("canopyRgb", canopy.Rgb);
             w.WriteString("canopyClass", canopy.Class);
@@ -223,6 +361,33 @@ public sealed class LodSeasonSampleExporter : IDisposable
         w.WriteEndObject();
         batchStream.Write(Newline);
         linesSinceFlush++;
+    }
+
+    static bool TrySubsurface(
+        LodSection section,
+        IList<Block> blocks,
+        int col,
+        ulong topRun,
+        out SubsurfaceColumn subsurface)
+    {
+        subsurface = default;
+        Span<ulong> runs = section.ColumnRuns(col);
+        if (runs.Length < 2) return false;
+
+        ulong run = runs[1];
+        int pid = LodSection.RunPaletteId(run);
+        if (pid < 0 || pid >= section.Palette.Count) return false;
+
+        LodPaletteEntry entry = section.Palette[pid];
+        if (entry.BlockId <= 0 || entry.BlockId >= blocks.Count) return false;
+
+        Block block = blocks[entry.BlockId];
+        subsurface = new SubsurfaceColumn(
+            entry.BlockId,
+            block.Code?.ToShortString(),
+            LodSection.RunYTop(run) - 1,
+            entry.Color);
+        return true;
     }
 
     static void WriteCalendar(Utf8JsonWriter w, CalendarSnapshot cal, int x, int z)
@@ -258,7 +423,6 @@ public sealed class LodSeasonSampleExporter : IDisposable
     static void WriteReadmeOnce(string dir)
     {
         string readmePath = Path.Combine(dir, "README.md");
-        if (File.Exists(readmePath)) return;
         try
         {
             File.WriteAllText(readmePath, SeasonSamplesReadme.Text, Encoding.UTF8);
@@ -346,7 +510,8 @@ public sealed class LodSeasonSampleExporter : IDisposable
                 rgb = section.Palette[pid].Color;
             }
             return new CanopyColumn(true, section.Palette[LodSection.RunPaletteId(topRun)].BlockId,
-                surface.Code?.ToShortString(), y, rgb, ClassifyLeafTint(rgb));
+                surface.Code?.ToShortString(), surface.Code?.Domain, surface.Code?.Path,
+                y, rgb, ClassifyLeafTint(rgb));
         }
 
         foreach (ulong run in section.ColumnRuns(col))
@@ -359,7 +524,8 @@ public sealed class LodSeasonSampleExporter : IDisposable
             int rgb = LodSeasonBake.SampleVanillaColor(capi, block, x, y, z);
             if (rgb == 0) rgb = section.Palette[pid].Color;
             return new CanopyColumn(true, section.Palette[pid].BlockId,
-                block.Code?.ToShortString(), y, rgb, ClassifyLeafTint(rgb));
+                block.Code?.ToShortString(), block.Code?.Domain, block.Code?.Path,
+                y, rgb, ClassifyLeafTint(rgb));
         }
 
         return default;
@@ -395,8 +561,29 @@ public sealed class LodSeasonSampleExporter : IDisposable
         return "mixed";
     }
 
+    readonly record struct ColumnMeta(
+        int X, int Z, int LocalX, int LocalZ, int Quadrant, int ChunkCx, int ChunkCz)
+    {
+        public static ColumnMeta From(long sectionKey, int col)
+        {
+            int localX = col % LodSection.GridSize;
+            int localZ = col / LodSection.GridSize;
+            int footprint = LodWorld.KeyFootprintBlocks(sectionKey);
+            int x = LodWorld.KeySx(sectionKey) * footprint + localX;
+            int z = LodWorld.KeySz(sectionKey) * footprint + localZ;
+            return new ColumnMeta(
+                x, z, localX, localZ,
+                LodSection.QuadrantOf(localX, localZ),
+                x / GlobalConstants.ChunkSize,
+                z / GlobalConstants.ChunkSize);
+        }
+    }
+
     readonly record struct SnowColumn(bool GroundSnow, int DepthBlocks, int TopSnowBlockId);
-    readonly record struct CanopyColumn(bool Found, int BlockId, string? BlockCode, int Y, int Rgb, string Class);
+    readonly record struct SubsurfaceColumn(int BlockId, string? BlockCode, int Y, int Rgb);
+    readonly record struct CanopyColumn(
+        bool Found, int BlockId, string? BlockCode, string? BlockDomain, string? BlockPath,
+        int Y, int Rgb, string Class);
 
     readonly record struct ClimateSnapshot(float TempC, float RainMm);
 
@@ -479,40 +666,61 @@ static file class SeasonSamplesReadme
 
         | Field | Description |
         |---|---|
-        | `schema` | Format version (currently `1`) |
+        | `schema` | Format version (currently `2`) |
         | `startedUtc` | ISO-8601 UTC start time |
         | `sweepMode` | UI label, e.g. `Bootstrap (coast guard)` or `Revisiting visited land` |
         | `sweepPlan` | Enum: `RevisitVisited`, `BootstrapCoastGuard`, `BootstrapRadius` |
         | `plannedStops` | L0 regions queued for this sweep |
-        | `columnStride` | `1` = every captured column; higher = subsample |
+        | `columnStride` | `1` = every column in the L0 cell; higher = subsample |
+        | `columnsPerStop` | Always `4096` (64×64) at L0 |
 
         Calendar fields: `totalDays`, `year`, `month`, `monthName`, `dayOfYear`, `hourOfDay`, `yearRel`, `season`, `seasonRel`, `calendarToken`.
 
-        ### `column` (one per sampled column per L0 stop)
+        ### `stop` (one per L0 visit, before its columns)
+
+        | Field | Description |
+        |---|---|
+        | `sectionKey`, `level`, `sx`, `sz` | L0 section identity |
+        | `minX`…`maxZ`, `footprintBlocks` | World bounds of the cell |
+        | `capturedColumns`, `totalColumns` | Coverage summary |
+        | `provisionalQuadrants` | Bit mask of peek/sweep quadrants |
+        | `quadrantCaptured`, `quadrantProvisional` | Per-chunk-column stats |
+        | `chunks` | Vanilla chunk columns (`cx`, `cz`, `quadrant`) |
+        | `surfaceYMin`…`surfaceRelief` | Section relief when known |
+        | `snowVote*` | Section majority snow vote |
+
+        ### `column` (one per column in the L0 cell — dense, including gaps)
 
         | Field | Description |
         |---|---|
         | `sectionKey`, `sx`, `sz`, `col`, `localX`, `localZ` | L0 section identity |
-        | `x`, `y`, `z` | World block position of surface top |
-        | `surfaceBlockId`, `surfaceBlock` | Top voxel block |
-        | `surfaceRgb`, `surfaceBaked` | Captured / baked ARGB (`0xAARRGGBB`) |
+        | `x`, `y`, `z` | World block position of surface top (`y` omitted when uncaptured) |
+        | `quadrant`, `chunkCx`, `chunkCz` | Chunk placement within the L0 cell |
+        | `captured`, `provisionalQuadrant`, `hasTopRun`, `columnComplete` | Coverage flags |
+        | `surfaceBlockId`, `surfaceBlock`, `surfaceBlockDomain`, `surfaceBlockPath` | Top voxel block |
+        | `surfaceRgb`, `paletteFlags`, `tintSlot`, `surfaceBaked` | Captured / baked ARGB and palette state |
+        | `surfaceWater`, `surfaceThin`, `surfaceSkip`, `groundSnowEligible`, `surfaceLeafLike` | Block class flags |
         | `grassSoilRgb` | Present when surface is grass/topsoil/peat/forest floor |
-        | `groundSnow` | Surface block is snow |
-        | `snowDepthBlocks`, `snowBlockId` | Snow layers from column top downward |
+        | `groundSnow`, `snowDepthBlocks`, `snowBlockId`, `snowBlock` | Snow layers from column top downward |
+        | `subsurfaceBlockId`, `subsurfaceBlock`, `subsurfaceY`, `subsurfaceRgb` | Block directly below surface top |
         | `snowVote*` | Section majority snow vote over eligible ground columns |
-        | `canopyBlockId`, `canopyBlock`, `canopyY`, `canopyRgb`, `canopyClass` | First leaf/plant canopy in column (`white` / `green` / `mixed`) |
+        | `canopyBlockId`, `canopyBlock`, `canopyBlockDomain`, `canopyBlockPath`, `canopyY`, `canopyRgb`, `canopyClass` | First leaf/plant canopy in column (`white` / `green` / `mixed`) |
+        | `runCount`, `surfaceYTop`, `surfaceYBottom` | Column RLE geometry |
         | `tempC`, `rainMm` | `GetClimateAt` at surface (when cheap) |
 
-        Each column line repeats calendar fields so rows are self-contained for analysis.
+        Uncaptured columns still emit a row with coverage flags so analysts can distinguish true gaps from sparse export.
+
+        Each `stop` and `column` line repeats calendar fields so rows are self-contained for analysis.
 
         ## Tuning
 
-        - `LodSeasonSampleExporter.ColumnStride` — default `1` (full density).
+        - `LodSeasonSampleExporter.ColumnStride` — default `1` (full 64×64 density per stop).
         - `LodSeasonSampleExporter.FlushEveryLines` — default `96` (batch fsync).
 
         ## Notes
 
-        - Export does not replace LOD bake; it mirrors what the visit sweep captured.
+        - Export does not replace LOD bake; it mirrors what the visit sweep captured at each stop.
         - Creative mode, overlay, mute, and time freeze during sweep are unchanged; gamemode restores on teardown.
+        - When the visited canvas is complete within the season / 30-day window, the sweep (and export) is skipped entirely on login.
         """;
 }

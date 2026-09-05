@@ -190,6 +190,8 @@ public static class LoginSweepChecks
         c.Eq("ModData/distantvistas/season-samples", LodSeasonSampleExporter.SamplesSubdir,
             "samples live under ModData/distantvistas");
         c.Eq(1, LodSeasonSampleExporter.ColumnStride, "default full column density");
+        c.Eq(4096, LodSeasonSampleExporter.TotalColumnsPerStop, "dense 64x64 export per L0 stop");
+        c.Eq(2, LodSeasonSampleExporter.SchemaVersion, "season sample schema v2");
         c.Eq("white", LodSeasonSampleExporter.ClassifyLeafTint(unchecked((int)0xFFEDEDED)), "bright neutral is white");
         c.Eq("green", LodSeasonSampleExporter.ClassifyLeafTint(unchecked((int)0xFF3A8A2A)), "strong green leaf");
         c.Eq("mixed", LodSeasonSampleExporter.ClassifyLeafTint(unchecked((int)0xFF8A6A30)), "autumn tone is mixed");
@@ -207,6 +209,16 @@ public static class LoginSweepChecks
             "sample exporter batches disk writes");
         c.True(exporter.Contains("README.md"),
             "schema readme is written beside samples");
+        c.True(exporter.Contains("WriteStopLine"),
+            "each L0 stop writes a stop header before columns");
+        c.True(exporter.Contains("WriteColumnRecord"),
+            "every column in the L0 cell is exported");
+        c.True(exporter.Contains("columnComplete"),
+            "column rows carry coverage completeness flags");
+        c.True(exporter.Contains("subsurfaceBlockId"),
+            "column rows include subsurface block under top");
+        c.True(!exporter.Contains("if (!section.Captured[col]) continue"),
+            "uncaptured columns are not skipped in export");
     }
 
     static void SweepResume(Check c)

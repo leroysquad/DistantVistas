@@ -1,3 +1,7 @@
+## 0.7.97
+- **Dense season samples per L0 stop (schema v2).** Each visit stop now writes a `stop` header (section bounds, chunk columns, quadrant coverage, provisional flags, snow vote) plus **4096 `column` rows** — one per cell in the 64×64 grid, including uncaptured gaps with coverage flags. Captured columns add block ids/codes/domain/path, RGB, palette flags, run geometry, subsurface block, canopy, snow stack, climate, and calendar fields.
+- **Skip / resume / crash fix unchanged (0.7.96–0.7.95).** Complete canvas within season/30-day window skips the overlay; Esc cancel/resume; `LodLoginBakeInputLock` crash fix retained.
+
 ## 0.7.96
 - **Skip sweep when canvas is already complete.** If every visited L0 region passes the miss audit and login is still the **same season** or within **30 in-game days** of the last successful sweep, the overlay is not shown — play starts immediately with persisted canvases. Sweep still runs for incomplete/missed regions, an expired season/day window, empty-canvas bootstrap, or resuming a cancelled mid-sweep checkpoint (`login-sweep-resume.json`). Successful sweeps record `ModData/distantvistas/login-sweep-complete.json` for the gate.
 - **0.7.95 crash fix retained.** `LodLoginBakeInputLock` still blocks input via `StopAllMovement()` and a guarded action list — no raw `InWorld*MouseDown` enum iteration.
