@@ -1,4 +1,3 @@
-using Cairo;
 using Vintagestory.API.Client;
 
 namespace DistantVistas;
