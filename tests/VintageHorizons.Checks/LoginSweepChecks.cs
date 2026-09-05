@@ -10,6 +10,7 @@ public static class LoginSweepChecks
         VisitedL0Only(c);
         BackdropHook(c);
         AudioMuteKeys(c);
+        TimeFreezeKey(c);
     }
 
     static void L0ChunkColumns(Check c)
@@ -47,5 +48,11 @@ public static class LoginSweepChecks
         c.Eq(6, LodLoginBakeAudioMute.VolumeKeys.Length, "all client volume sliders are muted");
         c.True(LodLoginBakeAudioMute.VolumeKeys.Contains("masterSoundLevel"), "master volume key");
         c.True(LodLoginBakeAudioMute.VolumeKeys.Contains("musicLevel"), "music volume key");
+    }
+
+    static void TimeFreezeKey(Check c)
+    {
+        c.Eq("distantvistas-loginbake", LodLoginBakeTimeFreeze.SpeedModifierKey,
+            "login sweep calendar speed modifier key");
     }
 }

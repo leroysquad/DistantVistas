@@ -34,6 +34,7 @@ public sealed class LodLoginBake
     readonly LodTerrainRenderer renderer;
     readonly LodLoginBakeOverlay overlay;
     readonly LodLoginBakeAudioMute audioMute;
+    readonly LodLoginBakeTimeFreeze timeFreeze;
     readonly Block? plantTintFallback;
     readonly System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf;
     readonly Queue<long> pending = new();
@@ -87,6 +88,7 @@ public sealed class LodLoginBake
         this.plantTintFallback = plantTintFallback;
         this.untintedOf = untintedOf;
         audioMute = new LodLoginBakeAudioMute(capi);
+        timeFreeze = new LodLoginBakeTimeFreeze(capi);
     }
 
     public void Begin()
@@ -106,6 +108,7 @@ public sealed class LodLoginBake
 
         overlay.Show();
         audioMute.EnsureMuted();
+        timeFreeze.EnsureFrozen();
         overlay.UpdateProgress(Progress, "Waiting for world to load…");
 
         if (total == 0)
@@ -343,11 +346,13 @@ public sealed class LodLoginBake
     {
         ReleasePlayerControls();
         audioMute.Restore();
+        timeFreeze.Restore();
     }
 
     void HoldPlayerControls()
     {
         audioMute.EnsureMuted();
+        timeFreeze.EnsureFrozen();
         CloseBlockingDialogs();
 
         IClientPlayer player = capi.World.Player;
