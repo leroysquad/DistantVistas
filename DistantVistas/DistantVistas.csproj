@@ -8,7 +8,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>DistantVistas</AssemblyName>
     <RootNamespace>DistantVistas</RootNamespace>
-    <Version>0.7.93</Version>
+    <Version>0.7.94</Version>
   </PropertyGroup>
 
   <!-- No debug info in Release: the zip never ships the .pdb, and generating one
@@ -48,6 +48,10 @@
     </Reference>
     <Reference Include="protobuf-net">
       <HintPath>$(GamePath)/Lib/protobuf-net.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="cairo-sharp">
+      <HintPath>$(GamePath)/Lib/cairo-sharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>

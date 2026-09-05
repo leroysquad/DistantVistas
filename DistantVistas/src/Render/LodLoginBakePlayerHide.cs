@@ -5,8 +5,8 @@ using Vintagestory.API.MathTools;
 namespace DistantVistas;
 
 /// <summary>
-/// Hides the local player during the login visit sweep: first-person view, transparent
-/// body tint, hidden FP hands, and sneak-style nametag suppression (same check vanilla
+/// Hides the local player during the login visit sweep: transparent body tint,
+/// hidden FP hands, and sneak-style nametag suppression (same check vanilla
 /// uses in <c>EntityBehaviorNameTag</c>).
 ///
 /// Multiplayer limit: these are client-side toggles. Other players may still see your
@@ -22,7 +22,6 @@ public sealed class LodLoginBakePlayerHide
     public static readonly int InvisibleRenderColor = ColorUtil.ColorFromRgba(255, 255, 255, 0);
 
     readonly ICoreClientAPI capi;
-    EnumCameraMode? savedCamera;
     int? savedRenderColor;
     bool? savedHideFpHands;
     bool? savedControlsSneak;
@@ -36,7 +35,6 @@ public sealed class LodLoginBakePlayerHide
         EntityPlayer entity = capi.World.Player.Entity;
         if (!applied)
         {
-            savedCamera = capi.Render.CameraType;
             savedRenderColor = entity.RenderColor;
             if (capi.Settings.Bool.Exists(HideFpHandsKey))
                 savedHideFpHands = capi.Settings.Bool[HideFpHandsKey];
@@ -44,9 +42,6 @@ public sealed class LodLoginBakePlayerHide
             savedServerSneak = entity.ServerControls.Sneak;
             applied = true;
         }
-
-        if (capi.Render.CameraType != EnumCameraMode.FirstPerson)
-            capi.Render.CameraType = EnumCameraMode.FirstPerson;
 
         entity.RenderColor = InvisibleRenderColor;
 
@@ -66,9 +61,6 @@ public sealed class LodLoginBakePlayerHide
         {
             EntityPlayer entity = capi.World.Player.Entity;
 
-            if (savedCamera.HasValue)
-                capi.Render.CameraType = savedCamera.Value;
-
             if (savedRenderColor.HasValue)
                 entity.RenderColor = savedRenderColor.Value;
 
@@ -83,7 +75,6 @@ public sealed class LodLoginBakePlayerHide
         }
         finally
         {
-            savedCamera = null;
             savedRenderColor = null;
             savedHideFpHands = null;
             savedControlsSneak = null;

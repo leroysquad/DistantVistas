@@ -1,3 +1,6 @@
+## 0.7.94
+- **VS 1.22.5 API compile fixes.** `IRenderAPI.CameraType` and `IInputAPI.MouseGrabbed` are read-only — player hide uses transparent tint + input guard only; `IList<Block>` for `world.Blocks`; bootstrap usings; screen renderer float/ref locals; cairo-sharp reference for Cairo title fallback.
+
 ## 0.7.93
 - **Quiet visit-sweep teleports.** Login bake moves the local player via client `EntityPos.SetPos` + `UpdatePartitioning` + `SetChunkColumnVisible` — no `/tp` chat command, no server command echo, no teleport audit spam. Pose still restores cleanly through the same quiet path on release.
 

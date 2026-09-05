@@ -26,7 +26,7 @@ public static class LodLoginBakeAudit
     public static List<Miss> FindMisses(
         LodWorld world,
         LodPipeline pipeline,
-        Block[] blocks,
+        IList<Block> blocks,
         Block? plantTintFallback,
         System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf)
     {
@@ -44,7 +44,7 @@ public static class LodLoginBakeAudit
         LodWorld world,
         LodPipeline pipeline,
         long l0Key,
-        Block[] blocks,
+        IList<Block> blocks,
         Block? plantTintFallback,
         System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf)
     {
@@ -83,14 +83,14 @@ public static class LodLoginBakeAudit
 
     static bool NeedsBake(
         LodSection section,
-        Block[] blocks,
+        IList<Block> blocks,
         Block? plantTintFallback,
         System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf)
     {
         for (int i = 0; i < section.Palette.Count; i++)
         {
             LodPaletteEntry entry = section.Palette[i];
-            if (entry.BlockId <= 0 || entry.BlockId >= blocks.Length) continue;
+            if (entry.BlockId <= 0 || entry.BlockId >= blocks.Count) continue;
             Block block = blocks[entry.BlockId];
             (int untinted, _) = untintedOf(block);
             if (!LodSeasonBake.CanBake(block, untinted, plantTintFallback)) continue;

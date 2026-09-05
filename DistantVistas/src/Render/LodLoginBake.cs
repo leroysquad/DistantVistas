@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
 
@@ -565,8 +566,6 @@ public sealed class LodLoginBake
         LockPlayerCamera(capi, player, restorePos);
         BlockPlayerInput(controls);
         playerHide.EnsureHidden();
-
-        capi.Input.MouseGrabbed = true;
     }
 
     void HoldPlayerPose(EntityPlayer entity)
@@ -611,7 +610,6 @@ public sealed class LodLoginBake
     void ReleasePlayerControls()
     {
         capi.World.Player.Entity.Controls.MovespeedMultiplier = 1f;
-        capi.Input.MouseGrabbed = false;
     }
 
     void CloseBlockingDialogs()

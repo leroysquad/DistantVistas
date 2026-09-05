@@ -59,7 +59,7 @@ public static class LodSeasonBake
         return path.StartsWith("snow", StringComparison.Ordinal);
     }
 
-    public static SnowVote ComputeSnowVote(LodSection section, Block[] blocks, long sectionKey)
+    public static SnowVote ComputeSnowVote(LodSection section, IList<Block> blocks, long sectionKey)
     {
         int eligible = 0, snowy = 0;
         int cols = LodSection.GridSize * LodSection.GridSize;
@@ -71,7 +71,7 @@ public static class LodSeasonBake
                 int pid = LodSection.RunPaletteId(run);
                 if (pid < 0 || pid >= section.Palette.Count) continue;
                 LodPaletteEntry entry = section.Palette[pid];
-                if (entry.BlockId <= 0 || entry.BlockId >= blocks.Length) continue;
+                if (entry.BlockId <= 0 || entry.BlockId >= blocks.Count) continue;
                 Block block = blocks[entry.BlockId];
                 if (!IsSnowEligibleGround(block)) continue;
                 eligible++;
@@ -280,7 +280,7 @@ public static class LodSeasonBake
             if (pid < 0 || pid >= section.Palette.Count) continue;
 
             LodPaletteEntry entry = section.Palette[pid];
-            if (entry.BlockId <= 0 || entry.BlockId >= world.Blocks.Length) continue;
+            if (entry.BlockId <= 0 || entry.BlockId >= world.Blocks.Count) continue;
 
             Block block = world.Blocks[entry.BlockId];
             (int x, int y, int z) = LodPipeline.CaptureBlockPos(sectionKey, col, topRun);
@@ -352,7 +352,7 @@ public static class LodSeasonBake
         for (int pid = 0; pid < section.Palette.Count; pid++)
         {
             LodPaletteEntry entry = section.Palette[pid];
-            if (entry.BlockId <= 0 || entry.BlockId >= world.Blocks.Length) continue;
+            if (entry.BlockId <= 0 || entry.BlockId >= world.Blocks.Count) continue;
             Block block = world.Blocks[entry.BlockId];
             if (!section.TryFindPaletteTop(sectionKey, pid, out int x, out int y, out int z)) continue;
 

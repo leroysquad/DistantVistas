@@ -55,7 +55,7 @@ public sealed class LodSeasonSampleExporter : IDisposable
         EnsureFileOpen();
 
         IClientWorldAccessor world = capi.World;
-        Block[] blocks = world.Blocks;
+        IList<Block> blocks = world.Blocks;
         LodSeasonBake.SnowVote snowVote = LodSeasonBake.ComputeSnowVote(section, blocks, sectionKey);
         int sx = LodWorld.KeySx(sectionKey);
         int sz = LodWorld.KeySz(sectionKey);
@@ -146,7 +146,7 @@ public sealed class LodSeasonSampleExporter : IDisposable
         int col,
         ulong topRun,
         LodSection section,
-        Block[] blocks,
+        IList<Block> blocks,
         IClientWorldAccessor world,
         LodSeasonBake.SnowVote snowVote,
         CalendarSnapshot cal)
@@ -155,7 +155,7 @@ public sealed class LodSeasonSampleExporter : IDisposable
         if (pid < 0 || pid >= section.Palette.Count) return;
 
         LodPaletteEntry entry = section.Palette[pid];
-        if (entry.BlockId <= 0 || entry.BlockId >= blocks.Length) return;
+        if (entry.BlockId <= 0 || entry.BlockId >= blocks.Count) return;
 
         Block surface = blocks[entry.BlockId];
         (int x, int y, int z) = LodPipeline.CaptureBlockPos(sectionKey, col, topRun);
@@ -243,12 +243,15 @@ public sealed class LodSeasonSampleExporter : IDisposable
 
     void FlushBatch()
     {
+        if (writer != null)
+            writer.Flush();
         if (batchStream.Length == 0 || fileStream == null) return;
         batchStream.TryGetBuffer(out ArraySegment<byte> buffer);
         fileStream.Write(buffer.Array!, buffer.Offset, buffer.Count);
         fileStream.Flush(true);
         batchStream.SetLength(0);
         batchStream.Position = 0;
+        writer?.Reset();
         linesSinceFlush = 0;
     }
 
@@ -290,7 +293,7 @@ public sealed class LodSeasonSampleExporter : IDisposable
         }
     }
 
-    static SnowColumn AnalyzeSnowColumn(LodSection section, Block[] blocks, int col)
+    static SnowColumn AnalyzeSnowColumn(LodSection section, IList<Block> blocks, int col)
     {
         int depth = 0;
         int topSnowId = 0;
@@ -301,7 +304,7 @@ public sealed class LodSeasonSampleExporter : IDisposable
             int pid = LodSection.RunPaletteId(run);
             if (pid < 0 || pid >= section.Palette.Count) break;
             LodPaletteEntry entry = section.Palette[pid];
-            if (entry.BlockId <= 0 || entry.BlockId >= blocks.Length) break;
+            if (entry.BlockId <= 0 || entry.BlockId >= blocks.Count) break;
             Block block = blocks[entry.BlockId];
             if (!LodSeasonBake.ColumnSurfaceIsSnowy(block)) break;
 
@@ -316,7 +319,7 @@ public sealed class LodSeasonSampleExporter : IDisposable
             if (pid >= 0 && pid < section.Palette.Count)
             {
                 int bid = section.Palette[pid].BlockId;
-                if (bid > 0 && bid < blocks.Length)
+                if (bid > 0 && bid < blocks.Count)
                     groundSnow = LodSeasonBake.ColumnSurfaceIsSnowy(blocks[bid]);
             }
         }
@@ -326,7 +329,7 @@ public sealed class LodSeasonSampleExporter : IDisposable
 
     static CanopyColumn FindCanopyColumn(
         LodSection section,
-        Block[] blocks,
+        IList<Block> blocks,
         int col,
         long sectionKey,
         ICoreClientAPI capi,
@@ -393,18 +396,7 @@ public sealed class LodSeasonSampleExporter : IDisposable
     }
 
     readonly record struct SnowColumn(bool GroundSnow, int DepthBlocks, int TopSnowBlockId);
-    readonly record struct CanopyColumn(bool Found, int BlockId, string? BlockCode, int Y, int Rgb, string Class)
-    {
-        public CanopyColumn(bool found, int blockId, string? blockCode, int y, int rgb, string cls)
-        {
-            Found = found;
-            BlockId = blockId;
-            BlockCode = blockCode;
-            Y = y;
-            Rgb = rgb;
-            Class = cls;
-        }
-    }
+    readonly record struct CanopyColumn(bool Found, int BlockId, string? BlockCode, int Y, int Rgb, string Class);
 
     readonly record struct ClimateSnapshot(float TempC, float RainMm);
 

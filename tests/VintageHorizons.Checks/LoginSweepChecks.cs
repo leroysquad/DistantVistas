@@ -1,4 +1,5 @@
 using DistantVistas;
+using Vintagestory.API.Common;
 
 namespace DistantVistas.Checks;
 
@@ -130,7 +131,7 @@ public static class LoginSweepChecks
         long failed = LodWorld.SectionKey(0, 9, 9);
         world.LoadFailed.Add(failed);
 
-        Block[] blocks = Array.Empty<Block>();
+        IList<Block> blocks = Array.Empty<Block>();
         System.Func<Block, (int Color, LodUntintedShare Share)> untinted =
             _ => (0, LodUntintedShare.None);
 
@@ -183,9 +184,9 @@ public static class LoginSweepChecks
         c.Eq("ModData/distantvistas/season-samples", LodSeasonSampleExporter.SamplesSubdir,
             "samples live under ModData/distantvistas");
         c.Eq(1, LodSeasonSampleExporter.ColumnStride, "default full column density");
-        c.Eq("white", LodSeasonSampleExporter.ClassifyLeafTint(0xFFEDEDED), "bright neutral is white");
-        c.Eq("green", LodSeasonSampleExporter.ClassifyLeafTint(0xFF3A8A2A), "strong green leaf");
-        c.Eq("mixed", LodSeasonSampleExporter.ClassifyLeafTint(0xFF8A6A30), "autumn tone is mixed");
+        c.Eq("white", LodSeasonSampleExporter.ClassifyLeafTint(unchecked((int)0xFFEDEDED)), "bright neutral is white");
+        c.Eq("green", LodSeasonSampleExporter.ClassifyLeafTint(unchecked((int)0xFF3A8A2A)), "strong green leaf");
+        c.Eq("mixed", LodSeasonSampleExporter.ClassifyLeafTint(unchecked((int)0xFF8A6A30)), "autumn tone is mixed");
 
         string bake = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));

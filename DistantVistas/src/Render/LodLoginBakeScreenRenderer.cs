@@ -21,8 +21,8 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         new("distantvistas", "textures/gui/login-title-rainbow.png");
 
     const string TitleText = "Distant Vistas";
-    const double PanelW = 520;
-    const double PanelH = 156;
+    const float PanelW = 520f;
+    const float PanelH = 156f;
     const float TitleGap = 28f;
     const float TitleMaxWidthFrac = 0.62f;
     const float TitleMaxWidthPx = 560f;
@@ -186,15 +186,19 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
 
     void RebuildText()
     {
-        capi.Gui.TextTexture.GenOrUpdateTextTexture(percentLabel, percentFont, ref percentTex);
-        capi.Gui.TextTexture.GenOrUpdateTextTexture(status, statusFont, ref statusTex);
+        LoadedTexture pct = percentTex;
+        LoadedTexture stat = statusTex;
+        capi.Gui.TextTexture.GenOrUpdateTextTexture(percentLabel, percentFont, ref pct);
+        capi.Gui.TextTexture.GenOrUpdateTextTexture(status, statusFont, ref stat);
     }
 
     void EnsureGraphicsLoaded()
     {
         if (gfxReady) return;
-        backdropMissing = !TryLoadTexture(capi, BackdropAsset, ref backdrop);
-        titleMissing = !TryLoadTexture(capi, TitleAsset, ref titleImage);
+        LoadedTexture bd = backdrop;
+        LoadedTexture ti = titleImage;
+        backdropMissing = !TryLoadTexture(capi, BackdropAsset, ref bd);
+        titleMissing = !TryLoadTexture(capi, TitleAsset, ref ti);
         if (titleMissing)
             BuildArchedGoldTitleFallback();
         gfxReady = true;
