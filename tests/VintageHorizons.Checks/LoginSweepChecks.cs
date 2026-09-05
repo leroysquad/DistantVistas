@@ -33,8 +33,11 @@ public static class LoginSweepChecks
 
     static void BackdropHook(Check c)
     {
-        c.Eq("distantvistas:textures/login-backdrop.png",
+        c.Eq("distantvistas:textures/gui/login-backdrop.png",
             LodLoginBakeScreenRenderer.BackdropAsset.ToString(),
             "login backdrop asset hook");
+        c.Eq("distantvistas:textures/gui/login-title-rainbow.png",
+            LodLoginBakeScreenRenderer.TitleAsset.ToString(),
+            "login title asset hook");
     }
 }

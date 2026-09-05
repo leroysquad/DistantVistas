@@ -10,30 +10,40 @@ namespace DistantVistas;
 /// </summary>
 public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
 {
-    /// <summary>Hook for supplied landscape backdrop (solid dark fill when missing).</summary>
+    /// <summary>Landscape backdrop stretched to the viewport (solid dark fill when missing).</summary>
     public static readonly AssetLocation BackdropAsset =
-        new("distantvistas", "textures/login-backdrop.png");
+        new("distantvistas", "textures/gui/login-backdrop.png");
+
+    /// <summary>Arched single-color "Distant Vistas" title above the loading panel.</summary>
+    public static readonly AssetLocation TitleAsset =
+        new("distantvistas", "textures/gui/login-title-rainbow.png");
 
     const double PanelW = 520;
-    const double PanelH = 200;
+    const double PanelH = 156;
+    const float TitleGap = 28f;
+    const float TitleMaxWidthFrac = 0.62f;
+    const float TitleMaxWidthPx = 560f;
     static readonly float[] DarkFill = { 0.06f, 0.08f, 0.11f, 1f };
     static readonly float[] BarTrack = { 0.12f, 0.14f, 0.18f, 1f };
     static readonly float[] BarFill = { 0.28f, 0.55f, 0.82f, 1f };
     static readonly float[] PanelFill = { 0.10f, 0.12f, 0.16f, 0.92f };
+    static readonly double[] TitleFallbackColor = { 0.95, 0.86, 0.62, 1.0 };
 
     readonly ICoreClientAPI capi;
-    LoadedTexture backdrop;
-    LoadedTexture titleTex;
-    LoadedTexture percentTex;
-    LoadedTexture statusTex;
+    readonly LoadedTexture backdrop;
+    readonly LoadedTexture titleImage;
+    readonly LoadedTexture titleFallbackTex;
+    readonly LoadedTexture percentTex;
+    readonly LoadedTexture statusTex;
     readonly Vec4f tint = new();
-    readonly CairoFont titleFont;
+    readonly CairoFont titleFallbackFont;
     readonly CairoFont percentFont;
     readonly CairoFont statusFont;
 
     bool active;
-    bool backdropReady;
+    bool gfxReady;
     bool backdropMissing;
+    bool titleMissing;
     float fraction;
     string status = "";
     string percentLabel = "0%";
@@ -43,13 +53,15 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     {
         this.capi = capi;
         backdrop = new LoadedTexture(capi);
-        titleTex = new LoadedTexture(capi);
+        titleImage = new LoadedTexture(capi);
+        titleFallbackTex = new LoadedTexture(capi);
         percentTex = new LoadedTexture(capi);
         statusTex = new LoadedTexture(capi);
-        titleFont = CairoFont.WhiteDetailText().WithFontSize(22);
+        titleFallbackFont = CairoFont.WhiteDetailText()
+            .WithFontSize(28)
+            .WithColor(TitleFallbackColor);
         percentFont = CairoFont.WhiteDetailText().WithFontSize(18);
         statusFont = CairoFont.WhiteSmallText();
-        TryLoadBackdrop();
     }
 
     public bool Active
@@ -59,7 +71,11 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         {
             if (active == value) return;
             active = value;
-            if (value) TryLoadBackdrop();
+            if (value)
+            {
+                gfxReady = false;
+                EnsureGraphicsLoaded();
+            }
         }
     }
 
@@ -78,44 +94,74 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     {
         if (!active) return;
 
+        EnsureGraphicsLoaded();
+
         IRenderAPI rapi = capi.Render;
         float w = rapi.FrameWidth;
         float h = rapi.FrameHeight;
         if (w <= 0 || h <= 0) return;
 
-        if (backdropReady && !backdropMissing)
+        DrawBackdrop(w, h);
+
+        float titleW = 0;
+        float titleH = 0;
+        if (!titleMissing && titleImage.TextureId > 0 && titleImage.Width > 0)
         {
-            rapi.Render2DTexture(backdrop.TextureId, 0, 0, w, h, 200);
-            tint.Set(0.04f, 0.05f, 0.08f, 0.55f);
-            DrawSolid(0, 0, w, h, 199, tint);
+            titleW = Math.Min(w * TitleMaxWidthFrac, TitleMaxWidthPx);
+            titleH = titleW * titleImage.Height / titleImage.Width;
         }
-        else
+        else if (titleFallbackTex.TextureId > 0 && titleFallbackTex.Width > 0)
         {
-            tint.Set(DarkFill[0], DarkFill[1], DarkFill[2], DarkFill[3]);
-            DrawSolid(0, 0, w, h, 200, tint);
+            titleW = titleFallbackTex.Width;
+            titleH = titleFallbackTex.Height;
         }
 
-        float panelX = (w - PanelW) / 2f;
-        float panelY = (h - PanelH) / 2f;
+        float blockH = titleH > 0 ? titleH + TitleGap + PanelH : PanelH;
+        float blockTop = (h - blockH) * 0.5f;
+        float panelX = (w - PanelW) * 0.5f;
+        float panelY = blockTop + titleH + (titleH > 0 ? TitleGap : 0);
+
+        if (titleH > 0)
+        {
+            float titleX = (w - titleW) * 0.5f;
+            if (!titleMissing && titleImage.TextureId > 0)
+                rapi.Render2DTexture(titleImage.TextureId, titleX, blockTop, titleW, titleH, 204);
+            else
+                DrawText(titleFallbackTex, titleX, blockTop, 204);
+        }
+
         tint.Set(PanelFill[0], PanelFill[1], PanelFill[2], PanelFill[3]);
-        DrawSolid(panelX, panelY, PanelW, PanelH, 201, tint);
+        DrawSolid(panelX, panelY, PanelW, PanelH, 205, tint);
 
         float pad = 20f;
-        float barY = panelY + 88f;
+        float barY = panelY + 52f;
         float barW = PanelW - pad * 2f;
         float barH = 18f;
         tint.Set(BarTrack[0], BarTrack[1], BarTrack[2], BarTrack[3]);
-        DrawSolid(panelX + pad, barY, barW, barH, 202, tint);
+        DrawSolid(panelX + pad, barY, barW, barH, 206, tint);
         if (fraction > 0)
         {
             tint.Set(BarFill[0], BarFill[1], BarFill[2], BarFill[3]);
-            DrawSolid(panelX + pad, barY, barW * fraction, barH, 203, tint);
+            DrawSolid(panelX + pad, barY, barW * fraction, barH, 207, tint);
         }
 
         float textX = panelX + pad;
-        DrawText(titleTex, textX, panelY + 8f, 204);
-        DrawText(percentTex, panelX + PanelW - pad - percentTex.Width, panelY + 10f, 204);
-        DrawText(statusTex, textX, panelY + 118f, 205);
+        DrawText(percentTex, panelX + PanelW - pad - percentTex.Width, panelY + 14f, 208);
+        DrawText(statusTex, textX, panelY + 84f, 209);
+    }
+
+    void DrawBackdrop(float w, float h)
+    {
+        if (!backdropMissing && backdrop.TextureId > 0)
+        {
+            capi.Render.Render2DTexture(backdrop.TextureId, 0, 0, w, h, 200);
+            tint.Set(0.04f, 0.05f, 0.08f, 0.45f);
+            DrawSolid(0, 0, w, h, 199, tint);
+            return;
+        }
+
+        tint.Set(DarkFill[0], DarkFill[1], DarkFill[2], DarkFill[3]);
+        DrawSolid(0, 0, w, h, 200, tint);
     }
 
     void DrawSolid(float x, float y, float width, float height, float z, Vec4f color)
@@ -134,48 +180,51 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     int WhiteSubId()
     {
         if (whiteSubId >= 0) return whiteSubId;
-        // Vanilla routes missing block-colour textures to unknown.png at atlas subid 0.
         whiteSubId = 0;
         return whiteSubId;
     }
 
     void RebuildText()
     {
-        capi.Gui.TextTexture.GenOrUpdateTextTexture("Distant Vistas", titleFont, ref titleTex);
         capi.Gui.TextTexture.GenOrUpdateTextTexture(percentLabel, percentFont, ref percentTex);
         capi.Gui.TextTexture.GenOrUpdateTextTexture(status, statusFont, ref statusTex);
+        if (titleMissing)
+            capi.Gui.TextTexture.GenOrUpdateTextTexture("Distant Vistas", titleFallbackFont, ref titleFallbackTex);
     }
 
-    void TryLoadBackdrop()
+    void EnsureGraphicsLoaded()
     {
-        if (backdropReady) return;
+        if (gfxReady) return;
+        backdropMissing = !TryLoadTexture(capi, BackdropAsset, ref backdrop);
+        titleMissing = !TryLoadTexture(capi, TitleAsset, ref titleImage);
+        if (titleMissing)
+            capi.Gui.TextTexture.GenOrUpdateTextTexture("Distant Vistas", titleFallbackFont, ref titleFallbackTex);
+        gfxReady = true;
+        RebuildText();
+    }
 
-        IAsset? asset = capi.Assets.TryGet(BackdropAsset);
-        if (asset?.Data == null || asset.Data.Length == 0)
-        {
-            backdropMissing = true;
-            backdropReady = true;
-            return;
-        }
+    static bool TryLoadTexture(ICoreClientAPI capi, AssetLocation path, ref LoadedTexture into)
+    {
+        IAsset? asset = capi.Assets.TryGet(path);
+        if (asset?.Data == null || asset.Data.Length == 0) return false;
 
         try
         {
             using BitmapExternal bmp = capi.Render.BitmapCreateFromPng(asset.Data);
-            capi.Render.LoadTexture(bmp, ref backdrop);
-            backdropMissing = backdrop.TextureId <= 0;
+            capi.Render.LoadTexture(bmp, ref into);
+            return into.TextureId > 0;
         }
         catch
         {
-            backdropMissing = true;
+            return false;
         }
-
-        backdropReady = true;
     }
 
     public void Dispose()
     {
         backdrop.Dispose();
-        titleTex.Dispose();
+        titleImage.Dispose();
+        titleFallbackTex.Dispose();
         percentTex.Dispose();
         statusTex.Dispose();
         capi.Event.UnregisterRenderer(this, EnumRenderStage.Ortho);

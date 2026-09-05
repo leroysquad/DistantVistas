@@ -1,5 +1,5 @@
 ## 0.7.82
-- **Login sweep overlay + input lock (critical fix).** Full-screen cover now paints every frame via an `IRenderer` at `EnumRenderStage.Ortho` (cannot be skipped like a small `GuiDialog`). Landscape backdrop hook at `assets/distantvistas/textures/login-backdrop.png` with solid dark fallback. Distant Vistas title, progress %, status bar and detail text on top.
+- **Login sweep overlay + input lock (critical fix).** Full-screen cover now paints every frame via an `IRenderer` at `EnumRenderStage.Ortho` (cannot be skipped like a small `GuiDialog`). Landscape backdrop at `assets/distantvistas/textures/gui/login-backdrop.png` (stretched to viewport, solid dark fallback). Arched single-color title image at `assets/distantvistas/textures/gui/login-title-rainbow.png` above the loading panel; warm gold/cream text fallback if missing. Progress %, status bar and detail text on the panel below.
 - **Input lock during bake.** Movement, look, jump, fly, sneak, sprint and mouse buttons cleared every tick; mouse grabbed; join camera pose held; sweep stops pin the player at each visit position so they cannot free-fly between teleports. Input-blocking dialog captures keyboard/chat/inventory shortcuts.
 
 ## 0.7.81
