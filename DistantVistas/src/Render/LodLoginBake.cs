@@ -39,6 +39,7 @@ public sealed class LodLoginBake
     readonly LodLoginBakeGameMode gameMode;
     readonly LodLoginBakeHudHide hudHide;
     readonly LodLoginBakePlayerHide playerHide;
+    readonly LodSeasonSampleExporter seasonSamples;
     readonly LodLoginSweepTiming sweepTiming = new();
     readonly Block? plantTintFallback;
     readonly System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf;
@@ -105,6 +106,7 @@ public sealed class LodLoginBake
         gameMode = new LodLoginBakeGameMode(capi);
         hudHide = new LodLoginBakeHudHide(capi);
         playerHide = new LodLoginBakePlayerHide(capi);
+        seasonSamples = new LodSeasonSampleExporter(capi);
     }
 
     public void Begin()
@@ -140,6 +142,7 @@ public sealed class LodLoginBake
         capi.Logger.Notification(
             "[DistantVistas] Login visit sweep: {0} — {1} L0 region{2}.",
             sweepModeLabel, total, total == 1 ? "" : "s");
+        seasonSamples.BeginSession(sweepMode, sweepModeLabel, total);
         overlay.UpdateProgress(Progress, StatusWithEta($"{sweepModeLabel} — waiting for world to load…"));
 
         if (total == 0)
@@ -382,6 +385,8 @@ public sealed class LodLoginBake
         LodSeasonBake.BakeSectionFromVisit(
             capi, section, l0Key, plantTintFallback, untintedOf);
 
+        seasonSamples.RecordSection(l0Key, section);
+
         world.MarkChanged(l0Key);
         pipeline.InvalidateGpuMesh?.Invoke(l0Key);
         world.RenderDirty.Add(l0Key);
@@ -522,6 +527,15 @@ public sealed class LodLoginBake
         try
         {
             playerHide.Restore();
+        }
+        catch
+        {
+            // Best-effort.
+        }
+
+        try
+        {
+            seasonSamples.Dispose();
         }
         catch
         {

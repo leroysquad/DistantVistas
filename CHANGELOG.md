@@ -1,3 +1,6 @@
+## 0.7.92
+- **Season research samples (JSONL).** Login visit sweep appends batched per-column records under `ModData/distantvistas/season-samples/` (`YYYY-MM-DD_HHmm_<season>.jsonl`) for four-season world research: world XYZ, section key, calendar/season token, climate temp/rain when cheap, ground snow depth, canopy leaf id + white/green/mixed class + RGB, grass/soil RGB as captured. Flushes each L0 stop and every 96 lines; `README.md` documents the schema. `ColumnStride` (default 1) tunable for subsampling.
+
 ## 0.7.91
 - **Empty-canvas bootstrap (new world).** When no visited L0 keys exist, login sweep no longer uses a tiny timing-budget ring. It probes rain height near spawn: large ocean triggers **Bootstrap (coast guard)** — every ocean L0 cell in the bootstrap disk plus all land coastline neighbours; otherwise **Bootstrap (new world)** sweeps a ~6000-block-radius disk (`EmptyCanvasBootstrapRadiusBlocks`, tunable). Existing visited canvases still use **Revisiting visited land** (full visited L0 set, can exceed 6k). Progress UI and log lines name the active mode.
 

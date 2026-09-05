@@ -15,6 +15,7 @@ public static class LoginSweepChecks
         TeardownHook(c);
         AuditMisses(c);
         OverlayGuard(c);
+        SeasonSampleExport(c);
         SweepTiming(c);
         CreativeMode(c);
         HudHide(c);
@@ -155,6 +156,30 @@ public static class LoginSweepChecks
             "input guard retries open when viewport is ready");
         c.True(guard.Contains("SafeBounds"),
             "input guard uses render/window bounds fallback");
+    }
+
+    static void SeasonSampleExport(Check c)
+    {
+        c.Eq("ModData/distantvistas/season-samples", LodSeasonSampleExporter.SamplesSubdir,
+            "samples live under ModData/distantvistas");
+        c.Eq(1, LodSeasonSampleExporter.ColumnStride, "default full column density");
+        c.Eq("white", LodSeasonSampleExporter.ClassifyLeafTint(0xFFEDEDED), "bright neutral is white");
+        c.Eq("green", LodSeasonSampleExporter.ClassifyLeafTint(0xFF3A8A2A), "strong green leaf");
+        c.Eq("mixed", LodSeasonSampleExporter.ClassifyLeafTint(0xFF8A6A30), "autumn tone is mixed");
+
+        string bake = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
+        c.True(bake.Contains("seasonSamples.RecordSection"),
+            "login bake streams season samples after visit bake");
+        c.True(bake.Contains("seasonSamples.BeginSession"),
+            "login bake opens a sample session with sweep mode");
+
+        string exporter = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSeasonSampleExporter.cs"));
+        c.True(exporter.Contains("FlushBatch"),
+            "sample exporter batches disk writes");
+        c.True(exporter.Contains("README.md"),
+            "schema readme is written beside samples");
     }
 
     static void SweepTiming(Check c)
