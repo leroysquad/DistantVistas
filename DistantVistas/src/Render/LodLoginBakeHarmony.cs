@@ -35,12 +35,13 @@ public static class LodLoginBakeHarmony
     [HarmonyPatch(typeof(GuiScreenRunningGame), "handOverRenderingToRunningGame")]
     sealed class DeferHandoverToRunningGame
     {
-        static bool Prefix()
-        {
-            if (IsLoginSweepEnabled?.Invoke() != true) return true;
-            LodLoginBakeSweepGate.MarkHandoverDeferred();
-            return false;
-        }
+    static bool Prefix()
+    {
+        if (LodLoginBakeSweepGate.AllowHandoverPassThrough) return true;
+        if (IsLoginSweepEnabled?.Invoke() != true) return true;
+        LodLoginBakeSweepGate.MarkHandoverDeferred();
+        return false;
+    }
     }
 
     [HarmonyPatch(typeof(GuiScreenRunningGame), "RenderToPrimary")]

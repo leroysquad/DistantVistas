@@ -311,7 +311,7 @@ public sealed class LodLoginBake
         capi.Logger.Error("[DistantVistas] Login visit sweep aborted: {0}", reason);
         UpdateProgress(1f, "Entering play (sweep aborted)…", force: true);
         renderer.LoginBakeComplete = true;
-        Teardown(success: false);
+        Teardown(success: false, handoverReason: "abort");
     }
 
     /// <summary>Never abort into play solely because the loading cover failed to paint.</summary>
@@ -704,7 +704,7 @@ public sealed class LodLoginBake
     /// <summary>
     /// Single idempotent release for success, abort, cancel, and world leave.
     /// </summary>
-    void ReleaseResources(bool success, bool keepResume = false)
+    void ReleaseResources(bool success, bool keepResume = false, string? handoverReason = null)
     {
         if (released) return;
 
@@ -739,7 +739,8 @@ public sealed class LodLoginBake
         statusWriter.WriteNow(Phase.Done, sweepModeLabel, total, finished, force: true);
         statusWriter.Clear();
 
-        LodLoginBakeSweepGate.CompleteHandoverAndRelease(capi);
+        string resolvedReason = handoverReason ?? (success ? "success" : keepResume ? "pause" : "cancel");
+        LodLoginBakeSweepGate.CompleteHandoverAndRelease(capi, resolvedReason);
 
         if (success || !keepResume)
             LodLoginSweepResume.Delete(capi);
@@ -748,8 +749,8 @@ public sealed class LodLoginBake
     /// <summary>
     /// Single idempotent teardown for abort, error, cancel, and world leave.
     /// </summary>
-    void Teardown(bool success, bool keepResume = false) =>
-        ReleaseResources(success, keepResume);
+    void Teardown(bool success, bool keepResume = false, string? handoverReason = null) =>
+        ReleaseResources(success, keepResume, handoverReason);
 
     void HoldPlayerControls()
     {

@@ -1059,7 +1059,7 @@ public class DistantVistasModSystem : ModSystem
         {
             renderer.LoginBakeComplete = true;
             LodLoginSweepComplete.RecordSuccess(capi, pipeline.World);
-            LodLoginBakeSweepGate.CompleteHandover(capi);
+            LodLoginBakeSweepGate.ClearHandoverDeferral(capi, "skip", force: true);
             Mod.Logger.Notification(
                 "[DistantVistas] Login visit sweep skipped — {0}. Entering play ({1} sections in cache).",
                 sweepGate.Reason, pipeline.CachedSectionsLoaded);
@@ -1111,7 +1111,7 @@ public class DistantVistasModSystem : ModSystem
         if (!LoginVisitSweepEnabled())
         {
             renderer.LoginBakeComplete = true;
-            LodLoginBakeSweepGate.CompleteHandover(capi);
+            LodLoginBakeSweepGate.ClearHandoverDeferral(capi, "disabled");
             Mod.Logger.Notification(
                 "[DistantVistas] Login visit sweep disabled in config — entering play without overlay.");
         }
@@ -1332,7 +1332,10 @@ public class DistantVistasModSystem : ModSystem
         loginBake?.Dispose();
         loginBake = null;
         loginBakePulse?.Bind(null, PumpLoginBakeWhileSweeping);
-        LodLoginBakeSweepGate.Release();
+        if (LodLoginBakeSweepGate.HandoverDeferred)
+            LodLoginBakeSweepGate.ClearHandoverDeferral(capi, "leave", force: true);
+        else
+            LodLoginBakeSweepGate.Release();
         renderer.LoginBakeComplete = false;
         renderer.LoginBakeOverlayActive = false;
         assist?.Reset();

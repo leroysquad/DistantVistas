@@ -92,13 +92,19 @@ public static class LoginSweepChecks
         c.True(gate.Contains("SuppressRunningGameRender"),
             "sweep gate suppresses running-game world render");
 
-        c.True(gate.Contains("HandoverDeferred"),
-            "sweep gate tracks deferred running-game handover");
-        c.True(gate.Contains("CompleteHandover"),
-            "sweep gate completes deferred handover on release");
+        c.True(gate.Contains("AllowHandoverPassThrough"),
+            "sweep gate bypasses harmony while completing handover");
+        c.True(gate.Contains("ClearHandoverDeferral"),
+            "sweep gate clears deferral on every exit path");
+        c.True(gate.Contains("handover deferral cleared"),
+            "sweep gate logs handover clear reason");
+        c.True(gate.Contains("LoadScreenNoLoadCall"),
+            "sweep gate switches ScreenManager to running game");
 
         string harmony = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeHarmony.cs"));
+        c.True(harmony.Contains("AllowHandoverPassThrough"),
+            "harmony allows pass-through during completion invoke");
         c.True(harmony.Contains("handOverRenderingToRunningGame"),
             "harmony defers running-game handover during sweep");
         c.True(harmony.Contains("RenderToPrimary"),
@@ -131,8 +137,8 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
         c.True(bake.Contains("ReleaseResources"),
             "login bake uses unified ReleaseResources teardown");
-        c.True(bake.Contains("CompleteHandoverAndRelease"),
-            "login bake completes deferred handover on release");
+        c.True(bake.Contains("CompleteHandoverAndRelease(capi, resolvedReason)"),
+            "login bake completes deferred handover with reason");
         c.True(bake.Contains("LodLoginBakeProgressUi"),
             "login bake throttles loading-text updates");
         c.True(bake.Contains("if (released) return"),
@@ -403,6 +409,8 @@ public static class LoginSweepChecks
             "level finalize consults sweep gate before overlay");
         c.True(mod.Contains("Login visit sweep skipped"),
             "skipped sweep logs and drops into play");
+        c.True(mod.Contains("ClearHandoverDeferral(capi, \"skip\""),
+            "skipped sweep clears handover deferral before play");
         c.True(mod.Contains("LoginVisitSweepEnabled"),
             "sweep gated by config flag");
         c.True(new DistantVistasConfig().LoginVisitSweepEnabled,

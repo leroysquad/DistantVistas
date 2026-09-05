@@ -1,3 +1,6 @@
+## 0.8.11
+- **CRITICAL: stuck Loading… after sweep skip (0.8.10).** Harmony blocked `handOverRenderingToRunningGame` whenever sweep was enabled in config — including when `CompleteHandover` re-invoked it on the skip path. The client logged success but never left `GuiScreenLoadingGame`. Fix: `AllowHandoverPassThrough` bypass during completion; `ClearHandoverDeferral` runs vanilla handover **and** `LoadScreenNoLoadCall(running)` on every exit (skip, success, cancel, abort, leave). Loud log: `handover deferral cleared — reason=skip|success|cancel|abort|…`.
+
 ## 0.8.10
 - **Defer running-game handover during login sweep (0.8.8/0.8.9 follow-up).** Harmony blocks `GuiScreenRunningGame.handOverRenderingToRunningGame` while the visit sweep is enabled, so the client stays on the vanilla `GuiScreenLoadingGame` instead of racing to re-open a discarded loader when `CachedScreens` is empty. Handover completes on sweep finish, skip, cancel, or abort via `CompleteHandover`.
 - **Unified release teardown.** Success, cancel, abort, and world-leave share one `ReleaseResources` path: overlay hide, controls, HUD, audio, gamemode, deferred handover, and `LoginBakeComplete` so Esc abort no longer leaves you without a menu.
