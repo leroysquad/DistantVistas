@@ -36,22 +36,77 @@ public sealed class LodLoginBakeTimeFreeze
         AnchorTotalHours(cal);
     }
 
+    /// <summary>
+    /// Unfreezes time: removes our speed modifier, restores saved calendar speed,
+    /// clears the TotalHours anchor, and logs. Each step is independent so a partial
+    /// teardown failure cannot leave the world frozen.
+    /// </summary>
     public void Restore()
     {
         if (!frozen) return;
 
+        float? speedMul = savedCalendarSpeedMul;
+
         try
         {
-            IGameCalendar cal = capi.World.Calendar;
-            cal.RemoveTimeSpeedModifier(SpeedModifierKey);
-            if (savedCalendarSpeedMul.HasValue)
-                cal.CalendarSpeedMul = savedCalendarSpeedMul.Value;
+            IGameCalendar? cal = TryGetCalendar();
+            if (cal != null)
+            {
+                TryRemoveSpeedModifier(cal);
+                TryRestoreCalendarSpeedMul(cal, speedMul);
+            }
         }
         finally
         {
             savedCalendarSpeedMul = null;
             anchoredTotalHours = null;
             frozen = false;
+            capi.Logger.Notification("[DistantVistas] Login visit sweep: time restored.");
+        }
+    }
+
+    IGameCalendar? TryGetCalendar()
+    {
+        try
+        {
+            return capi.World?.Calendar;
+        }
+        catch (Exception ex)
+        {
+            capi.Logger.Warning(
+                "[DistantVistas] Login visit sweep: calendar unavailable during time restore ({0}).",
+                ex.Message);
+            return null;
+        }
+    }
+
+    void TryRemoveSpeedModifier(IGameCalendar cal)
+    {
+        try
+        {
+            cal.RemoveTimeSpeedModifier(SpeedModifierKey);
+        }
+        catch (Exception ex)
+        {
+            capi.Logger.Warning(
+                "[DistantVistas] Login visit sweep: SpeedOfTime modifier remove failed ({0}).",
+                ex.Message);
+        }
+    }
+
+    void TryRestoreCalendarSpeedMul(IGameCalendar cal, float? speedMul)
+    {
+        if (!speedMul.HasValue) return;
+
+        try
+        {
+            cal.CalendarSpeedMul = speedMul.Value;
+        }
+        catch (Exception ex)
+        {
+            capi.Logger.Warning(
+                "[DistantVistas] Login visit sweep: CalendarSpeedMul restore failed ({0}).",
+                ex.Message);
         }
     }
 

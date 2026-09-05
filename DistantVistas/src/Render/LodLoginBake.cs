@@ -749,17 +749,25 @@ public sealed class LodLoginBake
         if (keepResume && !success)
             SaveResumeSnapshot();
 
-        try { worldHide.Restore(); } catch { }
-        try { overlay.Hide(); } catch { }
-        try { RestorePlayerPose(); } catch { }
-        try { ReleasePlayerControls(); } catch { }
-        try { audioMute.Restore(); } catch { }
-        try { timeFreeze.Restore(); } catch { }
-        try { gameMode.Restore(); } catch { }
-        try { hudHide.Restore(); } catch { }
-        try { playerHide.Restore(); } catch { }
-        try { viewBoost.Restore(); } catch { }
-        try { seasonSamples.Dispose(); } catch { }
+        try
+        {
+            try { worldHide.Restore(); } catch { }
+            try { overlay.Hide(); } catch { }
+            try { RestorePlayerPose(); } catch { }
+            try { ReleasePlayerControls(); } catch { }
+            try { audioMute.Restore(); } catch { }
+            try { gameMode.Restore(); } catch { }
+            try { hudHide.Restore(); } catch { }
+            try { playerHide.Restore(); } catch { }
+            try { viewBoost.Restore(); } catch { }
+            try { seasonSamples.Dispose(); } catch { }
+        }
+        finally
+        {
+            // Always unfreeze time on success, Esc, cancel, abort, or world leave —
+            // even when other teardown steps throw unexpectedly.
+            try { timeFreeze.Restore(); } catch { }
+        }
 
         statusWriter.TouchAdvance(
             success ? "release-success" : keepResume ? "release-paused" : "release-cancel");

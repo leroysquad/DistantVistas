@@ -1,5 +1,5 @@
 ## 0.8.21
-- **Login sweep time freeze hardened (0.8.20 playtest).** World time kept advancing during the visit sweep. `LodLoginBakeTimeFreeze` now anchors `TotalHours` on arm, forces `CalendarSpeedMul = 0`, and cancels net `SpeedOfTime` every tick; full calendar-speed restore on release.
+- **Login sweep time freeze hardened (0.8.20 playtest).** World time kept advancing during the visit sweep. `LodLoginBakeTimeFreeze` now anchors `TotalHours` on arm, forces `CalendarSpeedMul = 0`, and cancels net `SpeedOfTime` every tick. `Restore` removes the DV modifier, restores `CalendarSpeedMul`, clears the anchor, and logs `time restored` — each step independent so partial teardown cannot leave time frozen. `ReleaseResources` calls restore in a `finally` block on success, Esc, cancel, abort, and world leave.
 - **Login sweep HUD restore hardened (0.8.20 playtest).** F4/HUD could stay hidden after sweep. `LodLoginBakeHudHide` sets `hideGuis` on `ClientMain` directly when possible (`.gui` chat toggle only as fallback) and restores the exact pre-sweep visibility on teardown.
 - **0.8.20 retained:** splash painted from `OnNewFrame` every sweep frame, 3–5 min revisit budget, view-distance boost, miss-resweep cap, and deadlock fixes.
 

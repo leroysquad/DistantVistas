@@ -157,6 +157,15 @@ public static class LoginSweepChecks
             "time freeze zeroes calendar speed multiplier");
         c.True(timeFreeze.Contains("RemoveTimeSpeedModifier(SpeedModifierKey)"),
             "time freeze cancels SpeedOfTime modifier each tick");
+        c.True(timeFreeze.Contains("time restored"),
+            "time freeze logs when time is restored");
+        c.True(timeFreeze.Contains("TryRemoveSpeedModifier"),
+            "time restore removes modifier independently");
+
+        string bake = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
+        c.True(bake.Contains("finally") && bake.Contains("timeFreeze.Restore()"),
+            "login bake always restores time in ReleaseResources finally");
     }
 
     static void TeardownHook(Check c)
