@@ -166,6 +166,15 @@ public static class LoginSweepChecks
         c.True(bake.Contains("hudHide.EnsureHidden()"),
             "login bake hides HUD during sweep");
         c.True(bake.Contains("playerHide.EnsureHidden()"),
-            "login bake hides local player view during sweep");
+            "login bake hides local player during sweep");
+
+        string playerHide = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakePlayerHide.cs"));
+        c.True(playerHide.Contains("ServerControls.Sneak"),
+            "player hide suppresses nametag like crouch");
+        c.True(playerHide.Contains("InvisibleRenderColor"),
+            "player hide tints entity render alpha to zero");
+        c.True(playerHide.Contains(LodLoginBakePlayerHide.HideFpHandsKey),
+            "player hide saves and restores hideFpHands");
     }
 }

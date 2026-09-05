@@ -131,7 +131,6 @@ public sealed class LodLoginBake
         timeFreeze.EnsureFrozen();
         gameMode.EnsureCreative();
         hudHide.EnsureHidden();
-        playerHide.EnsureHidden();
         overlay.UpdateProgress(Progress, StatusWithEta("Waiting for world to load…"));
 
         if (total == 0)
@@ -526,7 +525,6 @@ public sealed class LodLoginBake
         timeFreeze.EnsureFrozen();
         gameMode.EnsureCreative();
         hudHide.EnsureHidden();
-        playerHide.EnsureHidden();
         overlay.EnsureInputBlocked();
         CloseBlockingDialogs();
 
@@ -543,6 +541,7 @@ public sealed class LodLoginBake
         HoldPlayerPose(entity);
         LockPlayerCamera(capi, player, restorePos);
         BlockPlayerInput(controls);
+        playerHide.EnsureHidden();
 
         capi.Input.MouseGrabbed = true;
     }

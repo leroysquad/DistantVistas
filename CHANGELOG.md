@@ -1,8 +1,11 @@
+## 0.7.87
+- **Login sweep player hide (MP-aware).** During the visit sweep the local player entity is tinted fully transparent, first-person hands are hidden, and sneak is forced so vanilla suppresses the nameplate the same way crouching does. All state restores on teardown. Client-side only: other players on a dedicated server may still see a teleporting body because position is server-authoritative.
+
 ## 0.7.86
 - **Login sweep overlay crash fix (critical).** `ComposeDialog()` no longer runs from `LevelFinalize` on fragile `WindowBounds`; visuals stay on the ortho render pass and a deferred `HudElement` input guard retries compose/open once the viewport is valid. Screen cover paints even if dialog open fails.
 - **Creative during sweep.** Player switches to creative for fly teleports; prior gamemode (survival, etc.) restores on teardown/abort.
 - **HUD hidden during sweep.** F4 / `.gui` hide-HUD path toggled for the sweep and restored exactly on release.
-- **Player hidden during sweep.** First-person camera forced so the local model stays out of view while teleports run.
+- **Player hidden during sweep (initial).** First-person camera forced so the local model stays out of view while teleports run.
 - **Bootstrap timing + ETA.** Empty-cache bootstrap sizes a coast-biased L0 ring to ~1.5–2.5 min from measured capture rate; progress UI shows time remaining. Large existing visited canvases keep full sweep with honest ETA.
 
 ## 0.7.85
