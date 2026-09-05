@@ -15,6 +15,7 @@ public static class LoginSweepChecks
         TeardownHook(c);
         AuditMisses(c);
         OverlayGuard(c);
+        QuietTeleports(c);
         SeasonSampleExport(c);
         SweepTiming(c);
         CreativeMode(c);
@@ -156,6 +157,25 @@ public static class LoginSweepChecks
             "input guard retries open when viewport is ready");
         c.True(guard.Contains("SafeBounds"),
             "input guard uses render/window bounds fallback");
+    }
+
+    static void QuietTeleports(Check c)
+    {
+        string bake = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
+        c.True(!bake.Contains("SendChatMessage"),
+            "login bake never sends chat commands during sweep");
+        c.True(!bake.Contains("/tp"),
+            "login bake does not use /tp");
+        c.True(bake.Contains("LodLoginBakePlayerMove.ApplyQuiet"),
+            "login bake uses quiet client entity moves");
+        c.True(bake.Contains("LodLoginBakePlayerMove.ApplyQuietFrom"),
+            "login bake restores pose with quiet client moves");
+
+        string move = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakePlayerMove.cs"));
+        c.True(move.Contains("SetChunkColumnVisible"),
+            "quiet moves request client chunk columns without server tp");
     }
 
     static void SeasonSampleExport(Check c)

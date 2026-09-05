@@ -1,5 +1,4 @@
 using System.Diagnostics;
-using System.Globalization;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Config;
@@ -575,14 +574,13 @@ public sealed class LodLoginBake
         if (phase == Phase.Sweeping && currentKey != null)
         {
             (double x, double y, double z) = LodLoginSweep.VisitPosition(capi.World, currentKey.Value);
-            entity.Pos.SetPos(x, y, z);
+            LodLoginBakePlayerMove.HoldQuiet(entity, x, y, z);
         }
         else
         {
             entity.Pos.SetFrom(restorePos);
+            entity.Pos.Motion.Set(0, 0, 0);
         }
-
-        entity.Pos.Motion.Set(0, 0, 0);
     }
 
     static void LockPlayerCamera(ICoreClientAPI capi, IClientPlayer player, EntityPos pose)
@@ -630,19 +628,11 @@ public sealed class LodLoginBake
     void RestorePlayerPose()
     {
         if (!restoreCaptured) return;
-        var entity = capi.World.Player.Entity;
-        entity.Pos.SetFrom(restorePos);
-        entity.Pos.Motion.Set(0, 0, 0);
+        LodLoginBakePlayerMove.ApplyQuietFrom(capi, capi.World.Player.Entity, restorePos);
     }
 
-    void TeleportPlayer(double x, double y, double z)
-    {
-        var entity = capi.World.Player.Entity;
-        entity.Pos.SetPos(x, y, z);
-        entity.Pos.Motion.Set(0, 0, 0);
-        capi.SendChatMessage(string.Format(CultureInfo.InvariantCulture,
-            "/tp ={0:0} ={1:0} ={2:0}", x, y, z));
-    }
+    void TeleportPlayer(double x, double y, double z) =>
+        LodLoginBakePlayerMove.ApplyQuiet(capi, capi.World.Player.Entity, x, y, z);
 
     static string Pct(int done, int total) =>
         total <= 0 ? "0%" : $"{done * 100 / total}%";

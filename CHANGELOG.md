@@ -1,3 +1,6 @@
+## 0.7.93
+- **Quiet visit-sweep teleports.** Login bake moves the local player via client `EntityPos.SetPos` + `UpdatePartitioning` + `SetChunkColumnVisible` — no `/tp` chat command, no server command echo, no teleport audit spam. Pose still restores cleanly through the same quiet path on release.
+
 ## 0.7.92
 - **Season research samples (JSONL).** Login visit sweep appends batched per-column records under `ModData/distantvistas/season-samples/` (`YYYY-MM-DD_HHmm_<season>.jsonl`) for four-season world research: world XYZ, section key, calendar/season token, climate temp/rain when cheap, ground snow depth, canopy leaf id + white/green/mixed class + RGB, grass/soil RGB as captured. Flushes each L0 stop and every 96 lines; `README.md` documents the schema. `ColumnStride` (default 1) tunable for subsampling.
 
