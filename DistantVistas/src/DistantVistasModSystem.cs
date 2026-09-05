@@ -170,6 +170,8 @@ public class DistantVistasModSystem : ModSystem
             config = new DistantVistasConfig();
         }
 
+        LodLoginBakeHarmony.IsLoginSweepEnabled = () => LoginVisitSweepEnabled();
+
         // Before anything that can return early, and before the connection handshake:
         // the server learns we speak this channel at handshake time and never again. A
         // client that skips the registration makes the game log "Server sends me channel
@@ -1057,6 +1059,7 @@ public class DistantVistasModSystem : ModSystem
         {
             renderer.LoginBakeComplete = true;
             LodLoginSweepComplete.RecordSuccess(capi, pipeline.World);
+            LodLoginBakeSweepGate.CompleteHandover(capi);
             Mod.Logger.Notification(
                 "[DistantVistas] Login visit sweep skipped — {0}. Entering play ({1} sections in cache).",
                 sweepGate.Reason, pipeline.CachedSectionsLoaded);
@@ -1108,6 +1111,7 @@ public class DistantVistasModSystem : ModSystem
         if (!LoginVisitSweepEnabled())
         {
             renderer.LoginBakeComplete = true;
+            LodLoginBakeSweepGate.CompleteHandover(capi);
             Mod.Logger.Notification(
                 "[DistantVistas] Login visit sweep disabled in config — entering play without overlay.");
         }

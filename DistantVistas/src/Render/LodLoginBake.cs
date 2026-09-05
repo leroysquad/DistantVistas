@@ -48,6 +48,7 @@ public sealed class LodLoginBake
     readonly LodSeasonSampleExporter seasonSamples;
     readonly LodLoginSweepTiming sweepTiming = new();
     readonly LodLoginSweepStatusWriter statusWriter;
+    readonly LodLoginBakeProgressUi progressUi = new();
     readonly Block? plantTintFallback;
     readonly System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf;
     readonly Queue<long> pending = new();
@@ -149,14 +150,14 @@ public sealed class LodLoginBake
             capi.Logger.Notification(
                 "[DistantVistas] Login visit sweep paused — {0} region(s) remaining. Relog to resume (same season or within {1} days).",
                 left, (int)LodLoginSweepResume.MaxResumeDayGap);
-            overlay.UpdateProgress(Progress,
-                $"Paused — {left} region(s) saved. Relog to resume.");
+            UpdateProgress(Progress,
+                $"Paused — {left} region(s) saved. Relog to resume.", force: true);
             Teardown(success: false, keepResume: true);
             return;
         }
 
         capi.Logger.Notification("[DistantVistas] Login visit sweep cancelled — entering play.");
-        overlay.UpdateProgress(1f, "Entering play (sweep cancelled)…");
+        UpdateProgress(1f, "Entering play (sweep cancelled)…", force: true);
         Teardown(success: false);
     }
 
@@ -230,6 +231,7 @@ public sealed class LodLoginBake
         loggedTeleportBegin = false;
         loggedWarmupComplete = false;
         escWasDown = false;
+        progressUi.Reset();
         stabilizeWindow.Clear();
         windowMedians.Clear();
 
@@ -259,7 +261,7 @@ public sealed class LodLoginBake
         string startMsg = resuming
             ? $"{sweepModeLabel} — resuming ({finished}/{total} done)…"
             : $"{sweepModeLabel} — preparing loading screen…";
-        overlay.UpdateProgress(Progress, StatusWithEta($"{startMsg} (Esc to pause & save)"));
+        UpdateProgress(Progress, StatusWithEta($"{startMsg} (Esc to pause & save)"), force: true);
         statusWriter.TouchAdvance("armed");
         statusWriter.WriteNow(phase, sweepModeLabel, total, finished, force: true);
     }
@@ -270,7 +272,7 @@ public sealed class LodLoginBake
         string detail = total > 0
             ? $"{sweepModeLabel} — preparing ({overlayWarmupTicks})…"
             : $"Starting visit sweep… ({overlayWarmupTicks})";
-        overlay.UpdateProgress(Progress, StatusWithEta($"{detail} (Esc to pause & save)"));
+        UpdateProgress(Progress, StatusWithEta($"{detail} (Esc to pause & save)"), force: overlayWarmupTicks <= 1);
 
         if (overlayWarmupTicks < OverlayWarmupMinTicks) return;
 
@@ -307,7 +309,7 @@ public sealed class LodLoginBake
     void AbortSweep(string reason)
     {
         capi.Logger.Error("[DistantVistas] Login visit sweep aborted: {0}", reason);
-        overlay.UpdateProgress(1f, "Entering play (sweep aborted)…");
+        UpdateProgress(1f, "Entering play (sweep aborted)…", force: true);
         renderer.LoginBakeComplete = true;
         Teardown(success: false);
     }
@@ -396,7 +398,7 @@ public sealed class LodLoginBake
         worldWaitTicks++;
         if (!LodLoginSweep.IsWorldReady(capi.World))
         {
-            overlay.UpdateProgress(Progress,
+            UpdateProgress(Progress,
                 StatusWithEta(worldWaitTicks > LodLoginSweep.MaxWorldReadyTicks
                     ? $"{sweepModeLabel} — world slow to load, continuing anyway…"
                     : $"{sweepModeLabel} — waiting for world and map to load…"));
@@ -449,7 +451,7 @@ public sealed class LodLoginBake
 
             case StopPhase.TeleportSettle:
                 stopTicks++;
-                overlay.UpdateProgress(Progress,
+                UpdateProgress(Progress,
                     StatusWithEta($"{VisitPrefix()}settling after move… ({stopTicks}/{TeleportSettleTicks})"));
                 if (stopTicks < TeleportSettleTicks) return;
                 stopPhase = StopPhase.WaitChunks;
@@ -463,7 +465,7 @@ public sealed class LodLoginBake
                 if (!LodLoginSweep.AllMapChunksLoaded(capi.World.BlockAccessor, key)
                     && stopTicks < LodLoginSweep.MaxChunkWaitTicks)
                 {
-                    overlay.UpdateProgress(Progress,
+                    UpdateProgress(Progress,
                         StatusWithEta($"{VisitPrefix()}loading terrain… ({stopTicks})"));
                     return;
                 }
@@ -478,7 +480,7 @@ public sealed class LodLoginBake
                 if (!pipeline.IsL0SectionCaptureIdle(key)
                     && stopTicks < LodLoginSweep.MaxCaptureWaitTicks)
                 {
-                    overlay.UpdateProgress(Progress,
+                    UpdateProgress(Progress,
                         StatusWithEta($"{VisitPrefix()}capturing live terrain… ({Pct(finished, total)})"));
                     return;
                 }
@@ -494,7 +496,7 @@ public sealed class LodLoginBake
                 statusWriter.TouchAdvance($"region-{finished}-of-{total}");
                 stopPhase = StopPhase.BakeSettle;
                 stopTicks = 0;
-                overlay.UpdateProgress(Progress,
+                UpdateProgress(Progress,
                     StatusWithEta($"{VisitPrefix()}{Pct(finished, total)} — settling…"));
                 break;
 
@@ -503,7 +505,7 @@ public sealed class LodLoginBake
                 if (stopTicks < BakeSettleTicks) return;
                 stopPhase = StopPhase.Done;
                 currentKey = null;
-                overlay.UpdateProgress(Progress,
+                UpdateProgress(Progress,
                     StatusWithEta($"{VisitPrefix()}{Pct(finished, total)}"));
                 break;
         }
@@ -516,7 +518,7 @@ public sealed class LodLoginBake
         pipeline.DrainLoginPersistence(24);
 
         int mips = pipeline.World.MipDirty.Count;
-        overlay.UpdateProgress(Progress,
+        UpdateProgress(Progress,
             mips > 0
                 ? $"Updating distant land… ({mips} parent sections left)"
                 : "Saving visited canvases…");
@@ -537,7 +539,7 @@ public sealed class LodLoginBake
         phase = Phase.Auditing;
         auditTicks = 0;
         currentKey = null;
-        overlay.UpdateProgress(Progress, StatusWithEta("Checking visited regions for gaps…"));
+        UpdateProgress(Progress, StatusWithEta("Checking visited regions for gaps…"), force: true);
     }
 
     void TickAuditing()
@@ -547,7 +549,7 @@ public sealed class LodLoginBake
 
         if (auditTicks < AuditSettleTicks)
         {
-            overlay.UpdateProgress(Progress, StatusWithEta("Checking visited regions for gaps…"));
+            UpdateProgress(Progress, StatusWithEta("Checking visited regions for gaps…"), force: true);
             return;
         }
 
@@ -582,8 +584,9 @@ public sealed class LodLoginBake
             "[DistantVistas] Login visit sweep: retrying {0} missed regions (pass {1}).",
             total, resweepRound);
         sweepTiming.Begin();
-        overlay.UpdateProgress(Progress,
-            StatusWithEta($"Retrying {total} missed region{(total == 1 ? "" : "s")} (pass {resweepRound})…"));
+        UpdateProgress(Progress,
+            StatusWithEta($"Retrying {total} missed region{(total == 1 ? "" : "s")} (pass {resweepRound})…"),
+            force: true);
         BeginNextStop();
     }
 
@@ -605,7 +608,7 @@ public sealed class LodLoginBake
 
         (double x, double y, double z) = LodLoginSweep.VisitPosition(capi.World, key);
         TeleportPlayer(x, y, z, requestChunks: false);
-        overlay.UpdateProgress(Progress,
+        UpdateProgress(Progress,
             StatusWithEta($"{VisitPrefix()}moving to region… ({Pct(finished, total)})"));
     }
 
@@ -647,7 +650,7 @@ public sealed class LodLoginBake
         RestorePlayerPose();
         phase = Phase.Draining;
         drainTicks = 0;
-        overlay.UpdateProgress(Progress, "Updating distant land…");
+        UpdateProgress(Progress, "Updating distant land…", force: true);
     }
 
     void BeginStabilizing()
@@ -657,7 +660,7 @@ public sealed class LodLoginBake
         stabilizeClock.Restart();
         stabilizeWindow.Clear();
         windowMedians.Clear();
-        overlay.UpdateProgress(Progress, "Waiting for frame time to settle…");
+        UpdateProgress(Progress, "Waiting for frame time to settle…", force: true);
     }
 
     void TickStabilizing(float dt)
@@ -675,7 +678,7 @@ public sealed class LodLoginBake
             stabilizeWindow.Clear();
         }
 
-        overlay.UpdateProgress(Progress,
+        UpdateProgress(Progress,
             $"Stabilizing frame time… {windowMedians.Count}/{StabilizeWindowsRequired}");
 
         bool stable = windowMedians.Count >= StabilizeWindowsRequired
@@ -688,14 +691,20 @@ public sealed class LodLoginBake
 
     void Finish()
     {
-        overlay.UpdateProgress(1f, "Ready.");
-        CompleteRelease(success: true);
+        UpdateProgress(1f, "Ready.", force: true);
+        ReleaseResources(success: true);
         capi.Logger.Notification(
             "[DistantVistas] Login visit sweep finished: {0}/{1} regions captured and locked until relog.",
             finished, total);
     }
 
-    void CompleteRelease(bool success, bool keepResume = false)
+    void CompleteRelease(bool success, bool keepResume = false) =>
+        ReleaseResources(success, keepResume);
+
+    /// <summary>
+    /// Single idempotent release for success, abort, cancel, and world leave.
+    /// </summary>
+    void ReleaseResources(bool success, bool keepResume = false)
     {
         if (released) return;
 
@@ -705,52 +714,13 @@ public sealed class LodLoginBake
         phase = Phase.Done;
         pipeline.DeferLegacyHeal = false;
         renderer.LoginBakeOverlayActive = false;
-
-        if (success)
-        {
-            renderer.LoginBakeComplete = true;
-            LodLoginSweepComplete.RecordSuccess(capi, pipeline.World);
-        }
-
-        if (success || !keepResume)
-            LodLoginSweepResume.Delete(capi);
-
-        try { worldHide.Restore(); } catch { }
-        try { overlay.Hide(); } catch { }
-        try { RestorePlayerPose(); } catch { }
-        try { ReleasePlayerControls(); } catch { }
-        try { audioMute.Restore(); } catch { }
-        try { timeFreeze.Restore(); } catch { }
-        try { gameMode.Restore(); } catch { }
-        try { hudHide.Restore(); } catch { }
-        try { playerHide.Restore(); } catch { }
-        try { seasonSamples.Dispose(); } catch { }
-        statusWriter.TouchAdvance(success ? "release-success" : "release-cancel");
-        statusWriter.WriteNow(Phase.Done, sweepModeLabel, total, finished, force: true);
-        statusWriter.Clear();
-        LodLoginBakeSweepGate.Release();
-    }
-
-    /// <summary>
-    /// Single idempotent teardown for abort, error, cancel, and world leave.
-    /// </summary>
-    void Teardown(bool success, bool keepResume = false)
-    {
-        if (released) return;
-
-        if (success)
-        {
-            CompleteRelease(success, keepResume);
-            return;
-        }
-
-        released = true;
-        phase = Phase.Done;
-        pipeline.DeferLegacyHeal = false;
-        renderer.LoginBakeOverlayActive = false;
         renderer.LoginBakeComplete = true;
+        progressUi.Reset();
 
-        if (keepResume)
+        if (success)
+            LodLoginSweepComplete.RecordSuccess(capi, pipeline.World);
+
+        if (keepResume && !success)
             SaveResumeSnapshot();
 
         try { worldHide.Restore(); } catch { }
@@ -763,14 +733,23 @@ public sealed class LodLoginBake
         try { hudHide.Restore(); } catch { }
         try { playerHide.Restore(); } catch { }
         try { seasonSamples.Dispose(); } catch { }
-        statusWriter.TouchAdvance(keepResume ? "release-paused" : "release-cancel");
+
+        statusWriter.TouchAdvance(
+            success ? "release-success" : keepResume ? "release-paused" : "release-cancel");
         statusWriter.WriteNow(Phase.Done, sweepModeLabel, total, finished, force: true);
         statusWriter.Clear();
-        LodLoginBakeSweepGate.Release();
 
-        if (!keepResume)
+        LodLoginBakeSweepGate.CompleteHandoverAndRelease(capi);
+
+        if (success || !keepResume)
             LodLoginSweepResume.Delete(capi);
     }
+
+    /// <summary>
+    /// Single idempotent teardown for abort, error, cancel, and world leave.
+    /// </summary>
+    void Teardown(bool success, bool keepResume = false) =>
+        ReleaseResources(success, keepResume);
 
     void HoldPlayerControls()
     {
@@ -921,6 +900,12 @@ public sealed class LodLoginBake
 
     static string Pct(int done, int total) =>
         total <= 0 ? "0%" : $"{done * 100 / total}%";
+
+    void UpdateProgress(float progress, string detail, bool force = false)
+    {
+        if (force || progressUi.ShouldUpdate(phase, finished, total, detail))
+            overlay.UpdateProgress(progress, detail);
+    }
 
     string StatusWithEta(string detail) =>
         phase == Phase.Sweeping && total > 0

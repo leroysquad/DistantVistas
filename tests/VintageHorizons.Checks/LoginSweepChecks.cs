@@ -92,8 +92,15 @@ public static class LoginSweepChecks
         c.True(gate.Contains("SuppressRunningGameRender"),
             "sweep gate suppresses running-game world render");
 
+        c.True(gate.Contains("HandoverDeferred"),
+            "sweep gate tracks deferred running-game handover");
+        c.True(gate.Contains("CompleteHandover"),
+            "sweep gate completes deferred handover on release");
+
         string harmony = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeHarmony.cs"));
+        c.True(harmony.Contains("handOverRenderingToRunningGame"),
+            "harmony defers running-game handover during sweep");
         c.True(harmony.Contains("RenderToPrimary"),
             "harmony skips running-game primary render during sweep");
 
@@ -122,8 +129,12 @@ public static class LoginSweepChecks
     {
         string bake = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
-        c.True(bake.Contains("void Teardown(bool success"),
-            "login bake uses a single Teardown path");
+        c.True(bake.Contains("ReleaseResources"),
+            "login bake uses unified ReleaseResources teardown");
+        c.True(bake.Contains("CompleteHandoverAndRelease"),
+            "login bake completes deferred handover on release");
+        c.True(bake.Contains("LodLoginBakeProgressUi"),
+            "login bake throttles loading-text updates");
         c.True(bake.Contains("if (released) return"),
             "login bake teardown is idempotent");
         c.True(bake.Contains("Teardown(success: false, keepResume: true)"),
@@ -202,8 +213,8 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeVanillaLoadingHold.cs"));
         c.True(hold.Contains("GuiScreenLoadingGame"),
             "vanilla hold resolves native loading screen");
-        c.True(hold.Contains("LodLoginBakeStockLoadingFallback"),
-            "vanilla hold falls back to stock Loading… UI");
+        c.True(hold.Contains("HandoverDeferred"),
+            "vanilla hold reuses deferred loading screen when still current");
         c.True(hold.Contains("AfterFinalComposition"),
             "vanilla hold paints ortho and after-final passes");
 

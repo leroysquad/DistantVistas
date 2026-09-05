@@ -199,6 +199,23 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
             runningScreen = clientMain.ScreenRunningGame;
             screenManager = runningScreen.ScreenManager;
 
+            GuiScreen? current = CurrentScreenField?.GetValue(screenManager) as GuiScreen;
+            if (LodLoginBakeSweepGate.HandoverDeferred && current is GuiScreenLoadingGame held)
+            {
+                loadingScreen = held;
+                screenHeld = true;
+                useStockFallback = false;
+                CaptureVanillaLine();
+                ApplyLoadingText();
+                if (!loggedResolve)
+                {
+                    loggedResolve = true;
+                    capi.Logger.Notification(
+                        "[DistantVistas] Login sweep: keeping deferred vanilla loading screen during visit bake.");
+                }
+                return;
+            }
+
             loadingScreen = FindCachedLoadingScreen(screenManager);
             bool created = false;
             if (loadingScreen == null)

@@ -6,12 +6,15 @@ using Vintagestory.Client.NoObf;
 namespace DistantVistas;
 
 /// <summary>
-/// Stops <see cref="GuiScreenRunningGame"/> from drawing the live world while the login
-/// visit sweep holds the vanilla loading screen (prevents sky/vegetation flash).
+/// Defers world-load handover while the login visit sweep runs, and suppresses running-game
+/// world draws when the vanilla loader is held.
 /// </summary>
 public static class LodLoginBakeHarmony
 {
     static Harmony? harmony;
+
+    /// <summary>When true, block <see cref="GuiScreenRunningGame.handOverRenderingToRunningGame"/>.</summary>
+    public static Func<bool>? IsLoginSweepEnabled { get; set; }
 
     public static void Apply(Vintagestory.API.Common.Mod mod)
     {
@@ -22,11 +25,23 @@ public static class LodLoginBakeHarmony
 
     public static void Remove()
     {
-        harmony?.UnpatchAll(harmony.Id);
+        harmony?.UnpatchAll(harmony?.Id);
         harmony = null;
+        IsLoginSweepEnabled = null;
     }
 
     static bool SkipRunningGameRender() => LodLoginBakeSweepGate.SuppressRunningGameRender;
+
+    [HarmonyPatch(typeof(GuiScreenRunningGame), "handOverRenderingToRunningGame")]
+    sealed class DeferHandoverToRunningGame
+    {
+        static bool Prefix()
+        {
+            if (IsLoginSweepEnabled?.Invoke() != true) return true;
+            LodLoginBakeSweepGate.MarkHandoverDeferred();
+            return false;
+        }
+    }
 
     [HarmonyPatch(typeof(GuiScreenRunningGame), "RenderToPrimary")]
     sealed class SkipRenderToPrimary

@@ -1,3 +1,8 @@
+## 0.8.10
+- **Defer running-game handover during login sweep (0.8.8/0.8.9 follow-up).** Harmony blocks `GuiScreenRunningGame.handOverRenderingToRunningGame` while the visit sweep is enabled, so the client stays on the vanilla `GuiScreenLoadingGame` instead of racing to re-open a discarded loader when `CachedScreens` is empty. Handover completes on sweep finish, skip, cancel, or abort via `CompleteHandover`.
+- **Unified release teardown.** Success, cancel, abort, and world-leave share one `ReleaseResources` path: overlay hide, controls, HUD, audio, gamemode, deferred handover, and `LoginBakeComplete` so Esc abort no longer leaves you without a menu.
+- **Throttled loading text.** Sweep status on the vanilla loader updates about every 10% during teleports/bake instead of every tick.
+
 ## 0.8.9
 - **CRITICAL: sky/vegetation flash during visit sweep (0.8.8).** When the cached vanilla loader was missing, stock fallback failed to paint and the sweep aborted into play while teleports still ran — world flashed behind a broken cover. Fix: re-open `GuiScreenLoadingGame` as `ScreenManager.CurrentScreen` via `LoadScreen` / `LoadScreenNoLoadCall` (create instance when cache is empty); Harmony suppresses `GuiScreenRunningGame` world draws while the sweep is active; **never abort into play** solely because the cover has not painted yet; stock fallback paints on ortho + after-final at render order 3.0.
 - **Vanilla loading text preserved.** DV progress appends after the stock VS line (`Loading mountains… — visiting 1/43`) instead of replacing it.
