@@ -33,6 +33,7 @@ public sealed class LodLoginBake
     readonly LodPipeline pipeline;
     readonly LodTerrainRenderer renderer;
     readonly LodLoginBakeOverlay overlay;
+    readonly LodLoginBakeAudioMute audioMute;
     readonly Block? plantTintFallback;
     readonly System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf;
     readonly Queue<long> pending = new();
@@ -85,6 +86,7 @@ public sealed class LodLoginBake
         this.overlay = overlay;
         this.plantTintFallback = plantTintFallback;
         this.untintedOf = untintedOf;
+        audioMute = new LodLoginBakeAudioMute(capi);
     }
 
     public void Begin()
@@ -103,6 +105,7 @@ public sealed class LodLoginBake
         windowMedians.Clear();
 
         overlay.Show();
+        audioMute.EnsureMuted();
         overlay.UpdateProgress(Progress, "Waiting for world to load…");
 
         if (total == 0)
@@ -328,16 +331,23 @@ public sealed class LodLoginBake
     {
         phase = Phase.Done;
         renderer.LoginBakeComplete = true;
-        ReleasePlayerControls();
         overlay.UpdateProgress(1f, "Ready.");
         overlay.Hide();
+        ReleaseAll();
         capi.Logger.Notification(
             "[DistantVistas] Login visit sweep finished: {0}/{1} regions captured and locked until relog.",
             finished, total);
     }
 
+    void ReleaseAll()
+    {
+        ReleasePlayerControls();
+        audioMute.Restore();
+    }
+
     void HoldPlayerControls()
     {
+        audioMute.EnsureMuted();
         CloseBlockingDialogs();
 
         IClientPlayer player = capi.World.Player;
@@ -436,8 +446,14 @@ public sealed class LodLoginBake
 
     public void Dispose()
     {
-        RestorePlayerPose();
-        ReleasePlayerControls();
-        overlay.Hide();
+        try
+        {
+            RestorePlayerPose();
+            overlay.Hide();
+        }
+        finally
+        {
+            ReleaseAll();
+        }
     }
 }

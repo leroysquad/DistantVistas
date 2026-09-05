@@ -9,6 +9,7 @@ public static class LoginSweepChecks
         L0ChunkColumns(c);
         VisitedL0Only(c);
         BackdropHook(c);
+        AudioMuteKeys(c);
     }
 
     static void L0ChunkColumns(Check c)
@@ -39,5 +40,12 @@ public static class LoginSweepChecks
         c.Eq("distantvistas:textures/gui/login-title-rainbow.png",
             LodLoginBakeScreenRenderer.TitleAsset.ToString(),
             "login title asset hook");
+    }
+
+    static void AudioMuteKeys(Check c)
+    {
+        c.Eq(6, LodLoginBakeAudioMute.VolumeKeys.Length, "all client volume sliders are muted");
+        c.True(LodLoginBakeAudioMute.VolumeKeys.Contains("masterSoundLevel"), "master volume key");
+        c.True(LodLoginBakeAudioMute.VolumeKeys.Contains("musicLevel"), "music volume key");
     }
 }
