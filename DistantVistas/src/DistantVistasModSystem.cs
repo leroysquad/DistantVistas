@@ -133,7 +133,7 @@ public class DistantVistasModSystem : ModSystem
     /// </summary>
     LodAssistClient? assist;
 
-    LodLoginBakeScreenRenderer? loginBakeScreen;
+    LodLoginBakeVanillaLoadingHold? loginVanillaLoading;
     LodLoginBakeOverlay? loginBakeOverlay;
     LodLoginBake? loginBake;
 
@@ -227,11 +227,11 @@ public class DistantVistasModSystem : ModSystem
         renderer.HeightOcclusion.PeekMarginBlocks = config.FovOcclusionPeekMargin;
         renderer.HeightOcclusion.MaxTestsPerFrame = config.FovOcclusionMaxTestsPerFrame;
         pipeline.InvalidateGpuMesh = renderer.InvalidateGpuMesh;
-        loginBakeScreen = new LodLoginBakeScreenRenderer(capi);
-        capi.Event.RegisterRenderer(loginBakeScreen, EnumRenderStage.Ortho, "distantvistas-login-bake");
-        capi.Event.RegisterRenderer(loginBakeScreen, EnumRenderStage.AfterFinalComposition,
-            "distantvistas-login-bake-final");
-        loginBakeOverlay = new LodLoginBakeOverlay(capi, loginBakeScreen);
+        loginVanillaLoading = new LodLoginBakeVanillaLoadingHold(capi);
+        capi.Event.RegisterRenderer(loginVanillaLoading, EnumRenderStage.Ortho, "distantvistas-login-vanilla");
+        capi.Event.RegisterRenderer(loginVanillaLoading, EnumRenderStage.AfterFinalComposition,
+            "distantvistas-login-vanilla-final");
+        loginBakeOverlay = new LodLoginBakeOverlay(capi, loginVanillaLoading);
         // Real holes (captured land with no mesh at any rung) are reported with
         // the state of the keys involved, so a screenshot of sky has a log line.
         renderer.SetHoleLogger(msg => Mod.Logger.Notification(msg));
@@ -1055,7 +1055,7 @@ public class DistantVistasModSystem : ModSystem
 
         loginBakeOverlay!.Show();
         loginBake = new LodLoginBake(
-            capi, pipeline, renderer, loginBakeOverlay!, loginBakeScreen!,
+            capi, pipeline, renderer, loginBakeOverlay!,
             tints.PlantTintFallback, UntintedForRebake);
         loginBake.Begin();
 
@@ -1491,7 +1491,7 @@ public class DistantVistasModSystem : ModSystem
         Quietly(() => pipeline?.Dispose());
         Quietly(() => renderer?.Dispose());
         Quietly(() => loginBakeOverlay?.Dispose());
-        Quietly(() => loginBakeScreen?.Dispose());
+        Quietly(() => loginVanillaLoading?.Dispose());
     }
 
     /// <summary>

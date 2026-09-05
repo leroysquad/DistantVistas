@@ -3,17 +3,16 @@ using Vintagestory.API.Client;
 namespace DistantVistas;
 
 /// <summary>
-/// Coordinates the render-layer fullscreen cover and a deferred input-blocking HUD guard.
-/// Visuals are drawn by <see cref="LodLoginBakeScreenRenderer"/> every frame.
+/// Coordinates vanilla world-loading UI and input blocking during the login visit sweep.
 /// </summary>
 public sealed class LodLoginBakeOverlay : IDisposable
 {
-    readonly LodLoginBakeScreenRenderer screen;
+    readonly LodLoginBakeVanillaLoadingHold vanillaLoading;
     readonly LodLoginBakeInputGuard inputGuard;
 
-    public LodLoginBakeOverlay(ICoreClientAPI capi, LodLoginBakeScreenRenderer screen)
+    public LodLoginBakeOverlay(ICoreClientAPI capi, LodLoginBakeVanillaLoadingHold vanillaLoading)
     {
-        this.screen = screen;
+        this.vanillaLoading = vanillaLoading;
         inputGuard = new LodLoginBakeInputGuard(capi);
     }
 
@@ -23,17 +22,18 @@ public sealed class LodLoginBakeOverlay : IDisposable
         set => inputGuard.OnCancelRequested = value;
     }
 
+    public bool IsReady => vanillaLoading.IsReady;
+    public bool HasRendered => vanillaLoading.HasRendered;
+
     public void UpdateProgress(float fraction, string detail) =>
-        screen.SetProgress(fraction, detail);
+        vanillaLoading.SetProgress(fraction, detail);
 
     public void SetOverlayAlpha(float alpha) =>
-        screen.SetOverlayAlpha(alpha);
+        vanillaLoading.SetOverlayAlpha(alpha);
 
     public void Show()
     {
-        screen.Active = true;
-        screen.PrepareImmediate();
-        screen.SetProgress(0f, "Starting…");
+        vanillaLoading.Show();
         inputGuard.RequestShow();
     }
 
@@ -41,7 +41,7 @@ public sealed class LodLoginBakeOverlay : IDisposable
 
     public void Hide()
     {
-        screen.Active = false;
+        vanillaLoading.Hide();
         inputGuard.RequestHide();
     }
 

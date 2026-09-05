@@ -1,3 +1,8 @@
+## 0.8.3
+- **Vanilla loading screen during visit sweep (product direction).** The custom Distant Vistas landscape splash and gold title panel are no longer the primary join UX. While the login visit sweep runs, the mod re-renders Vintage Story's native `GuiScreenLoadingGame` and updates `ScreenManager.loadingText` with sweep progress — the same stock "Loading…" view you see when a world first comes in. Quiet teleports, per-column season bake, miss re-sweep, cancel/resume, and skip-if-complete gates are unchanged. Play releases only when the sweep finishes, is skipped, or you cancel.
+- **Stock fallback only when vanilla cannot be held.** If `GuiScreenLoadingGame` cannot be resolved or drawn, a minimal dark fill + "Loading…" + progress bar is used — not the DV backdrop/title splash. Log line: `stock Loading… fallback (vanilla screen unavailable)`.
+- **No fade-out phase.** The vanilla screen simply hides on release (same as normal world load handoff).
+
 ## 0.8.2
 - **CRITICAL: overlay health gate aborted sweep with no UI (0.8.1 regression).** 0.8.1 routed *all* draws through explicit `MeshRef` only; on many VS 1.22.7 joins that path never succeeds on the ortho pass, so `ConsecutiveOpaqueFrames` stayed at 0 and the sweep aborted after 200 ticks with no loading screen or teleports. Fix: dual draw path — explicit quad on `AfterFinalComposition` (NRE-safe), **ortho internal-quad tint fallback** (`Render2DTexture(int, …, Vec4f)`) restored for the primary pass. Health gate no longer aborts the sweep when paint counter fails; logs a warning and continues after warmup timeout.
 - **Loud lifecycle logs:** `LOGIN VISIT SWEEP ARMED`, first opaque frame painted, overlay ready, quiet teleports begin, skip reason on gate.

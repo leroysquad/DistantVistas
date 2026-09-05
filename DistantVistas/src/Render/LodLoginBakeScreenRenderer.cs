@@ -6,11 +6,8 @@ using Vintagestory.API.MathTools;
 namespace DistantVistas;
 
 /// <summary>
-/// Login visit-sweep overlay (layout locked):
-/// 1. Opaque full-screen cover (always — even when PNG assets are missing)
-/// 2. Full-screen landscape backdrop when packaged
-/// 3. Centered arched solid-gold title graphic above the panel
-/// 4. Loading panel with progress % and status below
+/// Legacy custom splash renderer — used only as a stock-looking fallback when the
+/// vanilla <see cref="GuiScreenLoadingGame"/> cannot be re-rendered.
 /// </summary>
 public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
 {
@@ -49,13 +46,14 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     readonly LoadedTexture titleFallbackTex;
     readonly LoadedTexture percentTex;
     readonly LoadedTexture statusTex;
+    readonly LoadedTexture headingTex;
     readonly Vec4f tint = new();
     readonly Dictionary<int, int> solidColorTextures = new();
 
     MeshRef? ownedQuad;
     int whiteTextureId;
-    bool loggedFirstPaint;
 
+    readonly bool stockOnly;
     bool active;
     bool gfxReady;
     bool backdropMissing;
@@ -65,20 +63,24 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     string status = "";
     string percentLabel = "0%";
 
-    public LodLoginBakeScreenRenderer(ICoreClientAPI capi)
+    public LodLoginBakeScreenRenderer(ICoreClientAPI capi, bool stockOnly = false)
     {
         this.capi = capi;
+        this.stockOnly = stockOnly;
         backdrop = new LoadedTexture(capi);
         titleImage = new LoadedTexture(capi);
         titleFallbackTex = new LoadedTexture(capi);
         percentTex = new LoadedTexture(capi);
         statusTex = new LoadedTexture(capi);
+        headingTex = new LoadedTexture(capi);
         percentFont = CairoFont.WhiteDetailText().WithFontSize(18);
         statusFont = CairoFont.WhiteSmallText();
+        headingFont = CairoFont.WhiteDetailText().WithFontSize(22);
     }
 
     readonly CairoFont percentFont;
     readonly CairoFont statusFont;
+    readonly CairoFont headingFont;
 
     public bool Active
     {
@@ -92,7 +94,6 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
                 gfxReady = false;
                 ConsecutiveOpaqueFrames = 0;
                 HasEverPaintedOpaque = false;
-                loggedFirstPaint = false;
                 PrepareImmediate();
             }
             else
@@ -157,15 +158,13 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         {
             ConsecutiveOpaqueFrames++;
             if (!HasEverPaintedOpaque)
-            {
                 HasEverPaintedOpaque = true;
-                if (!loggedFirstPaint)
-                {
-                    loggedFirstPaint = true;
-                    capi.Logger.Notification(
-                        "[DistantVistas] Login overlay: first opaque frame painted (ortho pass).");
-                }
-            }
+        }
+
+        if (stockOnly)
+        {
+            DrawStockLayout(w, h, orthoPass);
+            return true;
         }
 
         DrawBackdrop(w, h, orthoPass);
@@ -219,6 +218,46 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         }
 
         return true;
+    }
+
+    void DrawStockLayout(float w, float h, bool orthoPass)
+    {
+        tint.Set(DarkFill[0], DarkFill[1], DarkFill[2], DarkFill[3] * overlayAlpha);
+        DrawSolid(0, 0, w, h, 200, tint, orthoPass);
+
+        RebuildHeading();
+        float headingY = h * 0.42f;
+        if (headingTex.TextureId > 0)
+            DrawText(headingTex, (w - headingTex.Width) * 0.5f, headingY, 204, orthoPass);
+
+        float panelW = Math.Min(PanelW, w - 40f);
+        float panelX = (w - panelW) * 0.5f;
+        float panelY = headingY + 48f;
+        tint.Set(PanelFill[0], PanelFill[1], PanelFill[2], PanelFill[3] * overlayAlpha);
+        DrawSolid(panelX, panelY, panelW, PanelH, 205, tint, orthoPass);
+
+        float pad = 20f;
+        float barY = panelY + 52f;
+        float barW = panelW - pad * 2f;
+        tint.Set(BarTrack[0], BarTrack[1], BarTrack[2], BarTrack[3] * overlayAlpha);
+        DrawSolid(panelX + pad, barY, barW, 18f, 206, tint, orthoPass);
+        if (fraction > 0)
+        {
+            tint.Set(BarFill[0], BarFill[1], BarFill[2], BarFill[3] * overlayAlpha);
+            DrawSolid(panelX + pad, barY, barW * fraction, 18f, 207, tint, orthoPass);
+        }
+
+        if (overlayAlpha > 0.01f)
+        {
+            DrawText(percentTex, panelX + panelW - pad - percentTex.Width, panelY + 14f, 208, orthoPass);
+            DrawText(statusTex, panelX + pad, panelY + 84f, 209, orthoPass);
+        }
+    }
+
+    void RebuildHeading()
+    {
+        LoadedTexture heading = headingTex;
+        capi.Gui.TextTexture.GenOrUpdateTextTexture("Loading…", headingFont, ref heading);
     }
 
     bool DrawOpaqueCover(float w, float h, bool orthoPass)
@@ -483,6 +522,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         titleFallbackTex.Dispose();
         percentTex.Dispose();
         statusTex.Dispose();
+        headingTex.Dispose();
         if (ownedQuad != null && !ownedQuad.Disposed)
             capi.Render.DeleteMesh(ownedQuad);
         ownedQuad = null;

@@ -10,7 +10,7 @@ namespace DistantVistas;
 /// <summary>
 /// Login visit sweep — gather live season truth by being at each visited square.
 ///
-/// Purpose (locked): teleport the player (hidden behind a full-screen overlay) to every
+/// Purpose (locked): teleport the player (hidden behind the vanilla loading screen) to every
 /// previously visited L0 canvas cell so vanilla streams real chunks. The mod re-captures
 /// voxel columns from that loaded terrain (snow blocks, leaf species, grass tops) and
 /// season-bakes palette colours per column top. Those canvases persist to SQLite and
@@ -19,7 +19,7 @@ namespace DistantVistas;
 /// </summary>
 public sealed class LodLoginBake
 {
-    public enum Phase { OverlayWarmup, WaitingForWorld, Sweeping, Auditing, Draining, Stabilizing, FadingOut, Done }
+    public enum Phase { OverlayWarmup, WaitingForWorld, Sweeping, Auditing, Draining, Stabilizing, Done }
 
     enum StopPhase { Teleport, TeleportSettle, WaitChunks, Capture, Bake, BakeSettle, Done }
 
@@ -34,13 +34,11 @@ public sealed class LodLoginBake
     const double StabilizeTimeoutSec = 12.0;
     const int MaxDrainTicks = 600;
     const int AuditSettleTicks = 4;
-    const float FadeOutSeconds = 0.85f;
 
     readonly ICoreClientAPI capi;
     readonly LodPipeline pipeline;
     readonly LodTerrainRenderer renderer;
     readonly LodLoginBakeOverlay overlay;
-    readonly LodLoginBakeScreenRenderer screen;
     readonly LodLoginBakeAudioMute audioMute;
     readonly LodLoginBakeTimeFreeze timeFreeze;
     readonly LodLoginBakeGameMode gameMode;
@@ -69,7 +67,6 @@ public sealed class LodLoginBake
     bool retryingMisses;
     bool releaseSuccess;
     bool releaseKeepResume;
-    float fadeElapsed;
     LodLoginSweepPlanMode sweepMode = LodLoginSweepPlanMode.RevisitVisited;
     string sweepModeLabel = "Revisiting visited land";
     Phase phase = Phase.WaitingForWorld;
@@ -109,7 +106,6 @@ public sealed class LodLoginBake
         LodPipeline pipeline,
         LodTerrainRenderer renderer,
         LodLoginBakeOverlay overlay,
-        LodLoginBakeScreenRenderer screen,
         Block? plantTintFallback,
         System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf)
     {
@@ -117,7 +113,6 @@ public sealed class LodLoginBake
         this.pipeline = pipeline;
         this.renderer = renderer;
         this.overlay = overlay;
-        this.screen = screen;
         this.plantTintFallback = plantTintFallback;
         this.untintedOf = untintedOf;
         audioMute = new LodLoginBakeAudioMute(capi);
@@ -225,33 +220,28 @@ public sealed class LodLoginBake
     void TickOverlayWarmup()
     {
         overlayWarmupTicks++;
-        string detail = screen.IsOverlayHealthy
-            ? "Loading screen ready…"
+        string detail = overlay.HasRendered
+            ? "Loading…"
             : overlayWarmupTicks >= OverlayWarmupMaxTicks
                 ? "Starting visit sweep…"
                 : $"Waiting for loading screen… ({overlayWarmupTicks})";
         overlay.UpdateProgress(Progress, detail);
 
-        bool healthy = screen.IsOverlayHealthy
-            && overlayWarmupTicks >= LodLoginBakeScreenRenderer.RequiredHealthyFrames;
-        bool timedOut = overlayWarmupTicks >= OverlayWarmupMaxTicks;
         bool minWait = overlayWarmupTicks >= OverlayWarmupMinTicks;
+        bool timedOut = overlayWarmupTicks >= OverlayWarmupMaxTicks;
+        if (!minWait) return;
+        if (!overlay.HasRendered && !timedOut) return;
 
-        if (!healthy && !(timedOut && minWait))
-            return;
-
-        if (!screen.IsOverlayHealthy)
+        if (!overlay.HasRendered)
         {
             capi.Logger.Warning(
-                "[DistantVistas] Login visit sweep: overlay health not confirmed after {0} ticks " +
-                "(ever painted={1}, consecutive={2}) — continuing sweep anyway.",
-                overlayWarmupTicks, screen.HasEverPaintedOpaque, screen.ConsecutiveOpaqueFrames);
+                "[DistantVistas] Login visit sweep: vanilla loading screen not painted after {0} ticks — continuing sweep anyway.",
+                overlayWarmupTicks);
         }
         else
         {
             capi.Logger.Notification(
-                "[DistantVistas] Login visit sweep: loading overlay ready ({0} consecutive opaque frames).",
-                screen.ConsecutiveOpaqueFrames);
+                "[DistantVistas] Login visit sweep: vanilla loading screen active.");
         }
 
         worldHide.HideAllLoaded();
@@ -340,9 +330,6 @@ public sealed class LodLoginBake
                 break;
             case Phase.Stabilizing:
                 TickStabilizing(dt);
-                break;
-            case Phase.FadingOut:
-                TickFadingOut(dt);
                 break;
         }
     }
@@ -643,75 +630,46 @@ public sealed class LodLoginBake
     void Finish()
     {
         overlay.UpdateProgress(1f, "Ready.");
-        BeginFadeOut(success: true);
+        CompleteRelease(success: true);
         capi.Logger.Notification(
             "[DistantVistas] Login visit sweep finished: {0}/{1} regions captured and locked until relog.",
             finished, total);
     }
 
-    void BeginFadeOut(bool success, bool keepResume = false)
+    void CompleteRelease(bool success, bool keepResume = false)
     {
+        if (released) return;
+
         releaseSuccess = success;
         releaseKeepResume = keepResume;
-        fadeElapsed = 0f;
-        overlay.SetOverlayAlpha(1f);
-        phase = Phase.FadingOut;
+        released = true;
+        phase = Phase.Done;
+        pipeline.DeferLegacyHeal = false;
+        renderer.LoginBakeOverlayActive = false;
+
+        if (success)
+        {
+            renderer.LoginBakeComplete = true;
+            LodLoginSweepComplete.RecordSuccess(capi, pipeline.World);
+        }
+
+        if (success || !keepResume)
+            LodLoginSweepResume.Delete(capi);
 
         try { worldHide.Restore(); } catch { }
+        try { overlay.Hide(); } catch { }
         try { RestorePlayerPose(); } catch { }
+        try { ReleasePlayerControls(); } catch { }
         try { audioMute.Restore(); } catch { }
         try { timeFreeze.Restore(); } catch { }
         try { gameMode.Restore(); } catch { }
         try { hudHide.Restore(); } catch { }
         try { playerHide.Restore(); } catch { }
         try { seasonSamples.Dispose(); } catch { }
-
-        pipeline.DeferLegacyHeal = false;
-        overlay.UpdateProgress(1f, success ? "Ready." : "Entering play…");
-    }
-
-    void TickFadingOut(float dt)
-    {
-        fadeElapsed += Math.Max(0f, dt);
-        float t = Math.Min(1f, fadeElapsed / FadeOutSeconds);
-        overlay.SetOverlayAlpha(1f - t);
-        overlay.EnsureInputBlocked();
-        HoldPlayerCameraOnly();
-
-        if (t < 1f) return;
-        CompleteRelease();
-    }
-
-    void HoldPlayerCameraOnly()
-    {
-        if (!restoreCaptured) return;
-        LockPlayerCamera(capi, capi.World.Player, restorePos, restoreCameraPos);
-    }
-
-    void CompleteRelease()
-    {
-        if (released) return;
-
-        released = true;
-        phase = Phase.Done;
-        renderer.LoginBakeOverlayActive = false;
-
-        if (releaseSuccess)
-        {
-            renderer.LoginBakeComplete = true;
-            LodLoginSweepComplete.RecordSuccess(capi, pipeline.World);
-        }
-
-        if (releaseSuccess || !releaseKeepResume)
-            LodLoginSweepResume.Delete(capi);
-
-        try { overlay.Hide(); } catch { }
-        try { ReleasePlayerControls(); } catch { }
     }
 
     /// <summary>
     /// Single idempotent teardown for abort, error, cancel, and world leave.
-    /// Successful completion fades out via <see cref="BeginFadeOut"/> first.
     /// </summary>
     void Teardown(bool success, bool keepResume = false)
     {
@@ -719,7 +677,7 @@ public sealed class LodLoginBake
 
         if (success)
         {
-            BeginFadeOut(success, keepResume);
+            CompleteRelease(success, keepResume);
             return;
         }
 
@@ -755,12 +713,7 @@ public sealed class LodLoginBake
         EntityPlayer entity = player.Entity;
         EntityControls controls = entity.Controls;
 
-        if (phase == Phase.FadingOut)
-        {
-            HoldPlayerCameraOnly();
-            BlockPlayerInput(controls);
-            return;
-        }
+        if (phase == Phase.Done) return;
 
         audioMute.EnsureMuted();
         timeFreeze.EnsureFrozen();

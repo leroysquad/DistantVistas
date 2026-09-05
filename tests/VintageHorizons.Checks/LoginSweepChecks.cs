@@ -74,12 +74,21 @@ public static class LoginSweepChecks
 
     static void BackdropHook(Check c)
     {
-        c.Eq("distantvistas:textures/gui/login-backdrop.png",
-            LodLoginBakeScreenRenderer.BackdropAsset.ToString(),
-            "login backdrop asset hook");
-        c.Eq("distantvistas:textures/gui/login-title-rainbow.png",
-            LodLoginBakeScreenRenderer.TitleAsset.ToString(),
-            "login title asset hook");
+        string hold = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeVanillaLoadingHold.cs"));
+        c.True(hold.Contains("GuiScreenLoadingGame"),
+            "login sweep holds vanilla world loading screen");
+        c.True(hold.Contains("loadingText"),
+            "vanilla hold updates ScreenManager.loadingText");
+        c.True(hold.Contains("RenderToDefaultFramebuffer"),
+            "vanilla hold re-renders native loading UI each frame");
+
+        string screen = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeScreenRenderer.cs"));
+        c.True(screen.Contains("stockOnly"),
+            "custom DV splash is fallback-only via stockOnly flag");
+        c.True(screen.Contains("stock-looking"),
+            "screen renderer documented as stock fallback, not primary UX");
     }
 
     static void AudioMuteKeys(Check c)
@@ -170,27 +179,35 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeOverlay.cs"));
         c.True(!overlay.Contains(": GuiDialog"),
             "login overlay coordinator is not a fragile GuiDialog");
-        c.True(overlay.Contains("PrepareImmediate"),
-            "login overlay prepares graphics immediately on show");
+        c.True(overlay.Contains("LodLoginBakeVanillaLoadingHold"),
+            "login overlay coordinates vanilla loading hold");
         c.True(overlay.Contains("LodLoginBakeInputGuard"),
             "login overlay uses deferred input guard");
 
+        string hold = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeVanillaLoadingHold.cs"));
+        c.True(hold.Contains("GuiScreenLoadingGame"),
+            "vanilla hold resolves native loading screen");
+        c.True(hold.Contains("LodLoginBakeStockLoadingFallback"),
+            "vanilla hold falls back to stock Loading… UI");
+        c.True(hold.Contains("AfterFinalComposition"),
+            "vanilla hold paints ortho and after-final passes");
+
+        string fallback = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeStockLoadingFallback.cs"));
+        c.True(fallback.Contains("stockOnly: true"),
+            "stock fallback uses minimal renderer, not DV splash");
+
         string screen = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeScreenRenderer.cs"));
-        c.True(screen.Contains("OpaqueCover"),
-            "screen renderer paints opaque base every frame");
+        c.True(screen.Contains("DrawStockLayout"),
+            "fallback renderer draws stock Loading… layout");
         c.True(screen.Contains("TryDrawWithInternalQuad"),
-            "screen renderer falls back to ortho internal quad tint path");
+            "fallback renderer uses ortho internal quad tint path");
         c.True(screen.Contains("TryDrawWithExplicitQuad"),
-            "screen renderer uses explicit MeshRef on after-final pass");
+            "fallback renderer uses explicit MeshRef on after-final pass");
         c.True(screen.Contains("HasEverPaintedOpaque"),
-            "screen renderer tracks whether ortho ever painted");
-        c.True(screen.Contains("DrawFullFrame"),
-            "screen renderer draws full UI on ortho and after-final passes");
-        c.True(screen.Contains("SetOverlayAlpha"),
-            "screen renderer supports fade-out alpha");
-        c.True(screen.Contains("RequiredHealthyFrames"),
-            "screen renderer tracks overlay health");
+            "fallback renderer tracks whether ortho ever painted");
 
         string renderer = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodTerrainRenderer.cs"));
@@ -227,8 +244,10 @@ public static class LoginSweepChecks
             "login bake settles after each bake");
         c.True(bake.Contains("OverlayWarmup"),
             "login bake warms overlay before teleports");
-        c.True(bake.Contains("AbortSweep"),
-            "login bake aborts if overlay never becomes healthy");
+        c.True(bake.Contains("continuing sweep anyway"),
+            "login bake continues if vanilla loading screen never paints");
+        c.True(bake.Contains("vanilla loading screen active"),
+            "login bake logs when vanilla loading screen is ready");
         c.True(bake.Contains("LodLoginBakeWorldHide"),
             "login bake hides vanilla chunks during sweep");
         c.True(bake.Contains("LodLoginBakePlayerMove.ApplyQuiet"),
