@@ -1,3 +1,8 @@
+## 0.8.4
+- **Cancel/abort release fix.** Esc cancel and other non-success teardown paths now set `LoginBakeComplete` so LOD terrain, snow line, and seasonal uniforms return to normal play immediately — previously only a successful sweep or gate skip did, leaving cancel stuck in pre-sweep render mode.
+- **Vanilla loading hold reset on re-show.** `useStockFallback` is cleared when a new sweep starts so a prior stock fallback (or mid-sweep draw failure) cannot permanently skip `GuiScreenLoadingGame` on the next join in the same client session.
+- **Resume camera pin.** Restoring a saved sweep checkpoint now applies the saved entity pose before capturing `CameraPos`, so the loading screen no longer pins the camera to the wrong join spawn while teleports resume.
+
 ## 0.8.3
 - **Vanilla loading screen during visit sweep (product direction).** The custom Distant Vistas landscape splash and gold title panel are no longer the primary join UX. While the login visit sweep runs, the mod re-renders Vintage Story's native `GuiScreenLoadingGame` and updates `ScreenManager.loadingText` with sweep progress — the same stock "Loading…" view you see when a world first comes in. Quiet teleports, per-column season bake, miss re-sweep, cancel/resume, and skip-if-complete gates are unchanged. Play releases only when the sweep finishes, is skipped, or you cancel.
 - **Stock fallback only when vanilla cannot be held.** If `GuiScreenLoadingGame` cannot be resolved or drawn, a minimal dark fill + "Loading…" + progress bar is used — not the DV backdrop/title splash. Log line: `stock Loading… fallback (vanilla screen unavailable)`.

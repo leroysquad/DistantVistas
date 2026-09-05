@@ -122,6 +122,10 @@ public static class LoginSweepChecks
             "login bake does not abort solely on overlay paint counter");
         c.True(bake.Contains("restoreCameraPos"),
             "login bake pins camera while entity teleports for chunk load");
+        c.True(bake.Contains("entity.Pos.SetFrom(restorePos)"),
+            "login bake resume restores entity pose before pinning camera");
+        c.True(bake.Contains("renderer.LoginBakeComplete = true"),
+            "login bake teardown releases player to normal LOD draw");
         c.True(bake.Contains("CameraPos.Set"),
             "login bake writes frozen camera position each tick");
 
@@ -190,6 +194,8 @@ public static class LoginSweepChecks
             "vanilla hold resolves native loading screen");
         c.True(hold.Contains("LodLoginBakeStockLoadingFallback"),
             "vanilla hold falls back to stock Loading… UI");
+        c.True(hold.Contains("useStockFallback = false"),
+            "vanilla hold retries native screen on each sweep show");
         c.True(hold.Contains("AfterFinalComposition"),
             "vanilla hold paints ortho and after-final passes");
 

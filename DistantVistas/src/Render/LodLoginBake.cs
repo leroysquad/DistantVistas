@@ -141,7 +141,7 @@ public sealed class LodLoginBake
             "[DistantVistas] Login visit sweep paused — {0} region(s) remaining. Relog to resume (same season or within {1} days).",
             left, (int)LodLoginSweepResume.MaxResumeDayGap);
         overlay.UpdateProgress(Progress,
-            $"Paused — {left} region(s) saved. Relog to resume (Esc again cancelled).");
+            $"Paused — {left} region(s) saved. Relog to resume.");
         Teardown(success: false, keepResume: true);
     }
 
@@ -685,6 +685,7 @@ public sealed class LodLoginBake
         phase = Phase.Done;
         pipeline.DeferLegacyHeal = false;
         renderer.LoginBakeOverlayActive = false;
+        renderer.LoginBakeComplete = true;
 
         if (keepResume)
             SaveResumeSnapshot();
@@ -749,7 +750,9 @@ public sealed class LodLoginBake
         restorePos.SetPos(resume.RestoreX, resume.RestoreY, resume.RestoreZ);
         restorePos.Yaw = resume.RestoreYaw;
         restorePos.Pitch = resume.RestorePitch;
-        restoreCameraPos.Set(capi.World.Player.Entity.CameraPos);
+        EntityPlayer entity = capi.World.Player.Entity;
+        entity.Pos.SetFrom(restorePos);
+        restoreCameraPos.Set(entity.CameraPos);
         restoreCaptured = true;
     }
 

@@ -40,7 +40,9 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
         HasRendered = false;
         loggedFirstPaint = false;
         loggedResolve = false;
+        useStockFallback = false;
         detail = "";
+        stockFallback?.Hide();
         Resolve();
     }
 
