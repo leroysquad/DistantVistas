@@ -1,3 +1,6 @@
+## 0.7.85
+- **Login bake miss audit.** After the main visit sweep, audit every visited L0 cell for load failure, empty capture, pending capture, provisional capture, or incomplete bake. Re-queue and re-sweep only misses (overlay, mute, freeze, and input lock stay on) until the audit is clean, then drain mips, stabilize, and teardown. Progress UI names the retry pass.
+
 ## 0.7.84
 - **Login bake colour match (critical).** Visit-sweep bake now samples vanilla `Block.GetColor` at each column top (with split climate + season fallback matching the live shader). Baked sections use alpha band 3 so the mesher and shaders display stored RGB exactly — no manila wash from live climate/season multiply, keep-origin ratio, snow overlay, or valuenoise.
 

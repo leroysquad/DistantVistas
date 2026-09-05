@@ -12,6 +12,7 @@ public static class LoginSweepChecks
         AudioMuteKeys(c);
         TimeFreezeKey(c);
         TeardownHook(c);
+        AuditMisses(c);
     }
 
     static void L0ChunkColumns(Check c)
@@ -76,5 +77,32 @@ public static class LoginSweepChecks
             "login bake samples vanilla GetColor at column top");
         c.True(season.Contains("ApplyColorMapOnRgba(\n            climate, (string?)null,"),
             "login bake fallback samples climate without season on white");
+    }
+
+    static void AuditMisses(Check c)
+    {
+        string bake = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
+        c.True(bake.Contains("Phase.Auditing"), "login bake has an audit phase before release");
+        c.True(bake.Contains("Retrying missed regions"),
+            "login bake UI names the miss-resweep pass");
+
+        var world = new LodWorld();
+        long key = LodWorld.SectionKey(0, 1, 2);
+        world.InstallStoredKey(0, 1, 2, applyToParent: false, provisional: false);
+        world.Sections[key] = new LodSection();
+        long failed = LodWorld.SectionKey(0, 9, 9);
+        world.LoadFailed.Add(failed);
+
+        Block[] blocks = Array.Empty<Block>();
+        System.Func<Block, (int Color, LodUntintedShare Share)> untinted =
+            _ => (0, LodUntintedShare.None);
+
+        c.Eq(LodLoginBakeAudit.MissReason.LoadFailed,
+            LodLoginBakeAudit.Classify(world, null!, failed, blocks, null, untinted),
+            "load-failed keys are misses");
+        c.Eq(LodLoginBakeAudit.MissReason.EmptyCapture,
+            LodLoginBakeAudit.Classify(world, null!, key, blocks, null, untinted),
+            "zero captured columns is a miss");
     }
 }

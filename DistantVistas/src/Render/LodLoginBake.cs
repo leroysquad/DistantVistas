@@ -19,7 +19,7 @@ namespace DistantVistas;
 /// </summary>
 public sealed class LodLoginBake
 {
-    public enum Phase { WaitingForWorld, Sweeping, Draining, Stabilizing, Done }
+    public enum Phase { WaitingForWorld, Sweeping, Auditing, Draining, Stabilizing, Done }
 
     enum StopPhase { Teleport, WaitChunks, Capture, Bake, Done }
 
@@ -28,6 +28,7 @@ public sealed class LodLoginBake
     const double StabilizeMaxMs = 28.0;
     const double StabilizeTimeoutSec = 12.0;
     const int MaxDrainTicks = 600;
+    const int AuditSettleTicks = 4;
 
     readonly ICoreClientAPI capi;
     readonly LodPipeline pipeline;
@@ -47,6 +48,9 @@ public sealed class LodLoginBake
     int finished;
     int worldWaitTicks;
     int drainTicks;
+    int auditTicks;
+    int resweepRound;
+    bool retryingMisses;
     Phase phase = Phase.WaitingForWorld;
     bool released;
     long? currentKey;
@@ -62,7 +66,9 @@ public sealed class LodLoginBake
         {
             if (phase == Phase.WaitingForWorld) return 0.03f;
             if (phase == Phase.Sweeping)
-                return total <= 0 ? 0.05f : 0.05f + (float)finished / total * 0.75f;
+                return total <= 0 ? 0.05f : 0.05f + (float)finished / total * 0.70f;
+            if (phase == Phase.Auditing)
+                return 0.76f + Math.Min(0.04f, auditTicks / (float)AuditSettleTicks * 0.04f);
             if (phase == Phase.Draining)
                 return 0.80f + Math.Min(0.05f, drainTicks / (float)MaxDrainTicks * 0.05f);
             if (phase == Phase.Stabilizing)
@@ -101,6 +107,9 @@ public sealed class LodLoginBake
         finished = 0;
         worldWaitTicks = 0;
         drainTicks = 0;
+        auditTicks = 0;
+        resweepRound = 0;
+        retryingMisses = false;
         phase = Phase.WaitingForWorld;
         released = false;
         currentKey = null;
@@ -114,7 +123,10 @@ public sealed class LodLoginBake
         overlay.UpdateProgress(Progress, "Waiting for world to load…");
 
         if (total == 0)
-            BeginDraining();
+        {
+            BeginAuditing();
+            return;
+        }
     }
 
     public void Tick(float dt)
@@ -130,6 +142,9 @@ public sealed class LodLoginBake
                 break;
             case Phase.Sweeping:
                 TickSweeping();
+                break;
+            case Phase.Auditing:
+                TickAuditing();
                 break;
             case Phase.Draining:
                 TickDraining();
@@ -154,7 +169,7 @@ public sealed class LodLoginBake
 
         if (total == 0)
         {
-            BeginDraining();
+            BeginAuditing();
             return;
         }
 
@@ -169,7 +184,7 @@ public sealed class LodLoginBake
             if (pending.Count == 0)
             {
                 RestorePlayerPose();
-                BeginDraining();
+                BeginAuditing();
                 return;
             }
             BeginNextStop();
@@ -190,7 +205,7 @@ public sealed class LodLoginBake
                     && stopTicks < LodLoginSweep.MaxChunkWaitTicks)
                 {
                     overlay.UpdateProgress(Progress,
-                        $"Visiting {finished + 1}/{total} — loading terrain… ({stopTicks})");
+                        $"{VisitPrefix()}loading terrain… ({stopTicks})");
                     return;
                 }
                 SweepColumnsAround(key);
@@ -205,7 +220,7 @@ public sealed class LodLoginBake
                     && stopTicks < LodLoginSweep.MaxCaptureWaitTicks)
                 {
                     overlay.UpdateProgress(Progress,
-                        $"Visiting {finished + 1}/{total} — capturing live terrain… ({Pct(finished, total)})");
+                        $"{VisitPrefix()}capturing live terrain… ({Pct(finished, total)})");
                     return;
                 }
                 stopPhase = StopPhase.Bake;
@@ -217,7 +232,7 @@ public sealed class LodLoginBake
                 stopPhase = StopPhase.Done;
                 currentKey = null;
                 overlay.UpdateProgress(Progress,
-                    $"Visited {finished}/{total} ({Pct(finished, total)})");
+                    $"{VisitPrefix()}{Pct(finished, total)}");
                 break;
         }
     }
@@ -244,6 +259,68 @@ public sealed class LodLoginBake
             BeginStabilizing();
     }
 
+    void BeginAuditing()
+    {
+        RestorePlayerPose();
+        phase = Phase.Auditing;
+        auditTicks = 0;
+        currentKey = null;
+        overlay.UpdateProgress(Progress, "Checking visited regions for gaps…");
+    }
+
+    void TickAuditing()
+    {
+        auditTicks++;
+        pipeline.DrainLoginPersistence(8);
+
+        if (auditTicks < AuditSettleTicks)
+        {
+            overlay.UpdateProgress(Progress, "Checking visited regions for gaps…");
+            return;
+        }
+
+        List<LodLoginBakeAudit.Miss> misses = LodLoginBakeAudit.FindMisses(
+            pipeline.World, pipeline, capi.World.Blocks, plantTintFallback, untintedOf);
+
+        if (misses.Count == 0)
+        {
+            BeginDraining();
+            return;
+        }
+
+        if (resweepRound >= LodLoginBakeAudit.MaxResweepRounds)
+        {
+            capi.Logger.Warning(
+                "[DistantVistas] Login visit sweep: {0} regions still incomplete after {1} retry passes — continuing anyway.",
+                misses.Count, resweepRound);
+            BeginDraining();
+            return;
+        }
+
+        resweepRound++;
+        retryingMisses = true;
+        pending.Clear();
+        foreach (LodLoginBakeAudit.Miss miss in misses)
+            pending.Enqueue(miss.Key);
+
+        total = pending.Count;
+        finished = 0;
+        phase = Phase.Sweeping;
+        capi.Logger.Notification(
+            "[DistantVistas] Login visit sweep: retrying {0} missed regions (pass {1}).",
+            total, resweepRound);
+        overlay.UpdateProgress(Progress,
+            $"Retrying {total} missed region{(total == 1 ? "" : "s")} (pass {resweepRound})…");
+        BeginNextStop();
+    }
+
+    string VisitPrefix()
+    {
+        if (retryingMisses)
+            return $"Retrying missed regions (pass {resweepRound}) — {finished + 1}/{total} — ";
+        return $"Visiting {finished + 1}/{total} — ";
+    }
+
     void BeginNextStop()
     {
         if (pending.Count == 0) return;
@@ -255,7 +332,7 @@ public sealed class LodLoginBake
         (double x, double y, double z) = LodLoginSweep.VisitPosition(capi.World, key);
         TeleportPlayer(x, y, z);
         overlay.UpdateProgress(Progress,
-            $"Visiting {finished + 1}/{total} — moving to region… ({Pct(finished, total)})");
+            $"{VisitPrefix()}moving to region… ({Pct(finished, total)})");
     }
 
     void SweepColumnsAround(long l0Key)
@@ -286,6 +363,7 @@ public sealed class LodLoginBake
         world.MarkChanged(l0Key);
         pipeline.InvalidateGpuMesh?.Invoke(l0Key);
         world.RenderDirty.Add(l0Key);
+        pipeline.DrainLoginPersistence(1);
     }
 
     void BeginDraining()

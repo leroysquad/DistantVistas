@@ -2,7 +2,7 @@
     "type": "code",
     "modid": "distantvistas",
     "name": "Distant Vistas",
-    "version": "0.7.84",
+    "version": "0.7.85",
     "side": "Universal",
     "requiredOnClient": true,
     "requiredOnServer": false,
