@@ -25,6 +25,7 @@ public static class StoreChecks
         ProvisionalBitsSurviveReopen(c);
         CapturePolicyStamp(c);
         FlagBakedSurvivesReclassify(c);
+        FlagBakedSurvivesRefreshStable(c);
     }
 
     /// <summary>
@@ -522,6 +523,24 @@ public static class StoreChecks
             "baked entries keep tint slot 0 after reclassify");
         c.True((e.Flags & LodPaletteEntry.FlagThin) != 0,
             "live block flags are still refreshed on load");
+    }
+
+    static void FlagBakedSurvivesRefreshStable(Check c)
+    {
+        const int bakedGreen = unchecked((int)0xFF407040);
+        const int dirtMean = unchecked((int)0xFF806040);
+
+        var section = new LodSection();
+        section.FindOrAddPaletteEntry(blockId: 42, color: bakedGreen, flags: LodPaletteEntry.FlagBaked);
+
+        int refreshed = LodPaletteRepair.RefreshStable(section, _ =>
+            dirtMean);
+
+        c.Eq(0, refreshed, "RefreshStable does not touch FlagBaked palettes");
+        c.Eq(bakedGreen, section.Palette[0].Color,
+            "baked seasonal RGB survives stable-colour refresh on load");
+        c.True((section.Palette[0].Flags & LodPaletteEntry.FlagBaked) != 0,
+            "FlagBaked bit stays set");
     }
 
     static LodSection Restore(Check c, LodSection section, string[]? codes = null)

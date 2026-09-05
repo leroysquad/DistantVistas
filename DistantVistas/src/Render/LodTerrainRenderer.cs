@@ -2237,6 +2237,9 @@ public class LodTerrainRenderer : IRenderer
             if (!LodCoveragePolicy.ShouldRemeshWhileIdle(
                     windowMovedThisFrame, HasAnyMesh(key), IsProvisionalKey(key)))
                 continue;
+            // Look-only: same deferral as RequestMesh so this walk does not scan
+            // thousands of behind-camera dirty keys every yaw tick.
+            if (ShouldDeferMeshRequest(key)) continue;
 
             double distSq = NearestDistanceSqTo(key);
             int candLevel = LodWorld.KeyLevel(key);

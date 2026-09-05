@@ -430,6 +430,7 @@ public class LodPipeline
         if (LodWorld.KeyLevel(key) == 0) section.MarkCapturedQuadrantsProvisional();
 
         World.InstallLoaded(key, section);
+        AfterSectionLoaded(key, section);
         // Persist it: re-fetching a mean 45.9 KB a section every session is not an option,
         // so a section from the network becomes part of the local cache like any other.
         World.MarkChanged(key);
