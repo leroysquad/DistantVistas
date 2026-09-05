@@ -15,6 +15,13 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
     static readonly FieldInfo? CachedScreensField = typeof(ScreenManager).GetField(
         "CachedScreens", BindingFlags.Instance | BindingFlags.NonPublic);
 
+    static readonly MethodInfo? LoadAndCacheScreenMethod = typeof(ScreenManager).GetMethod(
+        "LoadAndCacheScreen",
+        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+        binder: null,
+        types: new[] { typeof(Type) },
+        modifiers: null);
+
     readonly ICoreClientAPI capi;
     LodLoginBakeStockLoadingFallback? stockFallback;
 
@@ -145,18 +152,39 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
 
     static GuiScreenLoadingGame? FindCachedLoadingScreen(ScreenManager sm)
     {
+        GuiScreenLoadingGame? fromApi = TryLoadAndCacheScreen(sm);
+        if (fromApi != null) return fromApi;
+
         if (CachedScreensField?.GetValue(sm) is not System.Collections.IDictionary dict)
             return null;
 
+        Type loadingType = typeof(GuiScreenLoadingGame);
         foreach (System.Collections.DictionaryEntry entry in dict)
         {
-            if (entry.Key is GuiScreenLoadingGame loading
-                && entry.Value is Type t
-                && t == typeof(GuiScreenLoadingGame))
+            // VS 1.22.x ScreenManager.CachedScreens is Dictionary<Type, GuiScreen>
+            // (see LoadAndCacheScreen(Type) in VintagestoryLib).
+            if (entry.Key is Type t && t == loadingType && entry.Value is GuiScreenLoadingGame loading)
                 return loading;
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Prefer the engine's cache API when available — same path the client uses during world load.
+    /// </summary>
+    static GuiScreenLoadingGame? TryLoadAndCacheScreen(ScreenManager sm)
+    {
+        if (LoadAndCacheScreenMethod == null) return null;
+        try
+        {
+            object? result = LoadAndCacheScreenMethod.Invoke(sm, new object[] { typeof(GuiScreenLoadingGame) });
+            return result as GuiScreenLoadingGame;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public void Dispose()

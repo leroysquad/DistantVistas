@@ -82,6 +82,15 @@ public static class LoginSweepChecks
             "vanilla hold updates ScreenManager.loadingText");
         c.True(hold.Contains("RenderToDefaultFramebuffer"),
             "vanilla hold re-renders native loading UI each frame");
+        c.True(hold.Contains("LoadAndCacheScreen"),
+            "vanilla hold uses ScreenManager.LoadAndCacheScreen when available");
+        c.True(hold.Contains("entry.Key is Type t"),
+            "CachedScreens dictionary uses Type key (VS 1.22.x layout)");
+
+        string mod = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "DistantVistasModSystem.cs"));
+        c.True(mod.Contains("RegisterRenderer(loginVanillaLoading"),
+            "vanilla loading hold IRenderer registered at mod startup");
 
         string screen = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeScreenRenderer.cs"));
