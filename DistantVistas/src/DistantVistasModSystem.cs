@@ -1069,7 +1069,6 @@ public class DistantVistasModSystem : ModSystem
         if (!sweepGate.RunSweep)
         {
             renderer.LoginBakeComplete = true;
-            LodLoginSweepComplete.RecordSuccess(capi, pipeline.World);
             LodLoginBakeSweepGate.ClearHandoverDeferral(capi, "skip", force: true);
             Mod.Logger.Notification(
                 "[DistantVistas] Login visit sweep skipped — {0}. Entering play ({1} sections in cache).",

@@ -36,14 +36,14 @@ public static class LodLoginSweepGate
             return new Result(true, $"{misses.Count} visited region(s) still incomplete");
 
         LodLoginSweepComplete? complete = LodLoginSweepComplete.TryLoad(capi);
-        if (complete != null)
-        {
-            if (complete.VisitedKeyCount < visited)
-                return new Result(true, "visited canvas grew since last successful sweep");
+        if (complete == null)
+            return new Result(true, "no successful sweep recorded yet");
 
-            if (!LodLoginSweepWindow.IsWithin(capi.World, complete.Season, complete.SavedTotalDays))
-                return new Result(true, "outside same-season / 30-day window since last sweep");
-        }
+        if (complete.VisitedKeyCount < visited)
+            return new Result(true, "visited canvas grew since last successful sweep");
+
+        if (!LodLoginSweepWindow.IsWithin(capi.World, complete.Season, complete.SavedTotalDays))
+            return new Result(true, "outside same-season / 30-day window since last sweep");
 
         return new Result(false, "visited canvas complete within season window");
     }

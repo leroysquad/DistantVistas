@@ -398,6 +398,8 @@ public static class LoginSweepChecks
             "gate runs bootstrap on empty visited canvas");
         c.True(gate.Contains("still incomplete"),
             "gate runs when audit finds misses");
+        c.True(gate.Contains("no successful sweep recorded yet"),
+            "gate runs when completion marker is missing");
         c.True(gate.Contains("outside same-season / 30-day window"),
             "gate runs when completion window expired");
         c.True(gate.Contains("visited canvas complete within season window"),
@@ -411,6 +413,8 @@ public static class LoginSweepChecks
             "skipped sweep logs and drops into play");
         c.True(mod.Contains("ClearHandoverDeferral(capi, \"skip\""),
             "skipped sweep clears handover deferral before play");
+        c.False(mod.Contains("LodLoginSweepComplete.RecordSuccess"),
+            "skip path must not stamp completion marker");
         c.True(mod.Contains("LoginVisitSweepEnabled"),
             "sweep gated by config flag");
         c.True(new DistantVistasConfig().LoginVisitSweepEnabled,
