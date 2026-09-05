@@ -10,13 +10,17 @@ namespace DistantVistas;
 /// <summary>
 /// Records the last successful login visit sweep so a later join can skip the overlay
 /// when the visited canvas is still complete within the season / day window.
+/// Scoped per world via <see cref="WorldId"/> / filename (same key as the LOD .db).
 /// </summary>
 public sealed class LodLoginSweepComplete
 {
-    public const string RelPath = "ModData/distantvistas/login-sweep-complete.json";
-    public const int SchemaVersion = 1;
+    public const string LegacyFileName = "login-sweep-complete.json";
+    public const string FileNamePrefix = "login-sweep-complete-";
+    public const string RelPath = "ModData/distantvistas/login-sweep-complete-<worldId>.json";
+    public const int SchemaVersion = 2;
 
     public int Schema { get; set; } = SchemaVersion;
+    public string WorldId { get; set; } = "";
     public string Season { get; set; } = "";
     public string CalendarToken { get; set; } = "";
     public double SavedTotalDays { get; set; }
@@ -29,11 +33,29 @@ public sealed class LodLoginSweepComplete
     };
 
     public static string PathFor(ICoreClientAPI capi) =>
-        Path.Combine(capi.GetOrCreateDataPath("ModData/distantvistas"), "login-sweep-complete.json");
+        PathFor(capi, LodWorldKey.For(capi.World));
+
+    public static string PathFor(ICoreClientAPI capi, string worldId) =>
+        Path.Combine(capi.GetOrCreateDataPath("ModData/distantvistas"), FileNamePrefix + worldId + ".json");
+
+    public static string LegacyPathFor(ICoreClientAPI capi) =>
+        Path.Combine(capi.GetOrCreateDataPath("ModData/distantvistas"), LegacyFileName);
 
     public static LodLoginSweepComplete? TryLoad(ICoreClientAPI capi)
     {
-        string path = PathFor(capi);
+        string worldId = LodWorldKey.For(capi.World);
+        LodLoginSweepComplete? data = TryRead(PathFor(capi, worldId));
+        if (MatchesWorld(data, worldId)) return data;
+
+        // Legacy global file (pre-0.8.24): only honor when WorldId was migrated in and matches.
+        // Schema-1 / missing WorldId → ignore (safest; prevents cross-world skip).
+        data = TryRead(LegacyPathFor(capi));
+        if (MatchesWorld(data, worldId)) return data;
+        return null;
+    }
+
+    static LodLoginSweepComplete? TryRead(string path)
+    {
         if (!File.Exists(path)) return null;
         try
         {
@@ -48,11 +70,18 @@ public sealed class LodLoginSweepComplete
         }
     }
 
+    static bool MatchesWorld(LodLoginSweepComplete? data, string worldId) =>
+        data != null
+        && !string.IsNullOrEmpty(data.WorldId)
+        && string.Equals(data.WorldId, worldId, StringComparison.Ordinal);
+
     public void Save(ICoreClientAPI capi)
     {
         try
         {
-            string path = PathFor(capi);
+            if (string.IsNullOrEmpty(WorldId))
+                WorldId = LodWorldKey.For(capi.World);
+            string path = PathFor(capi, WorldId);
             string? dir = Path.GetDirectoryName(path);
             if (dir != null) Directory.CreateDirectory(dir);
             string json = JsonSerializer.Serialize(this, JsonOptions);
@@ -79,6 +108,7 @@ public sealed class LodLoginSweepComplete
 
         return new LodLoginSweepComplete
         {
+            WorldId = LodWorldKey.For(capi.World),
             Season = seasonSlug,
             CalendarToken = token,
             SavedTotalDays = cal.TotalDays,

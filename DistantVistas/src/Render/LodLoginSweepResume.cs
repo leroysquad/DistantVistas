@@ -10,14 +10,18 @@ namespace DistantVistas;
 /// <summary>
 /// Persists an in-progress login visit sweep so the player can cancel and resume later
 /// when still within <see cref="MaxResumeDayGap"/> in-game days (season alone does not qualify).
+/// Scoped per world via <see cref="WorldId"/> / filename (same key as the LOD .db).
 /// </summary>
 public sealed class LodLoginSweepResume
 {
-    public const string RelPath = "ModData/distantvistas/login-sweep-resume.json";
-    public const int SchemaVersion = 1;
+    public const string LegacyFileName = "login-sweep-resume.json";
+    public const string FileNamePrefix = "login-sweep-resume-";
+    public const string RelPath = "ModData/distantvistas/login-sweep-resume-<worldId>.json";
+    public const int SchemaVersion = 2;
     public const double MaxResumeDayGap = 30.0;
 
     public int Schema { get; set; } = SchemaVersion;
+    public string WorldId { get; set; } = "";
     public string Season { get; set; } = "";
     public string CalendarToken { get; set; } = "";
     public double SavedTotalDays { get; set; }
@@ -42,11 +46,28 @@ public sealed class LodLoginSweepResume
     };
 
     public static string PathFor(ICoreClientAPI capi) =>
-        Path.Combine(capi.GetOrCreateDataPath("ModData/distantvistas"), "login-sweep-resume.json");
+        PathFor(capi, LodWorldKey.For(capi.World));
+
+    public static string PathFor(ICoreClientAPI capi, string worldId) =>
+        Path.Combine(capi.GetOrCreateDataPath("ModData/distantvistas"), FileNamePrefix + worldId + ".json");
+
+    public static string LegacyPathFor(ICoreClientAPI capi) =>
+        Path.Combine(capi.GetOrCreateDataPath("ModData/distantvistas"), LegacyFileName);
 
     public static LodLoginSweepResume? TryLoad(ICoreClientAPI capi)
     {
-        string path = PathFor(capi);
+        string worldId = LodWorldKey.For(capi.World);
+        LodLoginSweepResume? data = TryRead(PathFor(capi, worldId));
+        if (IsUsable(data, worldId)) return data;
+
+        // Legacy global (pre-0.8.24): only honor when WorldId matches current world.
+        data = TryRead(LegacyPathFor(capi));
+        if (IsUsable(data, worldId)) return data;
+        return null;
+    }
+
+    static LodLoginSweepResume? TryRead(string path)
+    {
         if (!File.Exists(path)) return null;
         try
         {
@@ -61,6 +82,12 @@ public sealed class LodLoginSweepResume
             return null;
         }
     }
+
+    static bool IsUsable(LodLoginSweepResume? data, string worldId) =>
+        data != null
+        && !string.IsNullOrEmpty(data.WorldId)
+        && string.Equals(data.WorldId, worldId, StringComparison.Ordinal)
+        && data.Pending.Count > 0;
 
     public static void Delete(ICoreClientAPI capi)
     {
@@ -79,7 +106,9 @@ public sealed class LodLoginSweepResume
     {
         try
         {
-            string path = PathFor(capi);
+            if (string.IsNullOrEmpty(WorldId))
+                WorldId = LodWorldKey.For(capi.World);
+            string path = PathFor(capi, WorldId);
             string? dir = Path.GetDirectoryName(path);
             if (dir != null) Directory.CreateDirectory(dir);
             string json = JsonSerializer.Serialize(this, JsonOptions);
@@ -94,6 +123,10 @@ public sealed class LodLoginSweepResume
     public bool IsEligible(IClientWorldAccessor world)
     {
         if (Pending.Count == 0) return false;
+        string current = LodWorldKey.For(world);
+        if (string.IsNullOrEmpty(WorldId)
+            || !string.Equals(WorldId, current, StringComparison.Ordinal))
+            return false;
         return LodLoginSweepWindow.IsWithin(world, Season, SavedTotalDays);
     }
 
@@ -122,6 +155,7 @@ public sealed class LodLoginSweepResume
 
         return new LodLoginSweepResume
         {
+            WorldId = LodWorldKey.For(capi.World),
             Season = seasonSlug,
             CalendarToken = token,
             SavedTotalDays = cal.TotalDays,

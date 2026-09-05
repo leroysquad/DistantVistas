@@ -19,6 +19,8 @@ public static class LodLoginSweepGate
         Block? plantTintFallback,
         System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf)
     {
+        string worldId = LodWorldKey.For(capi.World);
+
         LodLoginSweepResume? resume = LodLoginSweepResume.TryLoad(capi);
         if (resume != null && resume.IsEligible(capi.World))
             return new Result(true, "resuming cancelled mid-sweep checkpoint");
@@ -32,9 +34,11 @@ public static class LodLoginSweepGate
 
         // Prefer skip when a successful sweep is still in-window and the canvas did not grow —
         // even if FindMisses reports leftovers. User intent: do not re-canvas the same world
-        // within the 30 in-game-day window.
+        // within the 30 in-game-day window. Never skip across worlds (0.8.24).
         LodLoginSweepComplete? complete = LodLoginSweepComplete.TryLoad(capi);
         if (complete != null
+            && !string.IsNullOrEmpty(complete.WorldId)
+            && string.Equals(complete.WorldId, worldId, StringComparison.Ordinal)
             && complete.VisitedKeyCount >= visited
             && LodLoginSweepWindow.IsWithin(capi.World, complete.Season, complete.SavedTotalDays))
         {
@@ -47,8 +51,10 @@ public static class LodLoginSweepGate
         if (misses.Count > 0)
             return new Result(true, $"{misses.Count} visited region(s) still incomplete");
 
-        if (complete == null)
-            return new Result(true, "no successful sweep recorded yet");
+        if (complete == null
+            || string.IsNullOrEmpty(complete.WorldId)
+            || !string.Equals(complete.WorldId, worldId, StringComparison.Ordinal))
+            return new Result(true, "no successful sweep recorded yet for this world");
 
         if (complete.VisitedKeyCount < visited)
             return new Result(true, "visited canvas grew since last successful sweep");
