@@ -25,7 +25,12 @@ public static class LodLoginBakeSweepGate
     /// <summary>Login visit sweep is armed or running.</summary>
     public static bool SweepActive { get; set; }
 
-    /// <summary>Skip <see cref="GuiScreenRunningGame"/> world draws while the loader is held.</summary>
+    /// <summary>
+    /// Legacy flag: when true, Harmony skips RunningGame RenderToPrimary/post passes.
+    /// Login sweep no longer arms this (0.8.25+) — world flash is blocked via
+    /// <see cref="LodLoginBakeWorldHide"/> while the present pipeline still runs so
+    /// Ortho/AfterFinalComposition splash IRenderers can paint and present.
+    /// </summary>
     public static bool SuppressRunningGameRender { get; set; }
 
     /// <summary><see cref="GuiScreenRunningGame.handOverRenderingToRunningGame"/> was blocked.</summary>
@@ -39,7 +44,9 @@ public static class LodLoginBakeSweepGate
         // Sweep owns handover again — stop character-wait pass-through.
         AllowHandoverPassThrough = false;
         SweepActive = true;
-        SuppressRunningGameRender = true;
+        // Do NOT suppress RunningGame render — skipping RenderToPrimary blanks the
+        // framebuffer present path so Ortho splash never reaches the screen (black).
+        SuppressRunningGameRender = false;
     }
 
     /// <summary>

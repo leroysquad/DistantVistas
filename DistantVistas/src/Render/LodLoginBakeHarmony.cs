@@ -6,8 +6,10 @@ using Vintagestory.Client.NoObf;
 namespace DistantVistas;
 
 /// <summary>
-/// Defers world-load handover while the login visit sweep runs, and suppresses running-game
-/// world draws when the vanilla loader is held.
+/// Defers world-load handover while the login visit sweep runs. Sweep ticks advance
+/// from OnNewFrame; splash paints via registered Ortho/AfterFinalComposition IRenderers
+/// on the RunningGame present pipeline (world flash blocked by WorldHide, not by
+/// skipping RenderToPrimary). The DV splash MUST present every frame during the sweep.
 /// </summary>
 public static class LodLoginBakeHarmony
 {
@@ -18,9 +20,6 @@ public static class LodLoginBakeHarmony
 
     /// <summary>Advance sweep ticks at the start of each ScreenManager frame, before any screen draw.</summary>
     public static Action<float>? RenderPulse { get; set; }
-
-    /// <summary>Paint DV splash from OnNewFrame while sweep is active, and as backup before RunningGame framebuffer present.</summary>
-    public static Action? PaintSplashCover { get; set; }
 
     public static void Apply(Vintagestory.API.Common.Mod mod)
     {
@@ -35,7 +34,6 @@ public static class LodLoginBakeHarmony
         harmony = null;
         IsLoginSweepEnabled = null;
         RenderPulse = null;
-        PaintSplashCover = null;
     }
 
     static bool SkipRunningGameRender() => LodLoginBakeSweepGate.SuppressRunningGameRender;
@@ -47,12 +45,9 @@ public static class LodLoginBakeHarmony
     {
         static void Prefix(float dt)
         {
+            // Tick only — do not OrthoMode-paint here. Splash must come from RunningGame
+            // Ortho/AfterFinalComposition IRenderers so the framebuffer actually presents.
             RenderPulse?.Invoke(dt);
-            // Present-path backup alone is unreliable while world draws are suppressed —
-            // paint every frame from the frame pulse so the splash reaches the screen.
-            // PaintSweepFrame must OrthoMode+PerspectiveMode pair (see screen renderer).
-            if (LodLoginBakeSweepGate.SweepActive)
-                PaintSplashCover?.Invoke();
         }
     }
 
@@ -74,6 +69,8 @@ public static class LodLoginBakeHarmony
     }
     }
 
+    // Kept for optional/legacy SuppressRunningGameRender=true; login sweep leaves it false
+    // so RenderToPrimary runs and Ortho splash IRenderers can present.
     [HarmonyPatch(typeof(GuiScreenRunningGame), "RenderToPrimary")]
     sealed class SkipRenderToPrimary
     {
@@ -96,15 +93,5 @@ public static class LodLoginBakeHarmony
     sealed class SkipRenderAfterBlit
     {
         static bool Prefix() => !SkipRunningGameRender();
-    }
-
-    [HarmonyPatch(typeof(GuiScreenRunningGame), "RenderToDefaultFramebuffer")]
-    sealed class PaintSplashBeforeRunningFramebuffer
-    {
-        static void Prefix()
-        {
-            if (!SkipRunningGameRender()) return;
-            PaintSplashCover?.Invoke();
-        }
     }
 }

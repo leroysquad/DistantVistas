@@ -144,16 +144,14 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     }
 
     /// <summary>
-    /// Guaranteed splash paint path — called from ortho/after-final renderers and from
-    /// <see cref="LodLoginBakeHarmony"/> OnNewFrame / framebuffer Prefix while world draws
-    /// are suppressed (OrthoMode + hard framebuffer clear + quad fallback).
-    /// Always pairs OrthoMode with PerspectiveMode — VS OrthoMode GlPushMatrixes and
-    /// never restoring overflows StackMatrix4 (~32 frames) before shadow Push.
+    /// Legacy out-of-stage paint (OrthoMode + PerspectiveMode pair). Prefer
+    /// <see cref="OnRenderFrame"/> on Ortho / AfterFinalComposition so the framebuffer
+    /// presents. Kept for diagnostics; login sweep no longer calls this from OnNewFrame
+    /// (that path painted without presenting → permanent black).
     /// </summary>
     public void PaintSweepFrame()
     {
         if (!active || overlayAlpha <= 0f) return;
-        // OnNewFrame / framebuffer Prefix — outside Ortho stage; must pair push/pop.
         PaintFrame(orthoPass: true, countHealth: true, manageOrthoPair: true);
     }
 

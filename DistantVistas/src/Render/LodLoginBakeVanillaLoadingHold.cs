@@ -8,9 +8,10 @@ namespace DistantVistas;
 /// <summary>
 /// Covers the login visit sweep with the Distant Vistas splash (backdrop + title + progress bar)
 /// and keeps <see cref="ScreenManager.loadingText"/> updated. During the sweep the client stays on
-/// <see cref="GuiScreenRunningGame"/> (world draws suppressed via Harmony) so
-/// <see cref="GuiScreenLoadingGame.RenderToDefaultFramebuffer"/> cannot block the render
-/// thread waiting for async sounds.
+/// <see cref="GuiScreenRunningGame"/> so Ortho/AfterFinalComposition IRenderers present the splash
+/// every frame; terrain flash is blocked by <see cref="LodLoginBakeWorldHide"/>. Harmony skips
+/// <see cref="GuiScreenLoadingGame.RenderToDefaultFramebuffer"/> so async-sound waits cannot
+/// block sweep ticks.
 /// </summary>
 public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
 {
@@ -91,9 +92,6 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
         ApplyLoadingText();
         splashOverlay.OnRenderFrame(deltaTime, stage);
     }
-
-    /// <summary>Paint opaque cover + splash before RunningGame framebuffer present.</summary>
-    public void PaintSweepFrame() => splashOverlay.PaintSweepFrame();
 
     void EnsureRunningScreenCurrent()
     {
