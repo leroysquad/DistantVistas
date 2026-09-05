@@ -58,6 +58,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     bool gfxReady;
     bool backdropMissing;
     bool titleMissing;
+    bool loggedFirstPaint;
     float fraction;
     float overlayAlpha = 1f;
     string status = "";
@@ -94,6 +95,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
                 gfxReady = false;
                 ConsecutiveOpaqueFrames = 0;
                 HasEverPaintedOpaque = false;
+                loggedFirstPaint = false;
                 PrepareImmediate();
             }
             else
@@ -133,6 +135,22 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         bool safetyPass = stage == EnumRenderStage.AfterFinalComposition;
         if (!orthoPass && !safetyPass) return;
 
+        PaintFrame(orthoPass, countHealth: orthoPass || stockOnly);
+    }
+
+    /// <summary>
+    /// Guaranteed splash paint path — called from ortho/after-final renderers and from
+    /// <see cref="LodLoginBakeHarmony"/> before <see cref="GuiScreenRunningGame.RenderToDefaultFramebuffer"/>
+    /// while world draws are suppressed (OrthoMode + hard framebuffer clear + quad fallback).
+    /// </summary>
+    public void PaintSweepFrame()
+    {
+        if (!active || overlayAlpha <= 0f) return;
+        PaintFrame(orthoPass: true, countHealth: true);
+    }
+
+    void PaintFrame(bool orthoPass, bool countHealth)
+    {
         EnsureGraphicsLoaded();
 
         IRenderAPI rapi = capi.Render;
@@ -140,13 +158,27 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         float h = rapi.FrameHeight;
         if (w <= 0 || h <= 0)
         {
-            if (orthoPass) ConsecutiveOpaqueFrames = 0;
+            if (countHealth) ConsecutiveOpaqueFrames = 0;
             return;
         }
 
-        bool drewOpaque = DrawFullFrame(w, h, orthoPass, countHealth: orthoPass || stockOnly);
-        if (!drewOpaque && orthoPass)
+        EnsureOrthoMode(rapi, w, h);
+
+        bool drewOpaque = DrawFullFrame(w, h, orthoPass, countHealth);
+        if (!drewOpaque && countHealth)
             ConsecutiveOpaqueFrames = 0;
+    }
+
+    static void EnsureOrthoMode(IRenderAPI rapi, float w, float h)
+    {
+        try
+        {
+            rapi.OrthoMode((int)w, (int)h);
+        }
+        catch
+        {
+            // Best-effort — quad fallback may still succeed.
+        }
     }
 
     bool DrawFullFrame(float w, float h, bool orthoPass, bool countHealth)
@@ -158,7 +190,15 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         {
             ConsecutiveOpaqueFrames++;
             if (!HasEverPaintedOpaque)
+            {
                 HasEverPaintedOpaque = true;
+                if (!loggedFirstPaint)
+                {
+                    loggedFirstPaint = true;
+                    capi.Logger.Notification(
+                        "[DistantVistas] Login splash: first opaque frame painted (hard clear + cover).");
+                }
+            }
         }
 
         if (stockOnly)
@@ -262,8 +302,46 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
 
     bool DrawOpaqueCover(float w, float h, bool orthoPass)
     {
+        if (TryHardOpaqueCover(w, h))
+            return true;
+
         tint.Set(OpaqueCover[0], OpaqueCover[1], OpaqueCover[2], OpaqueCover[3] * overlayAlpha);
         return TryDrawSolidColor(0, 0, w, h, 198, tint, orthoPass);
+    }
+
+    /// <summary>Framebuffer clear first, then explicit full-screen white quad tint — never skip.</summary>
+    bool TryHardOpaqueCover(float w, float h)
+    {
+        IRenderAPI rapi = capi.Render;
+        float alpha = OpaqueCover[3] * overlayAlpha;
+        if (alpha <= 0.001f) return false;
+
+        try
+        {
+            FrameBufferRef fb = rapi.CurrentFrameBuffer;
+            if (fb != null)
+            {
+                float[] clear =
+                {
+                    OpaqueCover[0], OpaqueCover[1], OpaqueCover[2], alpha
+                };
+                rapi.ClearFrameBuffer(fb, clear, clearDepthBuffer: true, clearColorBuffers: true);
+                return true;
+            }
+        }
+        catch
+        {
+            // Fall through to quad tint.
+        }
+
+        tint.Set(OpaqueCover[0], OpaqueCover[1], OpaqueCover[2], alpha);
+        int whiteId = EnsureWhiteTexture();
+        if (whiteId <= 0) return false;
+
+        if (TryDrawWithExplicitQuad(whiteId, 0, 0, w, h, 197))
+            return true;
+
+        return TryDrawWithInternalQuad(whiteId, 0, 0, w, h, 197, tint);
     }
 
     void DrawBackdrop(float w, float h, bool orthoPass)

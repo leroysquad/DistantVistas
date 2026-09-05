@@ -92,6 +92,9 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
         splashOverlay.OnRenderFrame(deltaTime, stage);
     }
 
+    /// <summary>Paint opaque cover + splash before RunningGame framebuffer present.</summary>
+    public void PaintSweepFrame() => splashOverlay.PaintSweepFrame();
+
     void EnsureRunningScreenCurrent()
     {
         if (screenManager == null || runningScreen == null) return;

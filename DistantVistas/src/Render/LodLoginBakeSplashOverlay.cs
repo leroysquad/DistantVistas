@@ -34,5 +34,8 @@ public sealed class LodLoginBakeSplashOverlay : IDisposable
     public void OnRenderFrame(float deltaTime, EnumRenderStage stage) =>
         splash.OnRenderFrame(deltaTime, stage);
 
+    /// <summary>Hard-fallback paint while RunningGame world draws are suppressed.</summary>
+    public void PaintSweepFrame() => splash.PaintSweepFrame();
+
     public void Dispose() => splash.Dispose();
 }

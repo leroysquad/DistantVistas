@@ -1,3 +1,6 @@
+## 0.8.18
+- **CRITICAL: login splash black screen (0.8.17 playtest).** While the sweep suppressed `GuiScreenRunningGame` world draws, Harmony also skipped `RenderToDefaultFramebuffer`, so nothing reached the screen and `HasEverPaintedOpaque` stayed false (`loading cover not painted yet`). Fix: paint every frame **before** RunningGame framebuffer present via `OrthoMode` + `ClearFrameBuffer` hard fallback + explicit full-screen quad, then backdrop/title/bar on top; allow framebuffer present (still skip world/post passes). Loading-game async-sound bypass, 3–5 min revisit budget, view-distance boost, and deadlock fixes unchanged.
+
 ## 0.8.17
 - **Tighter login visit sweep (0.8.16 follow-up).** Season revisit target window **~3–5 minutes** (`TargetMinSec` 180, `TargetMaxSec` 300). `RevisitMaxVisitStops` = **75** at ~4s/stop (60–100 range depending on measured stop rate; `MaxVisitStops` ceiling 100). Example: 291 regions → `Refreshing visited land (season) (75 of 291)` ≈ **5 min**. Bootstrap (~2.5 min / 38 stops), view-distance boost+restore, splash, deadlock fixes, oversized resume replan unchanged from 0.8.16.
 

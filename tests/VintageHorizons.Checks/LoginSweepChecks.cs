@@ -118,6 +118,12 @@ public static class LoginSweepChecks
             "harmony skips running-game primary render during sweep");
         c.True(harmony.Contains("OnNewFrame"),
             "harmony pulses sweep before ScreenManager screen draw");
+        c.True(harmony.Contains("PaintSplashBeforeRunningFramebuffer"),
+            "harmony paints splash before running-game framebuffer present");
+        c.True(harmony.Contains("PaintSplashCover"),
+            "harmony exposes splash paint hook for framebuffer prefix");
+        c.True(!harmony.Contains("SkipRunningGameRenderToDefaultFramebuffer"),
+            "harmony no longer skips running-game framebuffer present during sweep");
         c.True(harmony.Contains("GuiScreenLoadingGame"),
             "harmony skips vanilla loading-screen draw during sweep");
 
@@ -252,6 +258,14 @@ public static class LoginSweepChecks
             "splash renderer uses explicit MeshRef on after-final pass");
         c.True(screen.Contains("HasEverPaintedOpaque"),
             "splash renderer tracks whether ortho ever painted");
+        c.True(screen.Contains("ClearFrameBuffer"),
+            "splash renderer hard-clears framebuffer before quad fallback");
+        c.True(screen.Contains("OrthoMode"),
+            "splash renderer sets ortho projection before 2D draws");
+        c.True(screen.Contains("PaintSweepFrame"),
+            "splash renderer exposes guaranteed paint entry point");
+        c.True(screen.Contains("TryHardOpaqueCover"),
+            "splash renderer has hard opaque cover fallback");
 
         string renderer = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodTerrainRenderer.cs"));
@@ -289,6 +303,10 @@ public static class LoginSweepChecks
             "mod wires render pulse from vanilla hold");
         c.True(mod.Contains("OnRenderPulse"),
             "mod connects vanilla hold render pulse");
+        c.True(mod.Contains("PaintSplashCover"),
+            "mod wires splash paint before running-game framebuffer");
+        c.True(mod.Contains("PaintSweepFrame"),
+            "mod exposes splash paint on vanilla hold");
         c.True(mod.Contains("LodLoginBakeHarmony.RenderPulse"),
             "mod wires ScreenManager.OnNewFrame pulse");
     }

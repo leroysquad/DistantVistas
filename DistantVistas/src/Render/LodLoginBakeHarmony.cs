@@ -19,6 +19,9 @@ public static class LodLoginBakeHarmony
     /// <summary>Advance sweep ticks at the start of each ScreenManager frame, before any screen draw.</summary>
     public static Action<float>? RenderPulse { get; set; }
 
+    /// <summary>Paint DV splash before RunningGame framebuffer present while world draws are suppressed.</summary>
+    public static Action? PaintSplashCover { get; set; }
+
     public static void Apply(Vintagestory.API.Common.Mod mod)
     {
         if (harmony != null) return;
@@ -32,6 +35,7 @@ public static class LodLoginBakeHarmony
         harmony = null;
         IsLoginSweepEnabled = null;
         RenderPulse = null;
+        PaintSplashCover = null;
     }
 
     static bool SkipRunningGameRender() => LodLoginBakeSweepGate.SuppressRunningGameRender;
@@ -87,8 +91,12 @@ public static class LodLoginBakeHarmony
     }
 
     [HarmonyPatch(typeof(GuiScreenRunningGame), "RenderToDefaultFramebuffer")]
-    sealed class SkipRunningGameRenderToDefaultFramebuffer
+    sealed class PaintSplashBeforeRunningFramebuffer
     {
-        static bool Prefix() => !SkipRunningGameRender();
+        static void Prefix()
+        {
+            if (!SkipRunningGameRender()) return;
+            PaintSplashCover?.Invoke();
+        }
     }
 }
