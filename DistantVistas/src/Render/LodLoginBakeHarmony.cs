@@ -50,6 +50,7 @@ public static class LodLoginBakeHarmony
             RenderPulse?.Invoke(dt);
             // Present-path backup alone is unreliable while world draws are suppressed —
             // paint every frame from the frame pulse so the splash reaches the screen.
+            // PaintSweepFrame must OrthoMode+PerspectiveMode pair (see screen renderer).
             if (LodLoginBakeSweepGate.SweepActive)
                 PaintSplashCover?.Invoke();
         }

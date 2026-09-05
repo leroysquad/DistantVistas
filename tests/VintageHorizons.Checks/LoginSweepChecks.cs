@@ -287,6 +287,10 @@ public static class LoginSweepChecks
             "splash renderer hard-clears framebuffer before quad fallback");
         c.True(screen.Contains("OrthoMode"),
             "splash renderer sets ortho projection before 2D draws");
+        c.True(screen.Contains("PerspectiveMode"),
+            "splash renderer restores perspective after OrthoMode (no stack leak)");
+        c.True(screen.Contains("TryRestorePerspective"),
+            "splash renderer pairs OrthoMode enter/restore helpers");
         c.True(screen.Contains("PaintSweepFrame"),
             "splash renderer exposes guaranteed paint entry point");
         c.True(screen.Contains("TryHardOpaqueCover"),
@@ -303,7 +307,8 @@ public static class LoginSweepChecks
             "input guard retries open when viewport is ready");
         c.True(guard.Contains("SafeBounds"),
             "input guard uses render/window bounds fallback");
-        c.True(!hold.Contains("RenderToDefaultFramebuffer"),
+        c.True(!hold.Contains(".RenderToDefaultFramebuffer(")
+            && !hold.Contains("RenderToDefaultFramebuffer();"),
             "vanilla hold does not call blocking vanilla loader draw");
 
         string driver = File.ReadAllText(Path.Combine(
@@ -455,6 +460,12 @@ public static class LoginSweepChecks
         c.Eq("ModData/distantvistas/login-sweep-complete.json", LodLoginSweepComplete.RelPath,
             "completion record under ModData/distantvistas");
         c.Eq(30.0, LodLoginSweepWindow.MaxDayGap, "skip window matches resume day gap");
+        string window = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepWindow.cs"));
+        c.True(window.Contains("TotalDays - savedTotalDays <= MaxDayGap"),
+            "skip window is in-game day gap only");
+        c.False(window.Contains("return true"),
+            "skip window has no same-season early return");
 
         string gate = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepGate.cs"));
@@ -468,11 +479,11 @@ public static class LoginSweepChecks
             "in-window complete marker skips full re-canvas even with leftovers");
         c.True(gate.Contains("no successful sweep recorded yet"),
             "gate runs when completion marker is missing");
-        c.True(gate.Contains("outside same-season / 30-day window"),
+        c.True(gate.Contains("outside 30-day window"),
             "gate runs when completion window expired");
         c.True(gate.Contains("VisitedKeyCount >= visited"),
             "in-window skip requires canvas not grown");
-        c.True(gate.Contains("visited canvas complete within season"),
+        c.True(gate.Contains("visited canvas complete within 30-day window"),
             "gate skips when canvas is complete and in window");
 
         string mod = File.ReadAllText(Path.Combine(

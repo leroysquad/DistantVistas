@@ -9,7 +9,7 @@ namespace DistantVistas;
 
 /// <summary>
 /// Persists an in-progress login visit sweep so the player can cancel and resume later
-/// when still the same season or within <see cref="MaxResumeDayGap"/> in-game days.
+/// when still within <see cref="MaxResumeDayGap"/> in-game days (season alone does not qualify).
 /// </summary>
 public sealed class LodLoginSweepResume
 {

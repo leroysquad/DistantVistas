@@ -32,14 +32,14 @@ public static class LodLoginSweepGate
 
         // Prefer skip when a successful sweep is still in-window and the canvas did not grow —
         // even if FindMisses reports leftovers. User intent: do not re-canvas the same world
-        // within the season / 30-day window.
+        // within the 30 in-game-day window.
         LodLoginSweepComplete? complete = LodLoginSweepComplete.TryLoad(capi);
         if (complete != null
             && complete.VisitedKeyCount >= visited
             && LodLoginSweepWindow.IsWithin(capi.World, complete.Season, complete.SavedTotalDays))
         {
             return new Result(false,
-                "visited canvas complete within season/30-day window (skip re-canvas)");
+                "visited canvas complete within 30-day window (skip re-canvas)");
         }
 
         List<LodLoginBakeAudit.Miss> misses = LodLoginBakeAudit.FindMisses(
@@ -54,8 +54,8 @@ public static class LodLoginSweepGate
             return new Result(true, "visited canvas grew since last successful sweep");
 
         if (!LodLoginSweepWindow.IsWithin(capi.World, complete.Season, complete.SavedTotalDays))
-            return new Result(true, "outside same-season / 30-day window since last sweep");
+            return new Result(true, "outside 30-day window since last sweep");
 
-        return new Result(false, "visited canvas complete within season window");
+        return new Result(false, "visited canvas complete within 30-day window");
     }
 }

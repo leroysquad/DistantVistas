@@ -135,21 +135,29 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         bool safetyPass = stage == EnumRenderStage.AfterFinalComposition;
         if (!orthoPass && !safetyPass) return;
 
-        PaintFrame(orthoPass, countHealth: orthoPass || stockOnly);
+        // Ortho stage: game already OrthoMode'd this pass — paint only, no push/pop.
+        // AfterFinal: outside ortho — pair OrthoMode + PerspectiveMode.
+        PaintFrame(
+            orthoPass,
+            countHealth: orthoPass || stockOnly,
+            manageOrthoPair: safetyPass);
     }
 
     /// <summary>
     /// Guaranteed splash paint path — called from ortho/after-final renderers and from
-    /// <see cref="LodLoginBakeHarmony"/> before <see cref="GuiScreenRunningGame.RenderToDefaultFramebuffer"/>
-    /// while world draws are suppressed (OrthoMode + hard framebuffer clear + quad fallback).
+    /// <see cref="LodLoginBakeHarmony"/> OnNewFrame / framebuffer Prefix while world draws
+    /// are suppressed (OrthoMode + hard framebuffer clear + quad fallback).
+    /// Always pairs OrthoMode with PerspectiveMode — VS OrthoMode GlPushMatrixes and
+    /// never restoring overflows StackMatrix4 (~32 frames) before shadow Push.
     /// </summary>
     public void PaintSweepFrame()
     {
         if (!active || overlayAlpha <= 0f) return;
-        PaintFrame(orthoPass: true, countHealth: true);
+        // OnNewFrame / framebuffer Prefix — outside Ortho stage; must pair push/pop.
+        PaintFrame(orthoPass: true, countHealth: true, manageOrthoPair: true);
     }
 
-    void PaintFrame(bool orthoPass, bool countHealth)
+    void PaintFrame(bool orthoPass, bool countHealth, bool manageOrthoPair)
     {
         EnsureGraphicsLoaded();
 
@@ -162,22 +170,48 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
             return;
         }
 
-        EnsureOrthoMode(rapi, w, h);
-
-        bool drewOpaque = DrawFullFrame(w, h, orthoPass, countHealth);
-        if (!drewOpaque && countHealth)
-            ConsecutiveOpaqueFrames = 0;
+        // ClientMain.OrthoMode pushes projection (and modelview); PerspectiveMode pops both.
+        // Painting from OnNewFrame Prefix is outside the normal Ortho stage, so without a
+        // matching restore every sweep frame leaks stack entries until shadow Push overflows.
+        bool orthoEntered = false;
+        if (manageOrthoPair)
+            orthoEntered = TryEnterOrthoMode(rapi, w, h);
+        try
+        {
+            bool drewOpaque = DrawFullFrame(w, h, orthoPass, countHealth);
+            if (!drewOpaque && countHealth)
+                ConsecutiveOpaqueFrames = 0;
+        }
+        finally
+        {
+            if (orthoEntered)
+                TryRestorePerspective(rapi);
+        }
     }
 
-    static void EnsureOrthoMode(IRenderAPI rapi, float w, float h)
+    static bool TryEnterOrthoMode(IRenderAPI rapi, float w, float h)
     {
         try
         {
             rapi.OrthoMode((int)w, (int)h);
+            return true;
         }
         catch
         {
-            // Best-effort — quad fallback may still succeed.
+            // Best-effort — quad fallback may still succeed without ortho.
+            return false;
+        }
+    }
+
+    static void TryRestorePerspective(IRenderAPI rapi)
+    {
+        try
+        {
+            rapi.PerspectiveMode();
+        }
+        catch
+        {
+            // Never leave paint path throwing; stack restore is best-effort.
         }
     }
 

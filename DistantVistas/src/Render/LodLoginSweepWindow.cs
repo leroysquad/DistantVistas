@@ -1,11 +1,12 @@
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
-using Vintagestory.API.MathTools;
 
 namespace DistantVistas;
 
 /// <summary>
-/// Shared season / in-game-day window for login sweep resume and skip-to-play.
+/// Shared in-game-day window for login sweep resume and skip-to-play.
+/// Skip/resume only when the last successful (or checkpoint) sweep is within
+/// <see cref="MaxDayGap"/> in-game days — season alone does not qualify.
 /// </summary>
 public static class LodLoginSweepWindow
 {
@@ -13,15 +14,8 @@ public static class LodLoginSweepWindow
 
     public static bool IsWithin(IClientWorldAccessor world, string savedSeason, double savedTotalDays)
     {
+        _ = savedSeason; // retained for call-site compatibility / marker schema
         IGameCalendar cal = world.Calendar;
-        var pos = new BlockPos(
-            (int)world.Player.Entity.Pos.X,
-            world.SeaLevel,
-            (int)world.Player.Entity.Pos.Z);
-        string currentSeason = LodLoginSweepResume.SeasonSlug(cal.GetSeason(pos));
-        if (string.Equals(currentSeason, savedSeason, StringComparison.OrdinalIgnoreCase))
-            return true;
-
         return cal.TotalDays - savedTotalDays <= MaxDayGap;
     }
 }
