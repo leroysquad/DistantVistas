@@ -137,6 +137,7 @@ public class DistantVistasModSystem : ModSystem
     LodLoginBakeOverlay? loginBakeOverlay;
     LodLoginBakePulse? loginBakePulse;
     LodLoginBake? loginBake;
+    bool loginBakePulseArmed;
 
     public override void AssetsLoaded(ICoreAPI api)
     {
@@ -1045,6 +1046,29 @@ public class DistantVistasModSystem : ModSystem
         config.LoginVisitSweepEnabled
         || Environment.GetEnvironmentVariable("VINTAGEHORIZONS_LOGIN_SWEEP") == "1";
 
+    void ArmLoginBakePulseCallback()
+    {
+        if (loginBakePulseArmed) return;
+        loginBakePulseArmed = true;
+        ScheduleLoginBakePulseCallback(0);
+    }
+
+    void ScheduleLoginBakePulseCallback(int delayMs)
+    {
+        capi.Event.RegisterCallback(_ =>
+        {
+            if (!loginBakePulseArmed)
+                return;
+            loginBakePulse?.Pulse(0.05f);
+            if (loginBake?.Active == true)
+                ScheduleLoginBakePulseCallback(50);
+            else
+                loginBakePulseArmed = false;
+        }, delayMs);
+    }
+
+    void DisarmLoginBakePulseCallback() => loginBakePulseArmed = false;
+
     void StartLoginVisitSweepIfNeeded()
     {
         LodLoginSweepGate.Result sweepGate = LodLoginSweepGate.Decide(
@@ -1066,8 +1090,8 @@ public class DistantVistasModSystem : ModSystem
             capi, pipeline, renderer, loginBakeOverlay!,
             tints.PlantTintFallback, UntintedForRebake);
         loginBakePulse!.Bind(loginBake, PumpLoginBakeWhileSweeping);
-        loginBake.Begin();
-        capi.Event.RegisterCallback(_ => loginBakePulse.Pulse(0.05f), 0);
+        loginBake.Begin(sweepGate.Misses);
+        ArmLoginBakePulseCallback();
 
         Mod.Logger.Notification(
             "[DistantVistas] Level finalized — login visit sweep starting ({0} sections in cache). Reason: {1}",
@@ -1323,6 +1347,7 @@ public class DistantVistasModSystem : ModSystem
 
     void OnLeaveWorld()
     {
+        DisarmLoginBakePulseCallback();
         loginBake?.Dispose();
         loginBake = null;
         loginBakePulse?.Bind(null, PumpLoginBakeWhileSweeping);

@@ -9,7 +9,10 @@ namespace DistantVistas;
 /// </summary>
 public static class LodLoginSweepGate
 {
-    public readonly record struct Result(bool RunSweep, string Reason);
+    public readonly record struct Result(
+        bool RunSweep,
+        string Reason,
+        IReadOnlyList<LodLoginBakeAudit.Miss>? Misses = null);
 
     public static Result Decide(
         ICoreClientAPI capi,
@@ -33,7 +36,7 @@ public static class LodLoginSweepGate
         List<LodLoginBakeAudit.Miss> misses = LodLoginBakeAudit.FindMisses(
             world, pipeline, blocks, plantTintFallback, untintedOf);
         if (misses.Count > 0)
-            return new Result(true, $"{misses.Count} visited region(s) still incomplete");
+            return new Result(true, $"{misses.Count} visited region(s) still incomplete", misses);
 
         LodLoginSweepComplete? complete = LodLoginSweepComplete.TryLoad(capi);
         if (complete != null)

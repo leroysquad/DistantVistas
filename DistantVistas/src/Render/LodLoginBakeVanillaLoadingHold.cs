@@ -78,12 +78,20 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
     {
         if (!active) return;
 
-        bool drawPass = stage == EnumRenderStage.Ortho
-            || stage == EnumRenderStage.AfterFinalComposition;
-        if (!drawPass) return;
+        // Pulse on Ortho only — never call blocking RenderToDefaultFramebuffer on this pass.
+        // If vanilla draw blocks on async sound, AfterFinalComposition may stall for the rest
+        // of the frame, but the next frame's Ortho pulse still advances the sweep.
+        if (stage == EnumRenderStage.Ortho)
+        {
+            OnRenderPulse?.Invoke(deltaTime);
+            if (!useStockFallback && loadingScreen != null)
+                ApplyLoadingText();
+            else
+                stockFallback?.OnRenderFrame(deltaTime, stage);
+            return;
+        }
 
-        // Must run before RenderToDefaultFramebuffer — that call can block on async sound.
-        OnRenderPulse?.Invoke(deltaTime);
+        if (stage != EnumRenderStage.AfterFinalComposition) return;
 
         if (!useStockFallback && loadingScreen != null)
         {
@@ -170,20 +178,19 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
 
     static GuiScreenLoadingGame? FindCachedLoadingScreen(ScreenManager sm)
     {
-        GuiScreenLoadingGame? fromApi = TryLoadAndCacheScreen(sm);
-        if (fromApi != null) return fromApi;
-
-        if (CachedScreensField?.GetValue(sm) is not System.Collections.IDictionary dict)
-            return null;
-
-        Type loadingType = typeof(GuiScreenLoadingGame);
-        foreach (System.Collections.DictionaryEntry entry in dict)
+        // Prefer the live cache dictionary — LoadAndCacheScreen can construct a fresh
+        // GuiScreenLoadingGame and re-trigger async sound loading on empty cache.
+        if (CachedScreensField?.GetValue(sm) is System.Collections.IDictionary dict)
         {
-            if (entry.Key is Type t && t == loadingType && entry.Value is GuiScreenLoadingGame loading)
-                return loading;
+            Type loadingType = typeof(GuiScreenLoadingGame);
+            foreach (System.Collections.DictionaryEntry entry in dict)
+            {
+                if (entry.Key is Type t && t == loadingType && entry.Value is GuiScreenLoadingGame loading)
+                    return loading;
+            }
         }
 
-        return null;
+        return TryLoadAndCacheScreen(sm);
     }
 
     static GuiScreenLoadingGame? TryLoadAndCacheScreen(ScreenManager sm)

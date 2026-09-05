@@ -54,6 +54,16 @@ public static class LodLoginSweepBootstrap
     public static int BootstrapMaxVisitStops =>
         LodLoginSweepTiming.BootstrapCellBudget(LodLoginSweepTiming.InitialSecPerStop);
 
+    /// <summary>
+    /// Hard cap on synchronous rain-height probes while planning an empty-canvas bootstrap.
+    /// The full 6000-block disk is ~27k L0 cells; classifying every cell on the render
+    /// thread during LevelFinalize can freeze join for many seconds.
+    /// </summary>
+    public const int BootstrapMaxProbeClassifications = 2048;
+
+    /// <summary>Season revisit uses the same per-login visit budget as bootstrap.</summary>
+    public static int RevisitMaxVisitStops => BootstrapMaxVisitStops;
+
     /// <summary>Ocean cells must span at least this many blocks to trigger coast-guard mode.</summary>
     public const int LargeOceanMinSpanBlocks = 1500;
 
@@ -122,14 +132,28 @@ public static class LodLoginSweepBootstrap
         double radiusSq = EmptyCanvasBootstrapRadiusBlocks * (double)EmptyCanvasBootstrapRadiusBlocks;
 
         var disk = EnumerateDiskCells(centerSx, centerSz, cellRadius, footprint, pos.X, pos.Z, radiusSq)
+            .OrderBy(cell =>
+            {
+                long dx = cell.Sx - centerSx;
+                long dz = cell.Sz - centerSz;
+                return dx * dx + dz * dz;
+            })
             .ToList();
 
-        var kinds = new Dictionary<long, CellKind>(disk.Count);
+        var kinds = new Dictionary<long, CellKind>(
+            Math.Min(disk.Count, BootstrapMaxProbeClassifications));
+        int classified = 0;
         foreach ((int sx, int sz) in disk)
         {
             if (sx < 0 || sz < 0) continue;
+            if (classified >= BootstrapMaxProbeClassifications) break;
             long key = LodWorld.SectionKey(0, sx, sz);
             kinds[key] = ClassifyCell(world, sx, sz, footprint, sea);
+            classified++;
+        }
+        if (classified < disk.Count)
+        {
+            LogProbeBudget(capi, classified, disk.Count);
         }
 
         if (TryPlanCoastGuard(kinds, centerSx, centerSz, footprint, out List<long> coastKeys))
@@ -160,9 +184,9 @@ public static class LodLoginSweepBootstrap
             LabelForBudgetedBootstrap("Bootstrap (new world)", plannedRadius, radiusKeys.Count));
     }
 
-    internal static List<long> BudgetVisitStops(List<long> keys, int centerSx, int centerSz)
+    internal static List<long> BudgetVisitStops(List<long> keys, int centerSx, int centerSz, int? maxStops = null)
     {
-        int max = BootstrapMaxVisitStops;
+        int max = maxStops ?? BootstrapMaxVisitStops;
         if (keys.Count <= max) return keys;
 
         keys.Sort((a, b) =>
@@ -200,6 +224,22 @@ public static class LodLoginSweepBootstrap
         if (budgeted >= planned) return;
         capi?.Logger.Notification(
             "[DistantVistas] Bootstrap budget: visiting {0} of {1} disk cells (~{2} target).",
+            budgeted, planned, LodLoginSweepTiming.FormatDuration(LodLoginSweepTiming.TargetMaxSec));
+    }
+
+    internal static void LogProbeBudget(ICoreClientAPI? capi, int classified, int diskCells)
+    {
+        if (classified >= diskCells) return;
+        capi?.Logger.Notification(
+            "[DistantVistas] Bootstrap probe budget: classified {0} of {1} disk cells (nearest spawn).",
+            classified, diskCells);
+    }
+
+    internal static void LogRevisitBudget(ICoreClientAPI? capi, int planned, int budgeted)
+    {
+        if (budgeted >= planned) return;
+        capi?.Logger.Notification(
+            "[DistantVistas] Revisit budget: visiting {0} of {1} visited L0 cells this login (~{2} target). Relog to continue.",
             budgeted, planned, LodLoginSweepTiming.FormatDuration(LodLoginSweepTiming.TargetMaxSec));
     }
 

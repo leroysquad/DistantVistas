@@ -84,6 +84,11 @@ public static class LoginSweepChecks
             "vanilla hold uses engine cache API when available");
         c.True(hold.Contains("OnRenderPulse"),
             "vanilla hold pulses sweep before blocking draw");
+        c.True(hold.Contains("EnumRenderStage.Ortho") && hold.Contains("AfterFinalComposition"),
+            "vanilla hold splits ortho pulse from after-final draw");
+        c.True(hold.IndexOf("CachedScreens", StringComparison.Ordinal)
+                < hold.IndexOf("TryLoadAndCacheScreen", StringComparison.Ordinal),
+            "vanilla hold prefers CachedScreens before LoadAndCacheScreen");
         c.True(!hold.Contains("new GuiScreenLoadingGame"),
             "vanilla hold does not construct fresh loading screens");
 
@@ -247,6 +252,8 @@ public static class LoginSweepChecks
             "mod wires render pulse from vanilla hold");
         c.True(mod.Contains("OnRenderPulse"),
             "mod connects vanilla hold render pulse");
+        c.True(mod.Contains("ArmLoginBakePulseCallback"),
+            "mod arms repeating callback backup pulse during sweep");
     }
 
     static void QuietTeleports(Check c)
@@ -373,6 +380,8 @@ public static class LoginSweepChecks
             "gate runs when completion window expired");
         c.True(gate.Contains("visited canvas complete within season window"),
             "gate skips when canvas is complete and in window");
+        c.True(gate.Contains("Misses"),
+            "gate result carries miss list for reuse");
 
         string mod = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "DistantVistasModSystem.cs"));
@@ -401,11 +410,19 @@ public static class LoginSweepChecks
             "6000 blocks is ~94 L0 cells radius at 64-block footprint");
         c.Eq(43, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
             "bootstrap visit cap targets ~2.5 min at 3.5s/stop");
+        c.Eq(2048, LodLoginSweepBootstrap.BootstrapMaxProbeClassifications,
+            "bootstrap probe caps synchronous classify work");
+        c.Eq(43, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "season revisit uses same per-login visit cap");
 
         string bootstrap = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepBootstrap.cs"));
         c.True(bootstrap.Contains("BudgetVisitStops"),
             "bootstrap applies hard visit stop budget");
+        c.True(bootstrap.Contains("BootstrapMaxProbeClassifications"),
+            "bootstrap caps synchronous probe classifications");
+        c.True(bootstrap.Contains("LogRevisitBudget"),
+            "revisit mode logs when visit budget trims the queue");
         c.True(bootstrap.Contains("BootstrapCoastGuard"),
             "bootstrap can plan coast-guard ocean sweeps");
         c.True(bootstrap.Contains("BootstrapRadius"),
@@ -415,6 +432,10 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
         c.True(bake.Contains("LodLoginSweepBootstrap.Plan("),
             "login bake plans sweep with bootstrap vs revisit mode");
+        c.True(bake.Contains("RevisitMaxVisitStops"),
+            "login bake caps season revisit stops per login");
+        c.True(bake.Contains("gateMisses"),
+            "login bake reuses gate miss list when provided");
         c.True(bake.Contains("sweepModeLabel"),
             "login bake progress distinguishes bootstrap vs revisit");
         c.True(bake.Contains("StatusWithEta"),

@@ -68,6 +68,7 @@ public sealed class LodLoginBake
     bool retryingMisses;
     bool releaseSuccess;
     bool releaseKeepResume;
+    IReadOnlyList<LodLoginBakeAudit.Miss>? gateMisses;
     LodLoginSweepPlanMode sweepMode = LodLoginSweepPlanMode.RevisitVisited;
     string sweepModeLabel = "Revisiting visited land";
     Phase phase = Phase.WaitingForWorld;
@@ -187,10 +188,11 @@ public sealed class LodLoginBake
         }
     }
 
-    public void Begin()
+    public void Begin(IReadOnlyList<LodLoginBakeAudit.Miss>? precomputedMisses = null)
     {
         pending.Clear();
         completedKeys.Clear();
+        gateMisses = precomputedMisses;
 
         overlay.Show();
         renderer.LoginBakeOverlayActive = true;
@@ -316,8 +318,17 @@ public sealed class LodLoginBake
     {
         LodWorld world = pipeline.World;
         int visitedCount = LodLoginSweep.VisitedL0Keys(world).Count();
-        List<LodLoginBakeAudit.Miss> misses = LodLoginBakeAudit.FindMisses(
-            world, pipeline, capi.World.Blocks, plantTintFallback, untintedOf);
+        List<LodLoginBakeAudit.Miss> misses;
+        if (gateMisses != null)
+        {
+            misses = gateMisses.ToList();
+            gateMisses = null;
+        }
+        else
+        {
+            misses = LodLoginBakeAudit.FindMisses(
+                world, pipeline, capi.World.Blocks, plantTintFallback, untintedOf);
+        }
 
         if (misses.Count > 0)
         {
@@ -336,12 +347,22 @@ public sealed class LodLoginBake
         if (visitedCount > 0)
         {
             List<long> visited = LodLoginSweep.VisitedL0Keys(world).ToList();
+            EntityPos pos = capi.World.Player.Entity.Pos;
+            int footprint = LodSection.SectionBlocks;
+            int centerSx = (int)Math.Floor(pos.X / footprint);
+            int centerSz = (int)Math.Floor(pos.Z / footprint);
+            int planned = visited.Count;
+            visited = LodLoginSweepBootstrap.BudgetVisitStops(
+                visited, centerSx, centerSz, LodLoginSweepBootstrap.RevisitMaxVisitStops);
+            LodLoginSweepBootstrap.LogRevisitBudget(capi, planned, visited.Count);
             visited.Sort();
             sweepMode = LodLoginSweepPlanMode.RevisitVisited;
-            sweepModeLabel = "Refreshing visited land (season)";
+            sweepModeLabel = planned > visited.Count
+                ? $"Refreshing visited land (season) ({visited.Count} of {planned})"
+                : "Refreshing visited land (season)";
             foreach (long key in visited)
                 pending.Enqueue(key);
-            total = visited.Count;
+            total = pending.Count;
             return;
         }
 
