@@ -135,6 +135,7 @@ public class DistantVistasModSystem : ModSystem
 
     LodLoginBakeVanillaLoadingHold? loginVanillaLoading;
     LodLoginBakeOverlay? loginBakeOverlay;
+    LodLoginBakeRenderDriver? loginBakeRenderDriver;
     LodLoginBake? loginBake;
 
     public override void AssetsLoaded(ICoreAPI api)
@@ -231,6 +232,8 @@ public class DistantVistasModSystem : ModSystem
         capi.Event.RegisterRenderer(loginVanillaLoading, EnumRenderStage.Ortho, "distantvistas-login-vanilla");
         capi.Event.RegisterRenderer(loginVanillaLoading, EnumRenderStage.AfterFinalComposition,
             "distantvistas-login-vanilla-final");
+        loginBakeRenderDriver = new LodLoginBakeRenderDriver(capi);
+        loginBakeRenderDriver.EnsureRegistered();
         loginBakeOverlay = new LodLoginBakeOverlay(capi, loginVanillaLoading);
         // Real holes (captured land with no mesh at any rung) are reported with
         // the state of the keys involved, so a screenshot of sky has a log line.
@@ -387,16 +390,21 @@ public class DistantVistasModSystem : ModSystem
         pipeline.QueueColumn(chunkCoord.X, chunkCoord.Z);
     }
 
+    void PumpLoginBakeWhileSweeping()
+    {
+        PumpServerAssist();
+        PumpLocalOffers();
+        pipeline.Tick();
+    }
+
     void OnGameTick(float dt)
     {
         if (!pipeline.Active) return;
 
         if (loginBake?.Active == true)
         {
-            loginBake.Tick(dt);
-            PumpServerAssist();
-            PumpLocalOffers();
-            pipeline.Tick();
+            // Sweep ticks run from LodLoginBakeRenderDriver — game tick listeners stall
+            // while GuiScreenLoadingGame is held during the visit bake.
             return;
         }
 
@@ -1057,6 +1065,7 @@ public class DistantVistasModSystem : ModSystem
         loginBake = new LodLoginBake(
             capi, pipeline, renderer, loginBakeOverlay!,
             tints.PlantTintFallback, UntintedForRebake);
+        loginBakeRenderDriver!.Bind(loginBake, PumpLoginBakeWhileSweeping);
         loginBake.Begin();
 
         Mod.Logger.Notification(
@@ -1315,6 +1324,7 @@ public class DistantVistasModSystem : ModSystem
     {
         loginBake?.Dispose();
         loginBake = null;
+        loginBakeRenderDriver?.Bind(null, PumpLoginBakeWhileSweeping);
         renderer.LoginBakeComplete = false;
         renderer.LoginBakeOverlayActive = false;
         assist?.Reset();
@@ -1491,6 +1501,7 @@ public class DistantVistasModSystem : ModSystem
         Quietly(() => pipeline?.Dispose());
         Quietly(() => renderer?.Dispose());
         Quietly(() => loginBakeOverlay?.Dispose());
+        Quietly(() => loginBakeRenderDriver?.Dispose());
         Quietly(() => loginVanillaLoading?.Dispose());
     }
 

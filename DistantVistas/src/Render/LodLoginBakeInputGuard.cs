@@ -21,7 +21,7 @@ public sealed class LodLoginBakeInputGuard : HudElement
 
     public override bool DisableMouseGrab => false;
 
-    public override double InputOrder => 0;
+    public override double InputOrder => 10.0;
 
     public override double DrawOrder => 1.02;
 

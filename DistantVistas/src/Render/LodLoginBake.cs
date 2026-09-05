@@ -23,8 +23,8 @@ public sealed class LodLoginBake
 
     enum StopPhase { Teleport, TeleportSettle, WaitChunks, Capture, Bake, BakeSettle, Done }
 
-    const int OverlayWarmupMinTicks = 4;
-    const int OverlayWarmupMaxTicks = 200;
+    const int OverlayWarmupMinTicks = 1;
+    const int OverlayWarmupMaxTicks = 20;
     const int TeleportSettleTicks = 18;
     const int BakeSettleTicks = 24;
 
@@ -77,6 +77,8 @@ public sealed class LodLoginBake
     bool restoreCaptured;
     bool resuming;
     bool loggedTeleportBegin;
+    bool loggedWarmupComplete;
+    bool escWasDown;
 
     public Phase CurrentPhase => phase;
     public bool Active => phase != Phase.Done;
@@ -130,19 +132,57 @@ public sealed class LodLoginBake
     {
         if (phase == Phase.Done || released) return;
         int left = pending.Count + (currentKey != null ? 1 : 0);
-        if (left <= 0 && phase is not Phase.Sweeping and not Phase.WaitingForWorld)
+        if (left <= 0
+            && phase is not Phase.Sweeping
+            and not Phase.WaitingForWorld
+            and not Phase.OverlayWarmup)
         {
             Teardown(success: false);
             return;
         }
 
-        SaveResumeSnapshot();
-        capi.Logger.Notification(
-            "[DistantVistas] Login visit sweep paused — {0} region(s) remaining. Relog to resume (same season or within {1} days).",
-            left, (int)LodLoginSweepResume.MaxResumeDayGap);
-        overlay.UpdateProgress(Progress,
-            $"Paused — {left} region(s) saved. Relog to resume (Esc again cancelled).");
-        Teardown(success: false, keepResume: true);
+        if (left > 0)
+        {
+            SaveResumeSnapshot();
+            capi.Logger.Notification(
+                "[DistantVistas] Login visit sweep paused — {0} region(s) remaining. Relog to resume (same season or within {1} days).",
+                left, (int)LodLoginSweepResume.MaxResumeDayGap);
+            overlay.UpdateProgress(Progress,
+                $"Paused — {left} region(s) saved. Relog to resume.");
+            Teardown(success: false, keepResume: true);
+            return;
+        }
+
+        capi.Logger.Notification("[DistantVistas] Login visit sweep cancelled — entering play.");
+        overlay.UpdateProgress(1f, "Entering play (sweep cancelled)…");
+        Teardown(success: false);
+    }
+
+    /// <summary>
+    /// Poll Esc from the render loop — game-tick HudElement handlers do not run while the
+    /// vanilla loading screen is held.
+    /// </summary>
+    public void PollCancelFromRender()
+    {
+        if (phase == Phase.Done || released) return;
+        try
+        {
+            bool down = capi.Input.KeyboardKeyState[(int)GlKeys.Escape];
+            if (down)
+            {
+                if (!escWasDown)
+                {
+                    escWasDown = true;
+                    capi.Logger.Notification("[DistantVistas] Login visit sweep: Esc cancel requested.");
+                    CancelAndSave();
+                }
+            }
+            else escWasDown = false;
+        }
+        catch
+        {
+            // Input may not be ready on the first render pulse after LevelFinalize.
+        }
     }
 
     public void Begin()
@@ -185,6 +225,8 @@ public sealed class LodLoginBake
         restoreCaptured = false;
         overlayWarmupTicks = 0;
         loggedTeleportBegin = false;
+        loggedWarmupComplete = false;
+        escWasDown = false;
         stabilizeWindow.Clear();
         windowMedians.Clear();
 
@@ -220,28 +262,29 @@ public sealed class LodLoginBake
     void TickOverlayWarmup()
     {
         overlayWarmupTicks++;
-        string detail = overlay.HasRendered
-            ? "Loading…"
-            : overlayWarmupTicks >= OverlayWarmupMaxTicks
-                ? "Starting visit sweep…"
-                : $"Waiting for loading screen… ({overlayWarmupTicks})";
-        overlay.UpdateProgress(Progress, detail);
+        string detail = total > 0
+            ? $"{sweepModeLabel} — preparing ({overlayWarmupTicks})…"
+            : $"Starting visit sweep… ({overlayWarmupTicks})";
+        overlay.UpdateProgress(Progress, StatusWithEta($"{detail} (Esc to pause & save)"));
 
-        bool minWait = overlayWarmupTicks >= OverlayWarmupMinTicks;
-        bool timedOut = overlayWarmupTicks >= OverlayWarmupMaxTicks;
-        if (!minWait) return;
-        if (!overlay.HasRendered && !timedOut) return;
+        if (overlayWarmupTicks < OverlayWarmupMinTicks) return;
 
-        if (!overlay.HasRendered)
+        if (!loggedWarmupComplete)
         {
-            capi.Logger.Warning(
-                "[DistantVistas] Login visit sweep: vanilla loading screen not painted after {0} ticks — continuing sweep anyway.",
-                overlayWarmupTicks);
-        }
-        else
-        {
+            loggedWarmupComplete = true;
+            if (overlay.HasRendered)
+            {
+                capi.Logger.Notification(
+                    "[DistantVistas] Login visit sweep: vanilla loading screen active.");
+            }
+            else
+            {
+                capi.Logger.Warning(
+                    "[DistantVistas] Login visit sweep: vanilla loading screen not painted — continuing sweep anyway.");
+            }
+
             capi.Logger.Notification(
-                "[DistantVistas] Login visit sweep: vanilla loading screen active.");
+                "[DistantVistas] Login visit sweep: warmup complete — entering visit teleports.");
         }
 
         worldHide.HideAllLoaded();
@@ -685,6 +728,7 @@ public sealed class LodLoginBake
         phase = Phase.Done;
         pipeline.DeferLegacyHeal = false;
         renderer.LoginBakeOverlayActive = false;
+        renderer.LoginBakeComplete = true;
 
         if (keepResume)
             SaveResumeSnapshot();
@@ -749,7 +793,9 @@ public sealed class LodLoginBake
         restorePos.SetPos(resume.RestoreX, resume.RestoreY, resume.RestoreZ);
         restorePos.Yaw = resume.RestoreYaw;
         restorePos.Pitch = resume.RestorePitch;
-        restoreCameraPos.Set(capi.World.Player.Entity.CameraPos);
+        EntityPlayer entity = capi.World.Player.Entity;
+        entity.Pos.SetFrom(restorePos);
+        restoreCameraPos.Set(entity.CameraPos);
         restoreCaptured = true;
     }
 
@@ -758,7 +804,10 @@ public sealed class LodLoginBake
         if (released || phase == Phase.Done) return;
 
         int left = pending.Count + (currentKey != null ? 1 : 0);
-        if (left <= 0 && phase is not Phase.Sweeping and not Phase.WaitingForWorld)
+        if (left <= 0
+            && phase is not Phase.Sweeping
+            and not Phase.WaitingForWorld
+            and not Phase.OverlayWarmup)
             return;
 
         LodLoginSweepResume snap = LodLoginSweepResume.CaptureCalendar(capi);

@@ -80,8 +80,10 @@ public static class LoginSweepChecks
             "login sweep holds vanilla world loading screen");
         c.True(hold.Contains("loadingText"),
             "vanilla hold updates ScreenManager.loadingText");
-        c.True(hold.Contains("RenderToDefaultFramebuffer"),
-            "vanilla hold re-renders native loading UI each frame");
+        c.True(hold.Contains("LoadAndCacheScreen"),
+            "vanilla hold uses engine cache API when available");
+        c.True(hold.Contains("createdNew"),
+            "vanilla hold only calls OnScreenLoaded on fresh instances");
 
         string screen = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeScreenRenderer.cs"));
@@ -220,6 +222,20 @@ public static class LoginSweepChecks
             "input guard retries open when viewport is ready");
         c.True(guard.Contains("SafeBounds"),
             "input guard uses render/window bounds fallback");
+        c.True(hold.Contains("RenderToDefaultFramebuffer"),
+            "vanilla hold re-renders native loading UI each frame");
+
+        string driver = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeRenderDriver.cs"));
+        c.True(driver.Contains("LodLoginBakeRenderDriver"),
+            "render driver exists for sweep while game ticks stall");
+        c.True(driver.Contains("PollCancelFromRender"),
+            "render driver polls Esc each frame");
+
+        string mod = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "DistantVistasModSystem.cs"));
+        c.True(mod.Contains("LodLoginBakeRenderDriver"),
+            "mod registers render-frame sweep driver");
     }
 
     static void QuietTeleports(Check c)
@@ -244,10 +260,14 @@ public static class LoginSweepChecks
             "login bake settles after each bake");
         c.True(bake.Contains("OverlayWarmup"),
             "login bake warms overlay before teleports");
+        c.True(bake.Contains("warmup complete — entering visit teleports"),
+            "login bake logs loudly when warmup ends");
+        c.True(bake.Contains("PollCancelFromRender"),
+            "login bake polls Esc from render loop");
+        c.True(bake.Contains("KeyboardKeyState"),
+            "login bake reads Escape from keyboard state");
         c.True(bake.Contains("continuing sweep anyway"),
             "login bake continues if vanilla loading screen never paints");
-        c.True(bake.Contains("vanilla loading screen active"),
-            "login bake logs when vanilla loading screen is ready");
         c.True(bake.Contains("LodLoginBakeWorldHide"),
             "login bake hides vanilla chunks during sweep");
         c.True(bake.Contains("LodLoginBakePlayerMove.ApplyQuiet"),
@@ -309,6 +329,10 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
         c.True(bake.Contains("CancelAndSave"),
             "login bake can cancel and save progress");
+        c.True(bake.Contains("Phase.OverlayWarmup"),
+            "cancel path includes overlay warmup phase");
+        c.True(bake.Contains("LoginBakeComplete = true"),
+            "failed teardown marks login bake complete for normal play");
         c.True(bake.Contains("SaveResumeSnapshot"),
             "login bake persists resume snapshots");
         c.True(bake.Contains("LodLoginSweepResume.TryLoad"),

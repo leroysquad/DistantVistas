@@ -15,6 +15,13 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
     static readonly FieldInfo? CachedScreensField = typeof(ScreenManager).GetField(
         "CachedScreens", BindingFlags.Instance | BindingFlags.NonPublic);
 
+    static readonly MethodInfo? LoadAndCacheScreenMethod = typeof(ScreenManager).GetMethod(
+        "LoadAndCacheScreen",
+        BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+        binder: null,
+        types: new[] { typeof(Type) },
+        modifiers: null);
+
     readonly ICoreClientAPI capi;
     LodLoginBakeStockLoadingFallback? stockFallback;
 
@@ -40,7 +47,9 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
         HasRendered = false;
         loggedFirstPaint = false;
         loggedResolve = false;
+        useStockFallback = false;
         detail = "";
+        stockFallback?.Hide();
         Resolve();
     }
 
@@ -114,9 +123,19 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
             var clientMain = (ClientMain)capi.World;
             GuiScreenRunningGame running = clientMain.ScreenRunningGame;
             screenManager = running.ScreenManager;
-            loadingScreen = FindCachedLoadingScreen(screenManager)
-                ?? new GuiScreenLoadingGame(screenManager, running.ParentScreen ?? running);
-            loadingScreen.OnScreenLoaded();
+            bool createdNew = false;
+            loadingScreen = FindCachedLoadingScreen(screenManager);
+            if (loadingScreen == null)
+            {
+                loadingScreen = new GuiScreenLoadingGame(screenManager, running.ParentScreen ?? running);
+                createdNew = true;
+            }
+
+            // Re-calling OnScreenLoaded on a cached screen re-triggers async asset/sound
+            // loading and can deadlock the client while the sweep holds the loading UI.
+            if (createdNew)
+                loadingScreen.OnScreenLoaded();
+
             ApplyLoadingText();
 
             if (!loggedResolve)
@@ -143,18 +162,35 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
 
     static GuiScreenLoadingGame? FindCachedLoadingScreen(ScreenManager sm)
     {
+        GuiScreenLoadingGame? fromApi = TryLoadAndCacheScreen(sm);
+        if (fromApi != null) return fromApi;
+
         if (CachedScreensField?.GetValue(sm) is not System.Collections.IDictionary dict)
             return null;
 
+        Type loadingType = typeof(GuiScreenLoadingGame);
         foreach (System.Collections.DictionaryEntry entry in dict)
         {
-            if (entry.Key is GuiScreenLoadingGame loading
-                && entry.Value is Type t
-                && t == typeof(GuiScreenLoadingGame))
+            // VS 1.22.x ScreenManager.CachedScreens is Dictionary<Type, GuiScreen>.
+            if (entry.Key is Type t && t == loadingType && entry.Value is GuiScreenLoadingGame loading)
                 return loading;
         }
 
         return null;
+    }
+
+    static GuiScreenLoadingGame? TryLoadAndCacheScreen(ScreenManager sm)
+    {
+        if (LoadAndCacheScreenMethod == null) return null;
+        try
+        {
+            object? result = LoadAndCacheScreenMethod.Invoke(sm, new object[] { typeof(GuiScreenLoadingGame) });
+            return result as GuiScreenLoadingGame;
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     public void Dispose()

@@ -1,3 +1,13 @@
+## 0.8.5
+- **CRITICAL: login visit sweep deadlock on vanilla loading hold (0.8.3–0.8.4).** Re-rendering `GuiScreenLoadingGame` stalled VS game-tick listeners, so warmup never advanced past `preparing loading screen…`, teleports never started, and Esc could not reach the cancel handler. Fix: drive sweep logic from a render-frame pulse (`LodLoginBakeRenderDriver`) at the same 50 ms cadence; poll Esc via `KeyboardKeyState` on every render frame; warmup proceeds after one pulse (no `HasRendered` gate). Loud logs: `warmup complete — entering visit teleports`, `quiet teleports begin`.
+- **Esc cancel during warmup.** OverlayWarmup is a valid cancel phase; non-success teardown sets `LoginBakeComplete` so LOD/season draw restores on cancel. Input guard `InputOrder` raised; render-path Esc poll is the reliable path while vanilla loading UI is up.
+- **Vanilla hold: no `OnScreenLoaded` on cached screens.** Re-calling it on a cached `GuiScreenLoadingGame` re-triggered async sound/asset loading (client spammed `Waiting for async sound loading…`). Only fresh instances call `OnScreenLoaded`. Merged 0.8.4 `CachedScreens` Type→GuiScreen lookup + `LoadAndCacheScreen` reflection.
+
+## 0.8.4
+- **Login sweep cancel release.** Non-success teardown sets `LoginBakeComplete` so Esc cancel restores normal LOD/season draw.
+- **Vanilla hold cache lookup.** `ScreenManager.CachedScreens` is `Dictionary<Type, GuiScreen>` in VS 1.22.x; prior key/value inversion always missed the cached loading screen.
+- **Resume camera.** Apply saved entity pose before pinning `CameraPos` on checkpoint restore.
+
 ## 0.8.3
 - **Vanilla loading screen during visit sweep (product direction).** The custom Distant Vistas landscape splash and gold title panel are no longer the primary join UX. While the login visit sweep runs, the mod re-renders Vintage Story's native `GuiScreenLoadingGame` and updates `ScreenManager.loadingText` with sweep progress — the same stock "Loading…" view you see when a world first comes in. Quiet teleports, per-column season bake, miss re-sweep, cancel/resume, and skip-if-complete gates are unchanged. Play releases only when the sweep finishes, is skipped, or you cancel.
 - **Stock fallback only when vanilla cannot be held.** If `GuiScreenLoadingGame` cannot be resolved or drawn, a minimal dark fill + "Loading…" + progress bar is used — not the DV backdrop/title splash. Log line: `stock Loading… fallback (vanilla screen unavailable)`.
