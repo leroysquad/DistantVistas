@@ -4,14 +4,25 @@ namespace DistantVistas;
 
 /// <summary>
 /// Measures per-stop timing during the login visit sweep and formats ETA strings.
-/// Target window: ~1.5–2.5 minutes on typical hardware for small bootstrap runs;
-/// large empty-canvas disks (6k radius) scale with cell count and show honest ETA.
+/// Target window: ~5–10 minutes wall-clock for season revisit on large canvases;
+/// empty-canvas bootstrap uses a shorter <see cref="BootstrapTargetMaxSec"/> budget.
 /// </summary>
 public sealed class LodLoginSweepTiming
 {
-    public const double TargetMinSec = 90.0;
-    public const double TargetMaxSec = 150.0;
-    public const double InitialSecPerStop = 3.5;
+    /// <summary>Lower bound of the revisit sweep target window (5 minutes).</summary>
+    public const double TargetMinSec = 300.0;
+
+    /// <summary>Hard upper bound of the revisit sweep target window (10 minutes).</summary>
+    public const double TargetMaxSec = 600.0;
+
+    /// <summary>Shorter budget for empty-canvas bootstrap (~2.5 min at typical stop rate).</summary>
+    public const double BootstrapTargetMaxSec = 150.0;
+
+    /// <summary>Typical per-stop estimate before measured samples (reduced waits vs 0.8.15).</summary>
+    public const double InitialSecPerStop = 4.0;
+
+    public const int MinVisitStops = 24;
+    public const int MaxVisitStops = 150;
 
     readonly Stopwatch clock = new();
     readonly List<double> stopDurations = new();
@@ -53,8 +64,21 @@ public sealed class LodLoginSweepTiming
         return $" — ~{FormatDuration(remaining)} left";
     }
 
+    /// <summary>
+    /// Max visit stops for a sweep given a wall-clock budget and measured/estimated stop rate.
+    /// At <see cref="InitialSecPerStop"/> and <see cref="TargetMaxSec"/>, yields 150 stops (~10 min).
+    /// </summary>
+    public static int VisitStopBudget(double secPerStop, double targetMaxSec) =>
+        (int)Math.Clamp(
+            Math.Round(targetMaxSec / Math.Max(0.75, secPerStop)),
+            MinVisitStops,
+            MaxVisitStops);
+
     public static int BootstrapCellBudget(double secPerStop) =>
-        (int)Math.Clamp(Math.Round(TargetMaxSec / Math.Max(0.75, secPerStop)), 12, 72);
+        VisitStopBudget(secPerStop, BootstrapTargetMaxSec);
+
+    public static int RevisitCellBudget(double secPerStop) =>
+        VisitStopBudget(secPerStop, TargetMaxSec);
 
     public static string FormatDuration(double seconds)
     {

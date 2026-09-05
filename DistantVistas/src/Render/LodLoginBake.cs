@@ -25,8 +25,8 @@ public sealed class LodLoginBake
 
     const int OverlayWarmupMinTicks = 1;
     const int OverlayWarmupMaxTicks = 20;
-    const int TeleportSettleTicks = 18;
-    const int BakeSettleTicks = 24;
+    const int TeleportSettleTicks = 10;
+    const int BakeSettleTicks = 12;
 
     const int StabilizeWindowFrames = 90;
     const int StabilizeWindowsRequired = 4;
@@ -200,8 +200,20 @@ public sealed class LodLoginBake
         LodLoginSweepResume? resume = LodLoginSweepResume.TryLoad(capi);
         if (resume != null && resume.IsEligible(capi.World))
         {
-            ApplyResume(resume);
-            resuming = true;
+            if (resume.IsOversizedForCurrentBudget())
+            {
+                LodLoginSweepResume.Delete(capi);
+                capi.Logger.Notification(
+                    "[DistantVistas] Saved login sweep had {0} pending regions (budget {1}) — replanning with spatial subsample.",
+                    resume.Pending.Count, LodLoginSweepBootstrap.RevisitMaxVisitStops);
+                resuming = false;
+                PlanSweepQueue();
+            }
+            else
+            {
+                ApplyResume(resume);
+                resuming = true;
+            }
         }
         else
         {
@@ -344,13 +356,13 @@ public sealed class LodLoginBake
 
         if (visitedCount > 0)
         {
-            List<long> visited = LodLoginSweep.VisitedL0Keys(world).ToList();
-            visited.Sort();
-            sweepMode = LodLoginSweepPlanMode.RevisitVisited;
-            sweepModeLabel = "Refreshing visited land (season)";
-            foreach (long key in visited)
+            LodLoginSweepPlan plan = LodLoginSweepBootstrap.PlanRevisitVisited(
+                world, capi.World, capi);
+            sweepMode = plan.Mode;
+            sweepModeLabel = plan.ModeLabel;
+            foreach (long key in plan.Keys)
                 pending.Enqueue(key);
-            total = visited.Count;
+            total = pending.Count;
             return;
         }
 

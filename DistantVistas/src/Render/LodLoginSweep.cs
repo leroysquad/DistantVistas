@@ -13,8 +13,13 @@ namespace DistantVistas;
 public static class LodLoginSweep
 {
     public const int WorldReadyRadiusChunks = 2;
-    public const int MaxChunkWaitTicks = 400;
-    public const int MaxCaptureWaitTicks = 120;
+
+    /// <summary>~4s max chunk wait at 50 ms pulse (was 400/~20s in 0.8.15).</summary>
+    public const int MaxChunkWaitTicks = 80;
+
+    /// <summary>~2.4s max capture wait at 50 ms pulse (was 120/~6s).</summary>
+    public const int MaxCaptureWaitTicks = 48;
+
     public const int MaxWorldReadyTicks = 2400;
 
     public static IEnumerable<long> VisitedL0Keys(LodWorld world)

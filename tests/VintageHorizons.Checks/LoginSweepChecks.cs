@@ -54,11 +54,11 @@ public static class LoginSweepChecks
         var visited = LodLoginSweep.VisitedL0Keys(world).ToList();
         visited.Sort();
         var plan = new LodLoginSweepPlan(
-            LodLoginSweepPlanMode.RevisitVisited, visited, "Revisiting visited land");
+            LodLoginSweepPlanMode.RevisitVisited, visited, "Refreshing visited land (season)");
 
         c.Eq(LodLoginSweepPlanMode.RevisitVisited, plan.Mode, "visited canvas uses revisit mode");
-        c.Eq("Revisiting visited land", plan.ModeLabel, "revisit mode label");
-        c.Eq(2, plan.Keys.Count, "revisit plan includes every visited L0 key");
+        c.True(plan.ModeLabel.Contains("Refreshing visited land"), "revisit mode label");
+        c.Eq(2, plan.Keys.Count, "small revisit plan includes every visited L0 key");
 
         long bad = LodWorld.SectionKey(0, 2, 3);
         var misses = new List<LodLoginBakeAudit.Miss>
@@ -70,6 +70,11 @@ public static class LoginSweepChecks
         c.Eq(LodLoginSweepPlanMode.RevisitIncomplete, targeted.Mode, "incomplete plan mode");
         c.Eq(1, targeted.Keys.Count, "incomplete plan dedupes keys");
         c.True(targeted.ModeLabel.Contains("incomplete"), "incomplete plan label");
+
+        c.Eq(150, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "revisit cap targets ~10 min at 4s/stop");
+        c.True(LodLoginSweepBootstrap.RevisitMaxVisitStops > LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "revisit budget exceeds bootstrap budget");
     }
 
     static void BackdropHook(Check c)
@@ -389,6 +394,10 @@ public static class LoginSweepChecks
             "login bake persists resume snapshots");
         c.True(bake.Contains("LodLoginSweepResume.TryLoad"),
             "login bake restores eligible resume on begin");
+        c.True(bake.Contains("IsOversizedForCurrentBudget"),
+            "login bake reclaims oversized resume checkpoints");
+        c.True(bake.Contains("PlanRevisitVisited"),
+            "login bake uses budgeted revisit plan");
 
         string guard = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeInputGuard.cs"));
@@ -440,19 +449,26 @@ public static class LoginSweepChecks
 
     static void SweepTiming(Check c)
     {
-        c.Eq(90.0, LodLoginSweepTiming.TargetMinSec, "sweep target min seconds");
-        c.Eq(150.0, LodLoginSweepTiming.TargetMaxSec, "sweep target max seconds");
+        c.Eq(300.0, LodLoginSweepTiming.TargetMinSec, "sweep target min seconds");
+        c.Eq(600.0, LodLoginSweepTiming.TargetMaxSec, "sweep target max seconds");
+        c.Eq(150.0, LodLoginSweepTiming.BootstrapTargetMaxSec, "bootstrap target max seconds");
         c.Eq(6000, LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks,
             "empty-canvas bootstrap probe radius default");
         c.Eq(94, LodLoginSweepBootstrap.BootstrapCellRadius(),
             "6000 blocks is ~94 L0 cells radius at 64-block footprint");
-        c.Eq(43, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
-            "bootstrap visit cap targets ~2.5 min at 3.5s/stop");
+        c.Eq(38, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "bootstrap visit cap targets ~2.5 min at 4s/stop");
+        c.Eq(150, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "revisit visit cap targets ~10 min at 4s/stop");
+        c.Eq(80, LodLoginSweep.MaxChunkWaitTicks, "chunk wait capped ~4s at 50ms pulse");
+        c.Eq(48, LodLoginSweep.MaxCaptureWaitTicks, "capture wait capped ~2.4s at 50ms pulse");
 
         string bootstrap = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepBootstrap.cs"));
         c.True(bootstrap.Contains("BudgetVisitStops"),
             "bootstrap applies hard visit stop budget");
+        c.True(bootstrap.Contains("PlanRevisitKeys"),
+            "revisit applies spatial subsample budget");
         c.True(bootstrap.Contains("BootstrapCoastGuard"),
             "bootstrap can plan coast-guard ocean sweeps");
         c.True(bootstrap.Contains("BootstrapRadius"),
@@ -462,6 +478,8 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
         c.True(bake.Contains("LodLoginSweepBootstrap.Plan("),
             "login bake plans sweep with bootstrap vs revisit mode");
+        c.True(bake.Contains("PlanRevisitVisited"),
+            "login bake uses budgeted revisit plan");
         c.True(bake.Contains("sweepModeLabel"),
             "login bake progress distinguishes bootstrap vs revisit");
         c.True(bake.Contains("StatusWithEta"),

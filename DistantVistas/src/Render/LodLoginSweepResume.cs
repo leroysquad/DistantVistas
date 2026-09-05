@@ -97,6 +97,16 @@ public sealed class LodLoginSweepResume
         return LodLoginSweepWindow.IsWithin(world, Season, SavedTotalDays);
     }
 
+    /// <summary>
+    /// Pre-0.8.16 resumes queued every visited L0 key; reclaim into a budgeted plan instead.
+    /// </summary>
+    public bool IsOversizedForCurrentBudget()
+    {
+        if (SweepMode != LodLoginSweepPlanMode.RevisitVisited) return false;
+        int budget = LodLoginSweepBootstrap.RevisitMaxVisitStops;
+        return PlannedTotal > budget || Pending.Count > budget;
+    }
+
     public static LodLoginSweepResume CaptureCalendar(ICoreClientAPI capi)
     {
         IGameCalendar cal = capi.World.Calendar;

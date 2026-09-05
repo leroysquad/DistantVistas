@@ -8,7 +8,7 @@ namespace DistantVistas;
 
 public enum LodLoginSweepPlanMode
 {
-    /// <summary>Canvas already has visited L0 keys — sweep all of them (season refresh).</summary>
+    /// <summary>Canvas already has visited L0 keys — season refresh (budgeted spatial subsample).</summary>
     RevisitVisited,
 
     /// <summary>Only L0 keys that failed the miss audit — not the whole visited canvas.</summary>
@@ -40,8 +40,8 @@ public readonly struct LodLoginSweepPlan
 
 /// <summary>
 /// Plans which L0 cells the login visit sweep should touch. Existing visited canvases
-/// are always included; an empty cache bootstraps a coast-guard ocean sweep or a large
-/// radius around spawn — never an entire pre-explored mega world.
+/// are spatially subsampled to a wall-clock budget; an empty cache bootstraps a
+/// coast-guard ocean sweep or a large radius around spawn.
 /// </summary>
 public static class LodLoginSweepBootstrap
 {
@@ -53,6 +53,13 @@ public static class LodLoginSweepBootstrap
     /// </summary>
     public static int BootstrapMaxVisitStops =>
         LodLoginSweepTiming.BootstrapCellBudget(LodLoginSweepTiming.InitialSecPerStop);
+
+    /// <summary>
+    /// Hard cap on season-revisit stops (~10 min at <see cref="LodLoginSweepTiming.InitialSecPerStop"/>).
+    /// Large visited canvases are spatially subsampled — never every L0 key.
+    /// </summary>
+    public static int RevisitMaxVisitStops =>
+        LodLoginSweepTiming.RevisitCellBudget(LodLoginSweepTiming.InitialSecPerStop);
 
     /// <summary>Ocean cells must span at least this many blocks to trigger coast-guard mode.</summary>
     public const int LargeOceanMinSpanBlocks = 1500;
@@ -68,19 +75,53 @@ public static class LodLoginSweepBootstrap
     public static LodLoginSweepPlan Plan(
         LodWorld world,
         IClientWorldAccessor clientWorld,
-        ICoreClientAPI? capi = null)
+        ICoreClientAPI? capi = null) =>
+        Plan(world, clientWorld, capi, RevisitMaxVisitStops);
+
+    /// <summary>
+    /// Plans a season revisit for an existing visited canvas, applying the visit-stop budget.
+    /// </summary>
+    public static LodLoginSweepPlan PlanRevisitVisited(
+        LodWorld world,
+        IClientWorldAccessor clientWorld,
+        ICoreClientAPI? capi = null) =>
+        Plan(world, clientWorld, capi, RevisitMaxVisitStops);
+
+    static LodLoginSweepPlan Plan(
+        LodWorld world,
+        IClientWorldAccessor clientWorld,
+        ICoreClientAPI? capi,
+        int maxVisitStops)
     {
         List<long> visited = LodLoginSweep.VisitedL0Keys(world).ToList();
         if (visited.Count > 0)
-        {
-            visited.Sort();
-            return new LodLoginSweepPlan(
-                LodLoginSweepPlanMode.RevisitVisited,
-                visited,
-                "Revisiting visited land");
-        }
+            return PlanRevisitKeys(world, clientWorld, capi, visited, maxVisitStops);
 
         return PlanEmptyCanvas(clientWorld, capi);
+    }
+
+    internal static LodLoginSweepPlan PlanRevisitKeys(
+        LodWorld world,
+        IClientWorldAccessor clientWorld,
+        ICoreClientAPI? capi,
+        List<long> visited,
+        int maxVisitStops)
+    {
+        visited.Sort();
+        int planned = visited.Count;
+        EntityPos pos = clientWorld.Player.Entity.Pos;
+        int footprint = LodSection.SectionBlocks;
+        int centerSx = (int)Math.Floor(pos.X / footprint);
+        int centerSz = (int)Math.Floor(pos.Z / footprint);
+
+        if (planned > maxVisitStops)
+        {
+            visited = BudgetVisitStops(visited, centerSx, centerSz, maxVisitStops);
+            LogBudget(capi, planned, visited.Count, "Revisit");
+        }
+
+        string label = LabelForBudgetedRevisit(planned, visited.Count);
+        return new LodLoginSweepPlan(LodLoginSweepPlanMode.RevisitVisited, visited, label);
     }
 
     /// <summary>
@@ -135,7 +176,7 @@ public static class LodLoginSweepBootstrap
         if (TryPlanCoastGuard(kinds, centerSx, centerSz, footprint, out List<long> coastKeys))
         {
             int planned = coastKeys.Count;
-            coastKeys = BudgetVisitStops(coastKeys, centerSx, centerSz);
+            coastKeys = BudgetVisitStops(coastKeys, centerSx, centerSz, BootstrapMaxVisitStops);
             LogBudget(capi, planned, coastKeys.Count);
             coastKeys.Sort();
             return new LodLoginSweepPlan(
@@ -151,7 +192,7 @@ public static class LodLoginSweepBootstrap
             radiusKeys.Add(LodWorld.SectionKey(0, sx, sz));
         }
         int plannedRadius = radiusKeys.Count;
-        radiusKeys = BudgetVisitStops(radiusKeys, centerSx, centerSz);
+        radiusKeys = BudgetVisitStops(radiusKeys, centerSx, centerSz, BootstrapMaxVisitStops);
         LogBudget(capi, plannedRadius, radiusKeys.Count);
         radiusKeys.Sort();
         return new LodLoginSweepPlan(
@@ -160,9 +201,12 @@ public static class LodLoginSweepBootstrap
             LabelForBudgetedBootstrap("Bootstrap (new world)", plannedRadius, radiusKeys.Count));
     }
 
-    internal static List<long> BudgetVisitStops(List<long> keys, int centerSx, int centerSz)
+    internal static List<long> BudgetVisitStops(
+        List<long> keys,
+        int centerSx,
+        int centerSz,
+        int max)
     {
-        int max = BootstrapMaxVisitStops;
         if (keys.Count <= max) return keys;
 
         keys.Sort((a, b) =>
@@ -195,12 +239,22 @@ public static class LodLoginSweepBootstrap
             ? $"{baseLabel} ({budgeted} of {planned})"
             : baseLabel;
 
-    internal static void LogBudget(ICoreClientAPI? capi, int planned, int budgeted)
+    static string LabelForBudgetedRevisit(int planned, int budgeted)
+    {
+        string baseLabel = "Refreshing visited land (season)";
+        if (budgeted >= planned) return baseLabel;
+        return $"{baseLabel} ({budgeted} of {planned})";
+    }
+
+    internal static void LogBudget(ICoreClientAPI? capi, int planned, int budgeted, string kind = "Bootstrap")
     {
         if (budgeted >= planned) return;
+        double targetSec = kind == "Revisit"
+            ? LodLoginSweepTiming.TargetMaxSec
+            : LodLoginSweepTiming.BootstrapTargetMaxSec;
         capi?.Logger.Notification(
-            "[DistantVistas] Bootstrap budget: visiting {0} of {1} disk cells (~{2} target).",
-            budgeted, planned, LodLoginSweepTiming.FormatDuration(LodLoginSweepTiming.TargetMaxSec));
+            "[DistantVistas] {0} budget: visiting {1} of {2} L0 cells (~{3} max).",
+            kind, budgeted, planned, LodLoginSweepTiming.FormatDuration(targetSec));
     }
 
     static bool TryPlanCoastGuard(
