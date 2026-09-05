@@ -148,6 +148,15 @@ public static class LoginSweepChecks
     {
         c.Eq("distantvistas-loginbake", LodLoginBakeTimeFreeze.SpeedModifierKey,
             "login sweep calendar speed modifier key");
+
+        string timeFreeze = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeTimeFreeze.cs"));
+        c.True(timeFreeze.Contains("anchoredTotalHours"),
+            "time freeze anchors TotalHours during sweep");
+        c.True(timeFreeze.Contains("CalendarSpeedMul = 0f"),
+            "time freeze zeroes calendar speed multiplier");
+        c.True(timeFreeze.Contains("RemoveTimeSpeedModifier(SpeedModifierKey)"),
+            "time freeze cancels SpeedOfTime modifier each tick");
     }
 
     static void TeardownHook(Check c)
@@ -537,10 +546,12 @@ public static class LoginSweepChecks
 
         string hud = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeHudHide.cs"));
-        c.True(hud.Contains("HideGuis"),
+        c.True(hud.Contains("savedHidden"),
             "HUD hide saves prior HideGuis state");
-        c.True(hud.Contains(".gui"),
-            "HUD hide uses the .gui client toggle");
+        c.True(hud.Contains("TrySetHideGuisDirect"),
+            "HUD hide sets hideGuis directly on ClientMain when possible");
+        c.True(hud.Contains("TriggerChatMessage(\".gui\")"),
+            "HUD hide falls back to .gui toggle when direct set unavailable");
     }
 
     static void HudHide(Check c)

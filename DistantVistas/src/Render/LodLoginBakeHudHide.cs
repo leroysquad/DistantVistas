@@ -1,13 +1,21 @@
+using System.Reflection;
 using Vintagestory.API.Client;
+using Vintagestory.Client.NoObf;
 
 namespace DistantVistas;
 
 /// <summary>
-/// Hides the vanilla HUD during the login visit sweep via the <c>.gui</c> client command
-/// (same toggle as F4 in survival), then restores the prior visibility on teardown.
+/// Hides the vanilla HUD during the login visit sweep (same state as F4 in survival),
+/// then restores the prior visibility on teardown.
 /// </summary>
 public sealed class LodLoginBakeHudHide
 {
+    static readonly FieldInfo? HideGuisField = typeof(ClientMain).GetField(
+        "hideGuis", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
+    static readonly PropertyInfo? HideGuisProperty = typeof(ClientMain).GetProperty(
+        "HideGuis", BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic);
+
     readonly ICoreClientAPI capi;
     bool? savedHidden;
     bool applied;
@@ -23,7 +31,7 @@ public sealed class LodLoginBakeHudHide
         }
 
         if (!capi.HideGuis)
-            capi.TriggerChatMessage(".gui");
+            TrySetHideGuis(true);
     }
 
     public void Restore()
@@ -34,12 +42,46 @@ public sealed class LodLoginBakeHudHide
         {
             bool wantHidden = savedHidden.Value;
             if (capi.HideGuis != wantHidden)
-                capi.TriggerChatMessage(".gui");
+                TrySetHideGuis(wantHidden);
         }
         finally
         {
             savedHidden = null;
             applied = false;
         }
+    }
+
+    void TrySetHideGuis(bool hidden)
+    {
+        if (TrySetHideGuisDirect(capi, hidden)) return;
+
+        // Chat-toggle fallback when the engine field is unavailable or renamed.
+        if (capi.HideGuis != hidden)
+            capi.TriggerChatMessage(".gui");
+    }
+
+    static bool TrySetHideGuisDirect(ICoreClientAPI capi, bool hidden)
+    {
+        try
+        {
+            ClientMain clientMain = capi as ClientMain ?? (ClientMain)capi.World;
+            if (HideGuisProperty?.SetMethod != null)
+            {
+                HideGuisProperty.SetValue(clientMain, hidden);
+                return capi.HideGuis == hidden;
+            }
+
+            if (HideGuisField?.FieldType == typeof(bool))
+            {
+                HideGuisField.SetValue(clientMain, hidden);
+                return capi.HideGuis == hidden;
+            }
+        }
+        catch
+        {
+            // Fall back to .gui toggle.
+        }
+
+        return false;
     }
 }

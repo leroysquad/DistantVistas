@@ -1,3 +1,8 @@
+## 0.8.21
+- **Login sweep time freeze hardened (0.8.20 playtest).** World time kept advancing during the visit sweep. `LodLoginBakeTimeFreeze` now anchors `TotalHours` on arm, forces `CalendarSpeedMul = 0`, and cancels net `SpeedOfTime` every tick; full calendar-speed restore on release.
+- **Login sweep HUD restore hardened (0.8.20 playtest).** F4/HUD could stay hidden after sweep. `LodLoginBakeHudHide` sets `hideGuis` on `ClientMain` directly when possible (`.gui` chat toggle only as fallback) and restores the exact pre-sweep visibility on teardown.
+- **0.8.20 retained:** splash painted from `OnNewFrame` every sweep frame, 3–5 min revisit budget, view-distance boost, miss-resweep cap, and deadlock fixes.
+
 ## 0.8.20
 - **CRITICAL: login splash black screen (0.8.19 playtest).** Sweep ticks advanced from `ScreenManager.OnNewFrame`, but splash paint only ran on `GuiScreenRunningGame.RenderToDefaultFramebuffer` Prefix — that present path often never runs while world draws are suppressed, so `HasEverPaintedOpaque` stayed false and the screen stayed black. Fix: paint the DV splash every frame from `OnNewFrame` / `RenderPulse` while the sweep is active (framebuffer-prefix backup retained). Vanilla chunk hide is deferred until the first opaque splash frame. Miss-retry cap, 3–5 min revisit budget, view-distance boost, and deadlock fixes unchanged from 0.8.19.
 

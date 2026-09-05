@@ -13,6 +13,7 @@ public sealed class LodLoginBakeTimeFreeze
 
     readonly ICoreClientAPI capi;
     float? savedCalendarSpeedMul;
+    double? anchoredTotalHours;
     bool frozen;
 
     public LodLoginBakeTimeFreeze(ICoreClientAPI capi) => this.capi = capi;
@@ -26,15 +27,13 @@ public sealed class LodLoginBakeTimeFreeze
         if (!frozen)
         {
             savedCalendarSpeedMul = cal.CalendarSpeedMul;
+            anchoredTotalHours = cal.TotalHours;
             frozen = true;
         }
 
         cal.CalendarSpeedMul = 0f;
-
-        cal.RemoveTimeSpeedModifier(SpeedModifierKey);
-        float speed = cal.SpeedOfTime;
-        if (speed != 0f)
-            cal.SetTimeSpeedModifier(SpeedModifierKey, -speed);
+        ZeroSpeedOfTime(cal);
+        AnchorTotalHours(cal);
     }
 
     public void Restore()
@@ -51,7 +50,25 @@ public sealed class LodLoginBakeTimeFreeze
         finally
         {
             savedCalendarSpeedMul = null;
+            anchoredTotalHours = null;
             frozen = false;
         }
+    }
+
+    void ZeroSpeedOfTime(IGameCalendar cal)
+    {
+        cal.RemoveTimeSpeedModifier(SpeedModifierKey);
+        float speed = cal.SpeedOfTime;
+        if (speed != 0f)
+            cal.SetTimeSpeedModifier(SpeedModifierKey, -speed);
+    }
+
+    void AnchorTotalHours(IGameCalendar cal)
+    {
+        if (!anchoredTotalHours.HasValue) return;
+
+        double drift = anchoredTotalHours.Value - cal.TotalHours;
+        if (Math.Abs(drift) > 1e-6)
+            cal.Add((float)drift);
     }
 }
