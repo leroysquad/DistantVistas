@@ -48,6 +48,7 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
     ScreenManager? screenManager;
     string vanillaLine = "";
     string dvDetail = "";
+    float lastFraction;
     bool active;
     bool useStockFallback;
     bool screenHeld;
@@ -91,9 +92,10 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
 
     public void SetProgress(float fraction, string detail)
     {
+        lastFraction = Math.Clamp(fraction, 0f, 1f);
         dvDetail = detail ?? "";
         ApplyLoadingText();
-        stockFallback?.SetProgress(fraction, dvDetail);
+        stockFallback?.SetProgress(lastFraction, FormatDetailWithPercent(dvDetail, lastFraction));
     }
 
     public void SetOverlayAlpha(float alpha) { }
@@ -163,7 +165,8 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
         if (string.IsNullOrWhiteSpace(vanillaLine))
             CaptureVanillaLine();
 
-        screenManager.loadingText = FormatLoadingText(vanillaLine, dvDetail);
+        screenManager.loadingText = FormatLoadingText(
+            vanillaLine, FormatDetailWithPercent(dvDetail, lastFraction));
     }
 
     void CaptureVanillaLine()
@@ -178,6 +181,19 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
 
         int sep = current.IndexOf(" — ", StringComparison.Ordinal);
         vanillaLine = sep > 0 ? current[..sep] : current;
+    }
+
+    static string FormatDetailWithPercent(string detail, float fraction)
+    {
+        int pct = (int)Math.Round(Math.Clamp(fraction, 0f, 1f) * 100);
+        if (string.IsNullOrWhiteSpace(detail))
+            return pct + "%";
+
+        // Bake status writer already embeds "Preparing/Visiting/Finishing N%".
+        if (detail.Contains('%', StringComparison.Ordinal))
+            return detail;
+
+        return pct + "% — " + detail;
     }
 
     static string FormatLoadingText(string vanilla, string dv)

@@ -904,8 +904,19 @@ public sealed class LodLoginBake
 
     void UpdateProgress(float progress, string detail, bool force = false)
     {
-        if (force || progressUi.ShouldUpdate(phase, finished, total, detail))
-            overlay.UpdateProgress(progress, detail);
+        string phaseLabel = phase switch
+        {
+            Phase.OverlayWarmup or Phase.WaitingForWorld => "Preparing",
+            Phase.Sweeping => "Visiting",
+            Phase.Auditing or Phase.Draining or Phase.Stabilizing => "Finishing",
+            _ => "Loading"
+        };
+        int pct = (int)Math.Round(Math.Clamp(progress, 0f, 1f) * 100);
+        string lined = detail.StartsWith(phaseLabel, StringComparison.Ordinal)
+            ? detail
+            : $"{phaseLabel} {pct}% — {detail}";
+        if (force || progressUi.ShouldUpdate(phase, finished, total, lined))
+            overlay.UpdateProgress(progress, lined);
     }
 
     string StatusWithEta(string detail) =>

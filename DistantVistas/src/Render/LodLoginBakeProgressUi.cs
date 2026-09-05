@@ -5,7 +5,7 @@ namespace DistantVistas;
 /// </summary>
 public sealed class LodLoginBakeProgressUi
 {
-    const int PctStep = 10;
+    const int PctStep = 5;
 
     int lastPctBucket = -1;
     LodLoginBake.Phase lastPhase = LodLoginBake.Phase.Done;

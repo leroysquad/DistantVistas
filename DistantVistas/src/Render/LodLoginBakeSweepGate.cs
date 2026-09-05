@@ -65,6 +65,7 @@ public static class LodLoginBakeSweepGate
         }
 
         bool wasDeferred = HandoverDeferred;
+        // Clear hold flags first so a failed screen attach cannot leave Loading… stuck.
         HandoverDeferred = false;
         SuppressRunningGameRender = false;
         SweepActive = false;
@@ -72,30 +73,44 @@ public static class LodLoginBakeSweepGate
         AllowHandoverPassThrough = true;
         try
         {
+            TrySetLoadingText(capi, "Loading… — Finishing 100%");
+
             var clientMain = (ClientMain)capi.World;
-            GuiScreenRunningGame running = clientMain.ScreenRunningGame;
-            ScreenManager screenManager = running.ScreenManager;
-
-            if (HandoverMethod != null)
-                HandoverMethod.Invoke(running, null);
-            else
-                capi.Logger.Warning(
-                    "[DistantVistas] Login sweep: handOverRenderingToRunningGame not found.");
-
-            try
+            GuiScreenRunningGame? running = clientMain.ScreenRunningGame;
+            if (running == null)
             {
-                LoadScreenNoLoadCallMethod?.Invoke(screenManager, new object[] { running });
+                capi.Logger.Warning(
+                    "[DistantVistas] Login sweep: ScreenRunningGame null — flags cleared (reason={0}).",
+                    reason);
             }
-            catch (Exception ex)
+            else
             {
-                capi.Logger.Warning(
-                    "[DistantVistas] Login sweep: LoadScreenNoLoadCall(running) failed ({0}).", ex.Message);
+                ScreenManager screenManager = running.ScreenManager;
+
+                if (HandoverMethod != null)
+                    HandoverMethod.Invoke(running, null);
+                else
+                    capi.Logger.Warning(
+                        "[DistantVistas] Login sweep: handOverRenderingToRunningGame not found.");
+
+                try
+                {
+                    LoadScreenNoLoadCallMethod?.Invoke(screenManager, new object[] { running });
+                }
+                catch (Exception ex)
+                {
+                    capi.Logger.Warning(
+                        "[DistantVistas] Login sweep: LoadScreenNoLoadCall(running) failed ({0}).",
+                        ex.Message);
+                }
             }
         }
         catch (Exception ex)
         {
             capi.Logger.Warning(
-                "[DistantVistas] Login sweep: handover to running game failed ({0}).", ex.Message);
+                "[DistantVistas] Login sweep: handover to running game failed ({0}) — flags already cleared.",
+                ex.Message);
+            TryForceRunningScreen(capi);
         }
         finally
         {
@@ -108,6 +123,36 @@ public static class LodLoginBakeSweepGate
             "[DistantVistas] Login sweep: handover deferral cleared — reason={0}{1}",
             reason,
             wasDeferred ? "" : " (screen forced)");
+    }
+
+    static void TrySetLoadingText(ICoreClientAPI capi, string text)
+    {
+        try
+        {
+            var clientMain = (ClientMain)capi.World;
+            GuiScreenRunningGame? running = clientMain.ScreenRunningGame;
+            if (running?.ScreenManager != null)
+                running.ScreenManager.loadingText = text;
+        }
+        catch
+        {
+            // Best-effort status only.
+        }
+    }
+
+    static void TryForceRunningScreen(ICoreClientAPI capi)
+    {
+        try
+        {
+            var clientMain = (ClientMain)capi.World;
+            GuiScreenRunningGame? running = clientMain.ScreenRunningGame;
+            if (running == null) return;
+            LoadScreenNoLoadCallMethod?.Invoke(running.ScreenManager, new object[] { running });
+        }
+        catch
+        {
+            // Flags already cleared; player can Esc to menu.
+        }
     }
 
     /// <inheritdoc cref="ClearHandoverDeferral"/>

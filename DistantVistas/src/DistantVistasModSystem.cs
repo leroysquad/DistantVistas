@@ -259,6 +259,17 @@ public class DistantVistasModSystem : ModSystem
                 "Farseer overlay is off. We draw the hills. Their heightmaps are the far silhouettes.");
         }
         Mod.Logger.Notification("DistantVistas {0} loaded (client-only)", Mod.Info.Version);
+        try
+        {
+            Mod.Logger.Notification(
+                "DistantVistas origin: {0} ({1})",
+                Mod.FileName ?? "(unnamed)",
+                Mod.SourcePath ?? "(unknown path)");
+        }
+        catch
+        {
+            // Diagnostic only.
+        }
     }
 
     /// <summary>
@@ -1108,16 +1119,27 @@ public class DistantVistasModSystem : ModSystem
         // vanilla-server case it exists to stay out of the way of.
         assist?.Greet();
 
-        if (!LoginVisitSweepEnabled())
+        try
         {
-            renderer.LoginBakeComplete = true;
-            LodLoginBakeSweepGate.ClearHandoverDeferral(capi, "disabled");
-            Mod.Logger.Notification(
-                "[DistantVistas] Login visit sweep disabled in config — entering play without overlay.");
+            if (!LoginVisitSweepEnabled())
+            {
+                renderer.LoginBakeComplete = true;
+                LodLoginBakeSweepGate.ClearHandoverDeferral(capi, "disabled", force: true);
+                Mod.Logger.Notification(
+                    "[DistantVistas] Login visit sweep disabled in config — entering play without overlay.");
+            }
+            else
+            {
+                StartLoginVisitSweepIfNeeded();
+            }
         }
-        else
+        catch (Exception ex)
         {
-            StartLoginVisitSweepIfNeeded();
+            Mod.Logger.Error(
+                "[DistantVistas] Login visit sweep setup failed ({0}) — forcing handover release.",
+                ex);
+            renderer.LoginBakeComplete = true;
+            LodLoginBakeSweepGate.ClearHandoverDeferral(capi, "level-finalize-error", force: true);
         }
 
         capi.Event.RegisterCallback(_ => LogStats("Stats after 30s"), 30000);
