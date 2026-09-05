@@ -59,6 +59,8 @@ uniform vec4 climateHigh01;
 uniform vec4 climateHigh11;
 
 out vec3 tint;
+// 1 for vegetation slots on opaque land; fragment uses it for coarse plant-pull.
+out float grassPullWeight;
 out vec4 worldPos;
 out vec4 vertexColor;
 out float yLevel;
@@ -84,10 +86,12 @@ void main()
     int slotRaw = int(vertexColorIn.a * 255.0 + 0.5);
     int slot = clamp(slotRaw - (slotRaw / TINT_SLOTS) * TINT_SLOTS, 0, TINT_SLOTS - 1);
     int band = slotRaw / TINT_SLOTS;
+    grassPullWeight = (band == 0 && slot > 0) ? 1.0 : 0.0;
     float tintBlend = clamp((yLevel - tintYLow) / max(1.0, tintYHigh - tintYLow), 0.0, 1.0);
     // Band 3: login-baked palette RGB is final; never re-apply live climate/season.
     if (band == 3) {
         tint = vec3(1.0);
+        grassPullWeight = 0.0;
     } else {
     tint = mix(tintsLow[slot].rgb, tintsHigh[slot].rgb, tintBlend);
     // Slot 0 is identity. A snow-row high sample must not bleach captured grass

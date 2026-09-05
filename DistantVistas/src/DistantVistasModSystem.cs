@@ -203,6 +203,7 @@ public class DistantVistasModSystem : ModSystem
         // Refreshes old stable colours as well as empty server colours. Client-side only:
         // this needs the texture atlas and topsoil textures; a server stores 0 on purpose.
         pipeline.RepairUncoloredPalette = RefreshStoredPalette;
+        pipeline.HealLegacyPalette = HealLegacySection;
         renderer = new LodTerrainRenderer(capi, pipeline.World, pipeline.Worker, tints)
         {
             AutoUnpause = Environment.GetEnvironmentVariable("VINTAGEHORIZONS_AUTOUNPAUSE") == "1",
@@ -630,6 +631,10 @@ public class DistantVistasModSystem : ModSystem
         return refreshed + LodPaletteRepair.Fill(section, AtlasColorOf);
     }
 
+    int HealLegacySection(LodSection section, long sectionKey) =>
+        LodSeasonBake.UpgradeLegacyEntries(
+            capi, section, sectionKey, tints.PlantTintFallback, UntintedForRebake);
+
     /// <summary>
     /// Client palette registration for newly captured blocks: stable untinted atlas mean
     /// plus a live tint slot. Login bake handles visited cache separately on join.
@@ -750,7 +755,7 @@ public class DistantVistasModSystem : ModSystem
         TextureMean grass = MeanOf(overlay, overlayId);
         if (grass.Coverage <= 0f) return false;
 
-        float a = grass.Coverage;
+        float a = LodTopSoil.GreenerCoverage(grass.Coverage);
         composite = unchecked((int)0xFF000000)
             | Channel(soil.B, grass.B, a) << 16 | Channel(soil.G, grass.G, a) << 8 | Channel(soil.R, grass.R, a);
         share = new LodUntintedShare(

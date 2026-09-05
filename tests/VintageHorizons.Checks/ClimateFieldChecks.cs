@@ -80,8 +80,9 @@ public static class ClimateFieldChecks
         c.Eq(before.LowG, after.LowG, "walk does not rewrite far green");
         c.Eq(before.LowB, after.LowB, "walk does not rewrite far blue");
         c.Eq(before.LowTemp, after.LowTemp, "walk does not rewrite far temperature");
+        c.Eq(40, LodClimateField.CellBlocks, "climate lattice is 40 blocks (0.8.46 / 40-4 field)");
         c.True(field.TryGet(10000 + 10, 8000 + 10, out _),
-            "a point inside the same 64-block cell hits the same sample");
+            "a point inside the same 40-block cell hits the same sample");
         c.False(field.TryGet(10000 + LodClimateField.CellBlocks, 8000, out _),
             "the next cell is not filled by a neighbour write");
     }

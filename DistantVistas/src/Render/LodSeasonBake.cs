@@ -333,4 +333,63 @@ public static class LodSeasonBake
         }
         return false;
     }
+
+    /// <summary>Legacy live-tint rows still on disk (brown/manila plates on rejoin).</summary>
+    public static bool SectionNeedsLegacyHeal(LodSection section)
+    {
+        for (int i = 0; i < section.Palette.Count; i++)
+        {
+            LodPaletteEntry e = section.Palette[i];
+            if ((e.Flags & LodPaletteEntry.FlagBaked) != 0) continue;
+            if (e.TintSlot != LodTintRegistry.SlotNone) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Discover-bake legacy caches that still carry a live tint slot. Runs on disk load
+    /// so old SQLite browns heal without a manual cache wipe (0.8.46 join refresh).
+    /// </summary>
+    public static int UpgradeLegacyEntries(
+        ICoreClientAPI capi,
+        LodSection section,
+        long sectionKey,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf)
+    {
+        IClientWorldAccessor world = capi.World;
+        int changed = 0;
+        for (int pid = 0; pid < section.Palette.Count; pid++)
+        {
+            LodPaletteEntry entry = section.Palette[pid];
+            if ((entry.Flags & LodPaletteEntry.FlagBaked) != 0) continue;
+            if (entry.TintSlot == LodTintRegistry.SlotNone) continue;
+            if (entry.BlockId <= 0) continue;
+            if (!section.TryFindPaletteTop(sectionKey, pid, out int x, out int y, out int z)) continue;
+
+            Block block = world.Blocks[entry.BlockId];
+            (int untinted, LodUntintedShare share) = untintedOf(block);
+            if (!CanBake(block, untinted, plantTintFallback)) continue;
+
+            int baked = BakePaletteColor(
+                capi, world, block, untinted, x, y, z, share, plantTintFallback);
+            baked = LodPaletteRepair.KeepCapturedColor(
+                baked, untinted, LodBlockPolicy.IsClimateUntinted(block));
+
+            if (baked == entry.Color && (entry.Flags & LodPaletteEntry.FlagBaked) != 0
+                && entry.TintSlot == LodTintRegistry.SlotNone)
+            {
+                continue;
+            }
+
+            entry.Color = baked;
+            entry.Flags = (byte)(entry.Flags | LodPaletteEntry.FlagBaked);
+            entry.TintSlot = LodTintRegistry.SlotNone;
+            section.Palette[pid] = entry;
+            changed++;
+        }
+
+        if (changed > 0) section.InvalidatePaletteSnapshot();
+        return changed;
+    }
 }

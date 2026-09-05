@@ -131,6 +131,7 @@ public sealed class LodLoginBake
         timeFreeze.EnsureFrozen();
         gameMode.EnsureCreative();
         hudHide.EnsureHidden();
+        playerHide.EnsureHidden();
         overlay.UpdateProgress(Progress, StatusWithEta("Waiting for world to load…"));
 
         if (total == 0)

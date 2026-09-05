@@ -96,6 +96,9 @@ public class LodPipeline
     /// </summary>
     public System.Func<LodSection, int>? RepairUncoloredPalette;
 
+    /// <summary>Upgrade legacy live-tint palette rows after load (join refresh).</summary>
+    public System.Func<LodSection, long, int>? HealLegacyPalette;
+
     /// <summary>Palette entries given a colour on load because the cache had none.</summary>
     public int PaletteEntriesRepaired { get; private set; }
 
@@ -416,6 +419,7 @@ public class LodPipeline
             LoadCalls++;
             LoadMsTotal += ms;
             if (ms > LoadMsMax) LoadMsMax = ms;
+            if (loaded != null) AfterSectionLoaded(key, loaded);
             return loaded;
         };
         CachedSectionsLoaded = store.LoadAllKeys((level, sx, sz, applyToParent, provisional) =>
@@ -459,6 +463,7 @@ public class LodPipeline
         if (LodWorld.KeyLevel(key) == 0) section.MarkCapturedQuadrantsProvisional();
 
         World.InstallLoaded(key, section);
+        AfterSectionLoaded(key, section);
         // Persist it: re-fetching a mean 45.9 KB a section every session is not an option,
         // so a section from the network becomes part of the local cache like any other.
         World.MarkChanged(key);
@@ -539,7 +544,7 @@ public class LodPipeline
                 // runs for anything that is no longer terrain (fire, meta) from sections
                 // captured under an older policy, without needing a re-explore.
                 result.Section.RemoveRunsWithFlag(LodPaletteEntry.FlagSkip);
-                repaired = RepairUncoloredPalette?.Invoke(result.Section) ?? 0;
+                AfterSectionLoaded(result.Key, result.Section, ref repaired);
             }
             World.InstallLoaded(result.Key, result.Section);
 
@@ -551,6 +556,33 @@ public class LodPipeline
                 PaletteEntriesRepaired += repaired;
                 World.MarkChanged(result.Key);
             }
+        }
+    }
+
+    /// <summary>
+    /// Palette repair and legacy discover-bake after a section is read from disk. Sync and
+    /// async load paths both land here so FlagBaked survives Reclassify and old live-tint
+    /// caches upgrade on revisit without a manual cache wipe.
+    /// </summary>
+    void AfterSectionLoaded(long key, LodSection section, ref int repaired)
+    {
+        repaired += RepairUncoloredPalette?.Invoke(section) ?? 0;
+        int healed = HealLegacyPalette?.Invoke(section, key) ?? 0;
+        if (healed > 0)
+        {
+            repaired += healed;
+            World.RenderDirty.Add(key);
+        }
+    }
+
+    void AfterSectionLoaded(long key, LodSection section)
+    {
+        int repaired = 0;
+        AfterSectionLoaded(key, section, ref repaired);
+        if (repaired > 0)
+        {
+            PaletteEntriesRepaired += repaired;
+            World.MarkChanged(key);
         }
     }
 

@@ -13,6 +13,7 @@ in float dist;
 in float fogAmount;
 in float edgeFade;
 in vec3 tint;
+in float grassPullWeight;
 in vec2 localXZ;
 
 // Gap fill: a coarser parent mesh drawn only inside one child footprint that
@@ -98,6 +99,7 @@ void main()
 
     vec3 albedo = vertexColor.rgb * tint;
     float outAlpha = band == 2 ? THIN_ALPHA : (band == 1 ? WATER_ALPHA : 1.0);
+    float upness = clamp(normal.y, 0.0, 1.0);
     // Foam / missing-tex water stores near-white and then looks like ice.
     // Force a water blue so streams stay streams without a remesh.
     if (band == 1 && (albedo.r + albedo.g + albedo.b) > 1.65)
@@ -106,16 +108,27 @@ void main()
     if (!translucent && !baked) {
         // Alpine overlay only. Winter valleys leave snowLineY disabled so captured
         // snow and seasonal grass match the foreground instead of a white sheet.
-        float upness = clamp(normal.y, 0.0, 1.0);
         float snowMix = smoothstep(snowLineY, snowLineY + 48.0, yLevel) * upness * 0.45;
         albedo = mix(albedo, vec3(0.82, 0.85, 0.88), snowMix);
     }
 
-    // Water is a smooth surface; only break up live-tint land.
-    if (!translucent && !baked) {
+    // Water is a smooth surface; only break up coarse merged plates. At L0/L1
+    // (columnBlocks 1-2) valuenoise on greedy quads reads as manila checkerboard.
+    const float COARSE_PLATE_COLUMNS = 8.0;
+    if (!translucent && !baked && columnBlocks >= COARSE_PLATE_COLUMNS) {
         float period = max(4.0, columnBlocks * 6.0);
         float n = valuenoise(worldPos.xyz / period);
         albedo *= 1.0 + 0.10 * (n - 0.5);
+    }
+
+    // 0.8.46: pull manila topsoil composites toward the live plant tint on coarse
+    // grass only. Near L0 keeps flat greedy colour (0.7.76); per-fragment pull on
+    // near quads caused micro-square shading in 0.8.45.
+    if (!translucent && !baked && grassPullWeight > 0.5 && upness > 0.55
+        && columnBlocks >= COARSE_PLATE_COLUMNS) {
+        float pull = smoothstep(COARSE_PLATE_COLUMNS, 32.0, columnBlocks) * 0.32;
+        vec3 toward = vertexColor.rgb * tint * vec3(0.94, 1.10, 0.90);
+        albedo = mix(albedo, toward, pull);
     }
 
     vec4 terraColor = vec4(albedo, outAlpha);

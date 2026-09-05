@@ -1,3 +1,7 @@
+## 0.7.88
+- **Manila/tan grass fix (0.8.46 port).** Near L0/L1 keep flat greedy grass like 0.7.76: valuenoise plate-breakup and shader plant-pull run only on coarse sections (`columnBlocks >= 8`, L3+), not on near quads where they read as checkerboard micro-squares. Coarse grass tops get a far-only plant-pull toward live climate tint. Greener topsoil bake (`LodTopSoil.GreenerCoverage`) biases stable captures away from dirt-heavy manila. Climate field is 40-block cells with four-corner bilinear upload per section draw (unchanged wiring, denser lattice). On join/load, `RefreshStable` skips `FlagBaked` rows and `UpgradeLegacyEntries` heals old SQLite live-tint browns without a cache wipe.
+- **Login sweep stack unchanged:** full-screen backdrop + gold arc title + loading panel, input lock, mute, freeze time, HUD hide (`.gui`), player invis + nametag hide, miss-list re-sweep before release/teardown.
+
 ## 0.7.87
 - **Login sweep player hide (MP-aware).** During the visit sweep the local player entity is tinted fully transparent, first-person hands are hidden, and sneak is forced so vanilla suppresses the nameplate the same way crouching does. All state restores on teardown. Client-side only: other players on a dedicated server may still see a teleporting body because position is server-authoritative.
 

@@ -9,7 +9,7 @@ namespace DistantVistas;
 /// </summary>
 public sealed class LodClimateField
 {
-    public const int CellBlocks = 64;
+    public const int CellBlocks = 40;
     public const int MaxCells = 8192;
 
     public struct Sample
