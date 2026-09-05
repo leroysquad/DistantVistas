@@ -25,6 +25,7 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
     bool useStockFallback;
     bool loggedFirstPaint;
     bool loggedResolve;
+    int consecutiveVanillaPaints;
 
     /// <summary>
     /// Fired at the start of each draw pass, before any blocking vanilla loading draw.
@@ -33,6 +34,10 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
 
     public bool IsReady => loadingScreen != null || stockFallback?.IsReady == true;
     public bool HasRendered { get; private set; }
+    public bool IsOverlayReady =>
+        useStockFallback
+            ? stockFallback?.IsOverlayHealthy == true
+            : consecutiveVanillaPaints >= LodLoginBakeScreenRenderer.RequiredHealthyFrames;
 
     public double RenderOrder => 1.5;
     public int RenderRange => 9998;
@@ -43,6 +48,7 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
     {
         active = true;
         HasRendered = false;
+        consecutiveVanillaPaints = 0;
         loggedFirstPaint = false;
         loggedResolve = false;
         useStockFallback = false;
@@ -80,7 +86,11 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
             if (!useStockFallback && loadingScreen != null)
                 ApplyLoadingText();
             else
+            {
                 stockFallback?.OnRenderFrame(deltaTime, stage);
+                if (stockFallback?.HasRendered == true)
+                    HasRendered = true;
+            }
             return;
         }
 
@@ -93,6 +103,7 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
                 ApplyLoadingText();
                 loadingScreen.RenderToDefaultFramebuffer(deltaTime);
                 HasRendered = true;
+                consecutiveVanillaPaints++;
                 if (!loggedFirstPaint)
                 {
                     loggedFirstPaint = true;
@@ -107,6 +118,7 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
                     "[DistantVistas] Login sweep: vanilla loading draw failed ({0}) — stock fallback.",
                     ex.Message);
                 useStockFallback = true;
+                consecutiveVanillaPaints = 0;
                 stockFallback ??= new LodLoginBakeStockLoadingFallback(capi);
                 stockFallback.Show();
             }
@@ -138,6 +150,7 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
                 capi.Logger.Warning(
                     "[DistantVistas] Login sweep: no cached vanilla loading screen — stock fallback.");
                 useStockFallback = true;
+                consecutiveVanillaPaints = 0;
                 stockFallback = new LodLoginBakeStockLoadingFallback(capi);
                 stockFallback.Show();
                 capi.Logger.Notification(
@@ -163,6 +176,7 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
         }
 
         useStockFallback = true;
+        consecutiveVanillaPaints = 0;
         stockFallback = new LodLoginBakeStockLoadingFallback(capi);
         stockFallback.Show();
         capi.Logger.Notification(

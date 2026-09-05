@@ -24,6 +24,7 @@ public sealed class LodLoginBakeOverlay : IDisposable
 
     public bool IsReady => vanillaLoading.IsReady;
     public bool HasRendered => vanillaLoading.HasRendered;
+    public bool IsOverlayReady => vanillaLoading.IsOverlayReady;
 
     public void UpdateProgress(float fraction, string detail) =>
         vanillaLoading.SetProgress(fraction, detail);

@@ -275,23 +275,30 @@ public sealed class LodLoginBake
 
         if (overlayWarmupTicks < OverlayWarmupMinTicks) return;
 
+        if (!overlay.IsOverlayReady)
+        {
+            if (overlayWarmupTicks >= OverlayWarmupMaxTicks)
+            {
+                capi.Logger.Warning(
+                    "[DistantVistas] Login visit sweep: loading cover never painted after {0} ticks — aborting into play.",
+                    OverlayWarmupMaxTicks);
+                AbortSweep("loading cover never painted");
+                return;
+            }
+
+            string waitDetail = overlay.HasRendered
+                ? $"{sweepModeLabel} — loading cover stabilizing ({overlayWarmupTicks})…"
+                : $"{sweepModeLabel} — waiting for loading cover ({overlayWarmupTicks})…";
+            overlay.UpdateProgress(Progress, StatusWithEta($"{waitDetail} (Esc to pause & save)"));
+            return;
+        }
+
         if (!loggedWarmupComplete)
         {
             loggedWarmupComplete = true;
             statusWriter.TouchAdvance("warmup-complete");
-            if (overlay.HasRendered)
-            {
-                capi.Logger.Notification(
-                    "[DistantVistas] Login visit sweep: vanilla loading screen active.");
-            }
-            else
-            {
-                capi.Logger.Warning(
-                    "[DistantVistas] Login visit sweep: vanilla loading screen not painted — continuing sweep anyway.");
-            }
-
             capi.Logger.Notification(
-                "[DistantVistas] Login visit sweep: warmup complete — entering visit teleports.");
+                "[DistantVistas] Login visit sweep: loading cover ready — entering visit teleports.");
         }
 
         worldHide.HideAllLoaded();

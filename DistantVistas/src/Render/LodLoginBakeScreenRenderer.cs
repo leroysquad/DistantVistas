@@ -121,6 +121,8 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     /// <summary>Call as early as LevelFinalize allows so the first painted frame is already opaque.</summary>
     public void PrepareImmediate()
     {
+        EnsureWhiteTexture();
+        ResolveQuadMesh();
         EnsureGraphicsLoaded();
         RebuildText();
     }
@@ -138,11 +140,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         IRenderAPI rapi = capi.Render;
         float w = rapi.FrameWidth;
         float h = rapi.FrameHeight;
-        if (w <= 0 || h <= 0)
-        {
-            if (orthoPass) ConsecutiveOpaqueFrames = 0;
-            return;
-        }
+        if (w <= 0 || h <= 0) return;
 
         bool drewOpaque = DrawFullFrame(w, h, orthoPass, countHealth: orthoPass);
         if (!drewOpaque && orthoPass)
@@ -305,13 +303,21 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         if (width <= 0 || height <= 0 || color[3] <= 0.001f) return false;
 
         int bakedId = SolidColorTextureId(color);
-        if (bakedId > 0 && TryDrawWithExplicitQuad(bakedId, x, y, width, height, z))
-            return true;
+        if (bakedId > 0)
+        {
+            if (TryDrawWithExplicitQuad(bakedId, x, y, width, height, z))
+                return true;
+            if (orthoPass && TryDrawWithInternalQuad(bakedId, x, y, width, height, z, null))
+                return true;
+        }
 
         if (!orthoPass) return false;
 
         int whiteId = EnsureWhiteTexture();
-        return whiteId > 0 && TryDrawWithInternalQuad(whiteId, x, y, width, height, z, color);
+        if (whiteId > 0 && TryDrawWithInternalQuad(whiteId, x, y, width, height, z, color))
+            return true;
+
+        return bakedId > 0 && TryDrawWithInternalQuad(bakedId, x, y, width, height, z, null);
     }
 
     bool TryDrawLoadedTexture(LoadedTexture tex, float x, float y, float z, bool orthoPass)

@@ -126,8 +126,12 @@ public static class LoginSweepChecks
             "login bake logs loudly when sweep arms");
         c.True(bake.Contains("quiet teleports begin"),
             "login bake logs when teleports begin");
-        c.True(!bake.Contains("never painted opaque frames — entering play"),
-            "login bake does not abort solely on overlay paint counter");
+        c.True(bake.Contains("loading cover never painted"),
+            "login bake aborts into play when cover cannot paint");
+        c.True(bake.Contains("IsOverlayReady"),
+            "login bake gates teleports on overlay readiness");
+        c.True(!bake.Contains("continuing sweep anyway"),
+            "login bake does not blind-teleport without cover");
         c.True(bake.Contains("restoreCameraPos"),
             "login bake pins camera while entity teleports for chunk load");
         c.True(bake.Contains("CameraPos.Set"),
@@ -214,8 +218,10 @@ public static class LoginSweepChecks
             "fallback renderer uses ortho internal quad tint path");
         c.True(screen.Contains("TryDrawWithExplicitQuad"),
             "fallback renderer uses explicit MeshRef on after-final pass");
-        c.True(screen.Contains("HasEverPaintedOpaque"),
-            "fallback renderer tracks whether ortho ever painted");
+        c.True(fallback.Contains("IsOverlayHealthy"),
+            "stock fallback exposes overlay health");
+        c.True(screen.Contains("IsOverlayHealthy"),
+            "fallback renderer exposes overlay health");
 
         string renderer = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodTerrainRenderer.cs"));
@@ -228,6 +234,12 @@ public static class LoginSweepChecks
             "input guard retries open when viewport is ready");
         c.True(guard.Contains("SafeBounds"),
             "input guard uses render/window bounds fallback");
+        c.True(overlay.Contains("IsOverlayReady"),
+            "login overlay exposes overlay readiness");
+        c.True(hold.Contains("IsOverlayReady"),
+            "vanilla hold exposes overlay readiness");
+        c.True(hold.Contains("consecutiveVanillaPaints"),
+            "vanilla hold tracks consecutive vanilla paint frames");
         c.True(hold.Contains("RenderToDefaultFramebuffer"),
             "vanilla hold re-renders native loading UI each frame");
 
@@ -277,14 +289,16 @@ public static class LoginSweepChecks
             "login bake settles after each bake");
         c.True(bake.Contains("OverlayWarmup"),
             "login bake warms overlay before teleports");
-        c.True(bake.Contains("warmup complete — entering visit teleports"),
-            "login bake logs loudly when warmup ends");
+        c.True(bake.Contains("loading cover ready — entering visit teleports"),
+            "login bake logs when cover is ready");
+        c.True(bake.Contains("IsOverlayReady"),
+            "login bake waits for overlay readiness before teleports");
+        c.True(!bake.Contains("continuing sweep anyway"),
+            "login bake does not proceed without painted cover");
         c.True(bake.Contains("PollCancelFromRender"),
             "login bake polls Esc from render loop");
         c.True(bake.Contains("KeyboardKeyState"),
             "login bake reads Escape from keyboard state");
-        c.True(bake.Contains("continuing sweep anyway"),
-            "login bake continues if vanilla loading screen never paints");
         c.True(bake.Contains("LodLoginBakeWorldHide"),
             "login bake hides vanilla chunks during sweep");
         c.True(bake.Contains("LodLoginBakePlayerMove.ApplyQuiet"),

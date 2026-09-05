@@ -14,6 +14,7 @@ public sealed class LodLoginBakeStockLoadingFallback : IRenderer, IDisposable
 
     public bool IsReady => stock.Active;
     public bool HasRendered => stock.HasEverPaintedOpaque;
+    public bool IsOverlayHealthy => stock.IsOverlayHealthy;
 
     public double RenderOrder => 1.6;
     public int RenderRange => 9998;
