@@ -15,6 +15,9 @@ public static class SectionChecks
         ReplaceColumnsPaths(c);
         FlagRemoval(c);
         PaletteReuse(c);
+        PaletteSnowDoesNotMergeWithBaked(c);
+        PaletteFrostBinsStaySplit(c);
+        PaletteFoliageLookSplitsSeasons(c);
         SnapshotSharesSectionArrays(c);
         ProvisionalQuadrants(c);
     }
@@ -188,6 +191,49 @@ public static class SectionChecks
         // Capture relies on that: it re-adds entries constantly and must not thrash them.
         c.Eq(0x00112233, s.Palette[first].Color, "reuse keeps the original colour");
         c.Eq((byte)0, s.Palette[first].Flags, "reuse keeps the original flags");
+    }
+
+    static void PaletteSnowDoesNotMergeWithBaked(Check c)
+    {
+        var s = new LodSection();
+        int soil = s.FindOrAddPaletteEntry(blockId: 7, color: 0x00305070, flags: LodPaletteEntry.FlagBaked);
+        int snow = s.FindOrAddPaletteEntry(blockId: 7, color: unchecked((int)0x00FAFCFB), flags: LodPaletteEntry.FlagSnow);
+        c.True(soil != snow, "FlagSnow and FlagBaked of the same block id are separate rows");
+        c.Eq(2, s.Palette.Count, "snow does not overwrite the soil row");
+        c.Eq(LodPaletteEntry.FlagBaked, s.Palette[soil].Flags, "soil row stays baked");
+        c.Eq(LodPaletteEntry.FlagSnow, s.Palette[snow].Flags, "snow row stays FlagSnow");
+    }
+
+    static void PaletteFrostBinsStaySplit(Check c)
+    {
+        var s = new LodSection();
+        byte frost = (byte)(LodPaletteEntry.FlagBaked | LodPaletteEntry.FlagFrostGround);
+        int a = s.FindOrAddPaletteEntry(blockId: 3, color: 0x00407040, flags: frost, tintSlot: 1);
+        int b = s.FindOrAddPaletteEntry(blockId: 3, color: 0x00A0B090, flags: frost, tintSlot: 6);
+        int again = s.FindOrAddPaletteEntry(blockId: 3, color: 0x00111111, flags: frost, tintSlot: 1);
+        c.True(a != b, "each frost mottle bin is its own palette row");
+        c.Eq(a, again, "the same frost bin reuses its row");
+        c.Eq(0x00407040, s.Palette[a].Color, "reuse keeps the first bin colour");
+    }
+
+    static void PaletteFoliageLookSplitsSeasons(Check c)
+    {
+        var s = new LodSection();
+        byte baked = LodPaletteEntry.FlagBaked;
+        int green = s.FindOrAddFoliageLook(9, unchecked((int)0xFF308040), baked);
+        int autumn = s.FindOrAddFoliageLook(9, unchecked((int)0xFF2040D0), baked);
+        int grayA = s.FindOrAddFoliageLook(9, LodSeasonBake.FrostRgbCanopy, baked);
+        int grayB = s.FindOrAddFoliageLook(9, unchecked((int)0xFFC0BCB8), baked);
+        int greenAgain = s.FindOrAddFoliageLook(9, unchecked((int)0xFF50A060), baked);
+        c.True(green != autumn, "green and autumn birch are separate palette rows");
+        c.Eq(grayA, grayB, "winter frost-grays share one foliage row");
+        c.Eq(green, greenAgain, "same-hue greens at different height merge");
+        c.Eq(0, s.Palette[green].Flags & LodPaletteEntry.FlagFrostGround,
+            "foliage look rows never carry FlagFrostGround");
+        c.Eq(0, s.Palette[autumn].Flags & LodPaletteEntry.FlagFrostGround,
+            "autumn foliage is not a ground-frost bin");
+        c.Eq((byte)LodTintRegistry.SlotNone, s.Palette[green].TintSlot,
+            "foliage look rows keep SlotNone");
     }
 
     static bool IsMonotonic(int[] starts)

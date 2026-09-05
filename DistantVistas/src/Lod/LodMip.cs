@@ -86,10 +86,9 @@ public static class LodMip
     /// is immutable once created (writes swap the whole array), which is the same property
     /// the worker snapshots rely on, so reading through it here needs no copy.
     ///
-    /// Bright (missing-tex / snow-white) slices only become the parent surface when they
-    /// cover at least 3 of the 2x2. A lone snow or chalk column used to win Boyer-Moore
-    /// and paint a whole 64x64 mountain cap white; closer in, those blocks were rock.
-    /// Real snow fields still win: they cover 3 or 4 children.
+    /// Bright snow/ice <see cref="LodPaletteEntry.FlagSnow"/> on any child surface
+    /// wins the parent cap (1-of-4). Painted frost / chalk that is merely bright RGB
+    /// does not — zero real snow stays earth majority.
     /// </summary>
     static ulong[] MergeColumns(LodSection child, ReadOnlySpan<int> colStart, ReadOnlySpan<int> colEnd, int count)
     {
@@ -124,8 +123,9 @@ public static class LodMip
         // Any solid coverage stays. 2-of-4 was meant to kill lone dirt spikes; on a
         // cliff or ridge the 2x2 almost never shares the same Y, so the face (the
         // one tall column) was dropped and L1 drew a hole through to sky and caves.
-        // Bright-cap still needs 3-of-4 in PickSlicePalette. Plant scraps still
-        // fall out in DropUnsupportedFloaters. A 1-of-4 rock slice is a cliff.
+        // Snow on any child surface (FlagSnow) wins the cap in PickSlicePalette.
+        // Painted frost without FlagSnow follows ordinary majority. Plant scraps
+        // still fall out in DropUnsupportedFloaters. A 1-of-4 rock slice is a cliff.
         int solidMajority = 1;
         int canopyMajority = 1;
 
@@ -143,6 +143,7 @@ public static class LodMip
             int nPids = 0;
             pidList.Clear();
             pidN.Clear();
+            bool anySnow = false;
             for (int c = 0; c < count; c++)
             {
                 foreach (ulong run in runs.AsSpan(colStart[c], colEnd[c] - colStart[c]))
@@ -151,6 +152,9 @@ public static class LodMip
                     {
                         covering++;
                         int pid = LodSection.RunPaletteId(run);
+                        if (pid >= 0 && pid < child.Palette.Count
+                            && (child.Palette[pid].Flags & LodPaletteEntry.FlagSnow) != 0)
+                            anySnow = true;
                         int found = -1;
                         for (int k = 0; k < nPids; k++)
                         {
@@ -168,7 +172,11 @@ public static class LodMip
                 }
             }
 
-            int need = sliceH <= 4 ? canopyMajority : solidMajority;
+            // Thin surface slices: FlagSnow may sit 1-of-4. Bright paint / lone dirt
+            // spikes need 2-of-4 so they do not raise a cream cap over earth majority.
+            int need = sliceH <= 4
+                ? (anySnow ? 1 : Math.Max(2, canopyMajority))
+                : solidMajority;
             if (covering < need) continue;
 
             int bestPid = PickSlicePalette(child, pidList, pidN, nPids);
@@ -193,13 +201,14 @@ public static class LodMip
     }
 
     /// <summary>
-    /// Most common covering block. Bright-white (snow / missing tex) may win only with
-    /// a true 3-of-4 majority; otherwise the rock/dirt neighbour in the same slice wins.
+    /// Most common covering block — except a real snow/ice layer
+    /// (<see cref="LodPaletteEntry.FlagSnow"/>): any such child (1-of-4) wins so a
+    /// visible snow cap from the sky stays white. Bright painted frost alone does not.
     /// </summary>
     static int PickSlicePalette(LodSection child, ReadOnlySpan<int> pidList, ReadOnlySpan<int> pidN, int nPids)
     {
         int bestPid = -1, bestN = -1;
-        int bestEarthPid = -1, bestEarthN = -1;
+        int bestSnowPid = -1, bestSnowN = -1;
         for (int k = 0; k < nPids; k++)
         {
             int pid = pidList[k];
@@ -209,24 +218,17 @@ public static class LodMip
                 bestN = n;
                 bestPid = pid;
             }
-            bool bright = pid >= 0 && pid < child.Palette.Count
-                && LodPaletteRepair.IsBrightCap(child.Palette[pid].Color);
-            if (!bright && n > bestEarthN)
+            bool snowLayer = pid >= 0 && pid < child.Palette.Count
+                && (child.Palette[pid].Flags & LodPaletteEntry.FlagSnow) != 0;
+            if (snowLayer && n > bestSnowN)
             {
-                bestEarthN = n;
-                bestEarthPid = pid;
+                bestSnowN = n;
+                bestSnowPid = pid;
             }
         }
 
         if (bestPid < 0) return -1;
-        bool winnerBright = bestPid < child.Palette.Count
-            && LodPaletteRepair.IsBrightCap(child.Palette[bestPid].Color);
-        // 3-of-4 or unanimous bright is real snow (or a whole missing-tex plateau).
-        // A 1-of-4 or 2-of-4 bright cap is patchy snow or a missing tex; closer in those blocks are rock.
-        // Skip a bright slice that is not a 3-of-4 majority. Returning -1 drops a
-        // lone snow/missing-tex cap so the rock below becomes the parent surface.
-        if (winnerBright && bestN < 3)
-            return bestEarthPid;
+        if (bestSnowPid >= 0) return bestSnowPid;
         return bestPid;
     }
 

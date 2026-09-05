@@ -1,4 +1,4 @@
-﻿using Vintagestory.API.Client;
+using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
@@ -57,14 +57,17 @@ public class DistantVistasConfig
     /// future toggle that can skip shipping or hot-swap.
     /// </summary>
     public bool PatchVanillaEdgeFade = true;
-    /// <summary>Potato FOV heightfield occlusion at draw-submit (L0/L1). Default on.</summary>
-    public bool FovOcclusion = true;
+    /// <summary>
+    /// Potato FOV heightfield occlusion at draw-submit (L0/L1). Default off —
+    /// mid-ground sky holes beside cliffs are worse than the draw cost. Opt in via config.
+    /// </summary>
+    public bool FovOcclusion = false;
 
     /// <summary>Samples along camera-to-tile XZ ray for FOV occlusion (4..16). Default 6 for turn cost.</summary>
     public int FovOcclusionSamples = 6;
 
-    /// <summary>Height slack (blocks) so peaks/towers that clear a ridge still draw.</summary>
-    public int FovOcclusionPeekMargin = 32;
+    /// <summary>Height slack (blocks) so peaks/towers that clear a ridge still draw. 0.7.85 default 160.</summary>
+    public int FovOcclusionPeekMargin = 160;
 
     /// <summary>Fresh occlusion ray tests per frame (cached results free). Default 48.</summary>
     public int FovOcclusionMaxTestsPerFrame = 48;
@@ -125,6 +128,8 @@ public class DistantVistasModSystem : ModSystem
     /// greets, so it stays silent.
     /// </summary>
     LodAssistClient? assist;
+
+    readonly LodStreamingGate streamingGate = new();
 
     public override void AssetsLoaded(ICoreAPI api)
     {
@@ -194,6 +199,8 @@ public class DistantVistasModSystem : ModSystem
         LodWorld.FidelityStep = GameMath.Clamp(config.FidelityStep, 0f, 2f);
         LodWorld.MaxVisualLevel = GameMath.Clamp(config.MaxVisualLodLevel, 0, LodWorld.MaxLevel);
 
+        DeciduousLeafCompat.Bind(capi);
+
         pipeline = new LodPipeline(capi, Mod.Logger, DescribePalette, block => (byte)TintSlotOf(block));
         pipeline.RebakeSeasonPalette = RebakeSectionSeason;
         pipeline.HealLegacyPalette = HealLegacySection;
@@ -212,9 +219,16 @@ public class DistantVistasModSystem : ModSystem
             OverdrawStart = config.OverdrawStart,
             DrawAfterCompanion = farseerCompanion,
         };
-        renderer.HeightOcclusion.Enabled = config.FovOcclusion;
+        // 0.7.86: FOV cull still punches mid-ground sky holes. Keep the code;
+        // force off until a hole-free cull exists. Opt back in by editing the
+        // field after a future fix — do not re-enable here.
+        config.FovOcclusion = false;
+        renderer.HeightOcclusion.Enabled = false;
         renderer.HeightOcclusion.SampleCount = config.FovOcclusionSamples;
+        if (config.FovOcclusionPeekMargin <= 96)
+            config.FovOcclusionPeekMargin = 160;
         renderer.HeightOcclusion.PeekMarginBlocks = config.FovOcclusionPeekMargin;
+        renderer.HeightOcclusion.MinDistanceBlocks = 384;
         renderer.HeightOcclusion.MaxTestsPerFrame = config.FovOcclusionMaxTestsPerFrame;
         // Real holes (captured land with no mesh at any rung) are reported with
         // the state of the keys involved, so a screenshot of sky has a log line.
@@ -223,6 +237,9 @@ public class DistantVistasModSystem : ModSystem
         capi.Event.ChunkDirty += OnChunkDirty;
         capi.Event.LevelFinalize += OnLevelFinalize;
         capi.Event.LeaveWorld += OnLeaveWorld;
+        // Heatmap (ClimateMap) arrives with the map region when chunks are discovered.
+        // Far LOD baked while the region was unloaded used the engine placeholder climate.
+        capi.Event.MapRegionLoaded += OnMapRegionLoaded;
 
         tickListenerId = capi.Event.RegisterGameTickListener(OnGameTick, 50);
         sessionTelemetry = new SessionTelemetry(capi);
@@ -368,16 +385,61 @@ public class DistantVistasModSystem : ModSystem
 
     void OnChunkDirty(Vec3i chunkCoord, IWorldChunk chunk, EnumChunkDirtyReason reason)
     {
-        pipeline.QueueColumn(chunkCoord.X, chunkCoord.Z);
+        // NewlyLoaded/Created: fill holes only when the quadrant is empty.
+        // MarkedDirty: terrain changed (snow accumulate/melt, dig, place) — must
+        // recapture even when the quadrant is already full, or winter snow never
+        // lands on LOD after a summer capture.
+        if (reason == EnumChunkDirtyReason.NewlyLoaded
+            || reason == EnumChunkDirtyReason.NewlyCreated)
+        {
+            streamingGate.NoteChunkArrival();
+            renderer.LoadedMapChunksDirty = true;
+        }
+        if (reason == EnumChunkDirtyReason.MarkedDirty)
+            pipeline.ForceQueueColumn(chunkCoord.X, chunkCoord.Z);
+        else
+            pipeline.QueueColumn(chunkCoord.X, chunkCoord.Z);
     }
 
-    int seasonAnchorMonth = -1;
+    void OnMapRegionLoaded(Vec2i mapCoord, IMapRegion region)
+    {
+        if (pipeline == null || !pipeline.Active) return;
+        // ClimateMap is the heat map GetClimateAt / frost bake need. Empty maps are useless.
+        if (region?.ClimateMap == null || region.ClimateMap.InnerSize <= 0) return;
+
+        pipeline.QueueSeasonRepaintForMapRegion(mapCoord.X, mapCoord.Y);
+    }
+
+    /// <summary>Packed Year/Month/Quarter; -1 until first calendar read.</summary>
+    int seasonBakeEpoch = -1;
+    /// <summary>Last applied <see cref="LodSeasonBake.FrostBakeRevision"/>; -1 until join.</summary>
+    int appliedFrostBakeRevision = -1;
 
     void OnGameTick(float dt)
     {
         if (!pipeline.Active) return;
 
-        CheckSeasonMonthChange();
+        CheckSeasonBakeEpoch();
+        CheckFrostBakeRevision();
+
+        var pos = capi.World.Player.Entity.Pos;
+        IExploredColumnLoader? loader =
+            LodServerCaptureSystem.Instance?.ExploredColumns
+            ?? capi.ModLoader.GetModSystem<LodServerCaptureSystem>()?.ExploredColumns;
+
+        streamingGate.Tick();
+        streamingGate.NotePlayer("local", pos.X, pos.Z);
+        streamingGate.NoteFrameSignals(
+            renderer.LookBusyThisFrame, renderer.HitchThisFrame, renderer.StepBusyThisFrame);
+        streamingGate.SetVanillaBusy(loader?.IsVanillaBusy == true);
+
+        pipeline.PlayerBusy = streamingGate.IsCameraBusy;
+        pipeline.StreamingBusy = streamingGate.IsStreaming;
+        pipeline.StepBusy = streamingGate.IsStepBusy || streamingGate.IsWalkBusy;
+        pipeline.LastFrameWasHitch = streamingGate.IsHitchBusy;
+        pipeline.LookBusy = streamingGate.IsLookBusy;
+        pipeline.YieldSeasonWork = renderer.MeshPressureActive;
+        pipeline.SeasonLookToken = seasonBakeEpoch;
 
         sessionTelemetry?.Tick(pipeline, renderer, deferringTo, Mod.Info.Version);
 
@@ -386,12 +448,14 @@ public class DistantVistasModSystem : ModSystem
         PumpLocalOffers();
         pipeline.Tick();
 
-        var pos = capi.World.Player.Entity.Pos;
         int chunkSize = GlobalConstants.ChunkSize;
         int sweepCx = (int)Math.Floor(pos.X / chunkSize);
         int sweepCz = (int)Math.Floor(pos.Z / chunkSize);
         int sweepRadius = Math.Max(4, (int)Math.Ceiling(renderer.LiveViewDistance / chunkSize) + 2);
         pipeline.SweepLoadedColumns(sweepCx, sweepCz, sweepRadius);
+
+        loader?.Tick();
+        pipeline.TickIdleAccurateRecapture(pos.X, pos.Z, loader, streamingGate.IsStreaming);
         // Cold RAM section spill only under mesh pressure — never distance-alone.
         if (renderer.MeshPressureActive && pipeline.MaybeEvictAround(pos.X, pos.Z))
         {
@@ -402,35 +466,127 @@ public class DistantVistasModSystem : ModSystem
         }
     }
 
-    void CheckSeasonMonthChange()
+    void CheckFrostBakeRevision()
     {
-        int month = capi.World.Calendar.Month;
-        if (seasonAnchorMonth < 0)
+        if (pipeline == null || !pipeline.Active) return;
+        if (appliedFrostBakeRevision == LodSeasonBake.FrostBakeRevision) return;
+        appliedFrostBakeRevision = LodSeasonBake.FrostBakeRevision;
+        QueueJoinSeasonSync("frost bake revision");
+        // Season repaint cannot invent snow blocks that were never captured. Force
+        // one recapture of nearest resident L0 so snowlayer/snowblock on the ground lands.
+        try
         {
-            seasonAnchorMonth = month;
+            var p = capi.World.Player?.Entity?.Pos;
+            if (p != null)
+                pipeline.ForceRecaptureResidentL0("frost bake revision", p.X, p.Z);
+            else
+                pipeline.ForceRecaptureResidentL0("frost bake revision");
+        }
+        catch
+        {
+            pipeline.ForceRecaptureResidentL0("frost bake revision");
+        }
+    }
+
+    void CheckSeasonBakeEpoch()
+    {
+        var cal = capi.World.Calendar;
+        BlockPos? playerPos = null;
+        try
+        {
+            var p = capi.World.Player?.Entity?.Pos;
+            if (p != null)
+                playerPos = new BlockPos((int)p.X, (int)p.Y, (int)p.Z);
+        }
+        catch { /* */ }
+        // Same cut points as GameCalendar.GetSeason — LOD rebakes when vanilla season flips.
+        int epoch = LodSeasonBakeEpoch.FromCalendar(cal, playerPos);
+        if (seasonBakeEpoch < 0)
+        {
+            // Should already be set in OnLevelFinalize after Open; keep as safety net
+            // if the first tick races ahead of finalize on some join paths.
+            seasonBakeEpoch = epoch;
+            QueueJoinSeasonSync("first tick");
             return;
         }
-        if (month == seasonAnchorMonth) return;
-        seasonAnchorMonth = month;
+        if (epoch == seasonBakeEpoch) return;
+        seasonBakeEpoch = epoch;
+        pipeline.SeasonLookToken = epoch;
         pipeline.QueueSeasonRepaintAll();
+        pipeline.QueueDeciduousLeafRefreshAll();
         Mod.Logger.Notification(
-            "[DistantVistas] Calendar month {0}: queuing gradual seasonal repaint of baked LOD palettes.",
-            month);
+            "[DistantVistas] VS season {0}: uploading live tint; no resident remesh"
+            + (DeciduousLeafCompat.Present ? "; Deciduous leaf dormancy refresh queued." : "."),
+            LodSeasonBakeEpoch.Describe(epoch));
+    }
+
+    /// <summary>
+    /// FlagBaked RGB is a snapshot of the bake epoch at capture. Joining already in
+    /// December used to set the month anchor and skip rebake, so summer-green far LOD
+    /// sat forever beside winter-white walked squares. Queue the same budgeted epoch.
+    /// </summary>
+    void QueueJoinSeasonSync(string reason)
+    {
+        if (pipeline == null || !pipeline.Active) return;
+        pipeline.SeasonLookToken = seasonBakeEpoch;
+        pipeline.QueueSeasonRepaintAll();
+        pipeline.QueueDeciduousLeafRefreshAll();
+        Mod.Logger.Notification(
+            "[DistantVistas] Calendar epoch {0}: live tint uniforms ({1})"
+            + (DeciduousLeafCompat.Present ? "; Deciduous leaf dormancy refresh queued." : "."),
+            LodSeasonBakeEpoch.Describe(seasonBakeEpoch), reason);
     }
 
     int RebakeSectionSeason(LodSection section, long sectionKey) =>
         LodSeasonBake.HealOrRepaintSection(
-            capi.World, section, sectionKey, tints.PlantTintFallback, UntintedForRebake);
+            capi.World, section, sectionKey, tints.PlantTintFallback, UntintedForRebake,
+            block => (byte)TintSlotOf(block), pipeline.SeasonLookToken);
 
     int HealLegacySection(LodSection section, long sectionKey) =>
-        LodSeasonBake.UpgradeLegacyEntries(
-            capi.World, section, sectionKey, tints.PlantTintFallback, UntintedForRebake);
+        LodSeasonBake.HealOrRepaintSection(
+            capi.World, section, sectionKey, tints.PlantTintFallback, UntintedForRebake,
+            block => (byte)TintSlotOf(block), pipeline.SeasonLookToken);
 
-    (int Color, LodUntintedShare Share) UntintedForRebake(Block block)
+    (int Color, LodUntintedShare Share) UntintedForRebake(Block block, int x, int y, int z)
     {
         if (TryTopSoilColor(block, out int composite, out LodUntintedShare share))
             return (composite, share);
+        if (PrefersCanopyAlbedo(block))
+            return (CanopyUntintedAt(block, x, y, z), LodUntintedShare.None);
         return (StableColorOf(block), LodUntintedShare.None);
+    }
+
+    /// <summary>
+    /// Leaves/plants: sample albedo at the canopy cell players see, not MapSizeY-1.
+    /// </summary>
+    static bool PrefersCanopyAlbedo(Block block) =>
+        block.BlockMaterial == EnumBlockMaterial.Plant;
+
+    int CanopyUntintedAt(Block block, int x, int y, int z)
+    {
+        paletteSamplePos.Set(x, y, z);
+        int color = block.GetColorWithoutTint(capi, paletteSamplePos);
+        if (color >= 0)
+        {
+            long r = 0, g = 0, b = 0;
+            const int samples = 4;
+            for (int i = 0; i < samples; i++)
+            {
+                int sample = block.GetColorWithoutTint(capi, paletteSamplePos);
+                r += sample & 0xFF;
+                g += (sample >> 8) & 0xFF;
+                b += (sample >> 16) & 0xFF;
+            }
+            color = unchecked((int)0xFF000000)
+                | (int)(b / samples) << 16
+                | (int)(g / samples) << 8
+                | (int)(r / samples);
+        }
+        color = LodPaletteRepair.KeepCapturedColor(
+            color, terrainFallbackColor, LodBlockPolicy.IsClimateUntinted(block));
+        if (LodPaletteRepair.NeedsColor(color) || color < 0)
+            return StableColorOf(block);
+        return color;
     }
 
     /// <summary>
@@ -604,6 +760,7 @@ public class DistantVistasModSystem : ModSystem
     /// </summary>
     void RecolorForeignSection(long sectionKey, LodSection section)
     {
+        _ = sectionKey;
         for (int i = 0; i < section.Palette.Count; i++)
         {
             LodPaletteEntry entry = section.Palette[i];
@@ -635,17 +792,19 @@ public class DistantVistasModSystem : ModSystem
             untinted = LodPaletteRepair.KeepCapturedColor(
                 untinted, terrainFallbackColor, LodBlockPolicy.IsClimateUntinted(block));
 
-            if (LodSeasonBake.CanBake(block, untinted, tints.PlantTintFallback)
-                && section.TryFindPaletteTop(sectionKey, i, out int x, out int y, out int z))
+            if (LodBlockPolicy.IsSnowLayer(block) || LodBlockPolicy.IsClimateUntinted(block))
             {
-                entry.Color = LodSeasonBake.BakePaletteColor(
-                    capi.World, block, untinted, x, y, z, share, tints.PlantTintFallback);
-                entry.Flags = (byte)(entry.Flags | LodPaletteEntry.FlagBaked);
-                entry.TintSlot = LodTintRegistry.SlotNone;
+                entry.Color = LodSeasonBake.ApplySnowSurfaceWhite(block, untinted);
+                entry.Flags = LodBlockPolicy.FlagsFor(block);
+                entry.TintSlot = (byte)LodTintRegistry.SlotNone;
             }
             else
             {
                 entry.Color = untinted;
+                entry.Flags = (byte)(LodBlockPolicy.FlagsFor(block)
+                    & ~LodPaletteEntry.FlagBaked
+                    & ~LodPaletteEntry.FlagFrostGround);
+                entry.TintSlot = (byte)TintSlotOf(block);
             }
             section.Palette[i] = entry;
         }
@@ -656,6 +815,7 @@ public class DistantVistasModSystem : ModSystem
     /// Palette colour semantics changed without invalidating the player's captured
     /// terrain. Refresh stable blocks as cached sections load; preserve chisels and
     /// other position-dependent entries whose stored colour is the only exact answer.
+    /// Discover-baked rows are left alone (see LodPaletteRepair.RefreshStable).
     /// </summary>
     int RefreshStoredPalette(LodSection section)
     {
@@ -663,21 +823,24 @@ public class DistantVistasModSystem : ModSystem
         {
             if (blockId <= 0) return null;
             Block block = capi.World.Blocks[blockId];
-            return block.EntityClass == null ? StableColorOf(block) : null;
+            if (block.EntityClass != null) return null;
+            // Same untinted source as capture/rebake so live-tint caches keep
+            // topsoil grass composites instead of bare soil atlas means.
+            (int color, _) = UntintedForRebake(block, 0, capi.World.BlockAccessor.MapSizeY - 1, 0);
+            return color;
         });
 
         return refreshed + LodPaletteRepair.Fill(section, AtlasColorOf);
     }
 
     /// <summary>
-    /// The client half of palette registration: stable untinted atlas mean (or topsoil
-    /// composite), then discover-bake climate + season maps at this block's position
-    /// through the game's own APIs. Baked entries use tint slot 0; legacy untinted caches
-    /// keep live shader tints until revisited or a budgeted month repaint.
+    /// Untinted atlas RGB plus a live tint slot for grass and leaves. Season is a
+    /// shader uniform, not a VBO rewrite. FlagBaked is reserved for real snow/ice
+    /// identity (band 3). Never bake climate×season into vegetation RGB — live
+    /// seas/clim on already-baked albedo (0.7.84/85) purple-flickered.
     /// A server has no atlas and cannot answer this at all (DESIGN.md §10.4).
     ///
-    /// The position is used for chisels (block entity colour) and for map sampling when
-    /// baking grass tops and foliage.
+    /// The position is used for chisels (block entity colour).
     /// </summary>
     (int Color, byte TintSlot, bool Baked) DescribePalette(int blockId, int blockX, int blockY, int blockZ)
     {
@@ -701,6 +864,10 @@ public class DistantVistasModSystem : ModSystem
         {
             color = composite;
         }
+        else if (PrefersCanopyAlbedo(block))
+        {
+            color = CanopyUntintedAt(block, blockX, blockY, blockZ);
+        }
         else
         {
             color = StableColorOf(block);
@@ -709,23 +876,17 @@ public class DistantVistasModSystem : ModSystem
         color = LodPaletteRepair.KeepCapturedColor(
             color, terrainFallbackColor, LodBlockPolicy.IsClimateUntinted(block));
 
+        // Real snow depth → white on top (snowlayer-1..7 / snowblock).
+        if (LodBlockPolicy.IsSnowLayer(block))
+            color = LodSeasonBake.ApplySnowSurfaceWhite(block, color);
+
         if (LodPaletteRepair.IsRockLikeAlbedo(color) || LodPaletteRepair.IsSnowOrIceAlbedo(color)
             || LodBlockPolicy.IsClimateUntinted(block))
         {
             return (color, (byte)LodTintRegistry.SlotNone, false);
         }
 
-        if (!LodSeasonBake.CanBake(block, color, tints.PlantTintFallback))
-        {
-            byte slot = (byte)TintSlotOf(block);
-            return (color, slot, false);
-        }
-
-        int baked = LodSeasonBake.BakePaletteColor(
-            capi.World, block, color, blockX, blockY, blockZ, share, tints.PlantTintFallback);
-        baked = LodPaletteRepair.KeepCapturedColor(
-            baked, terrainFallbackColor, LodBlockPolicy.IsClimateUntinted(block));
-        return (baked, (byte)LodTintRegistry.SlotNone, true);
+        return (color, (byte)TintSlotOf(block), false);
     }
 
     /// <summary>
@@ -812,7 +973,10 @@ public class DistantVistasModSystem : ModSystem
         TextureMean grass = MeanOf(overlay, overlayId);
         if (grass.Coverage <= 0f) return false;
 
-        float a = grass.Coverage;
+        // 0.8.45: dirt-mean composites greedy-mesh into hard brown 64-plates.
+        // Weight the grass overlay harder so vertex albedo starts green; live tint
+        // and shader plant pull finish the job without denser climate uploads.
+        float a = Math.Clamp(grass.Coverage * 1.65f + 0.12f, 0.45f, 1f);
         composite = unchecked((int)0xFF000000)
             | Channel(soil.B, grass.B, a) << 16 | Channel(soil.G, grass.G, a) << 8 | Channel(soil.R, grass.R, a);
         share = new LodUntintedShare(
@@ -1092,6 +1256,19 @@ public class DistantVistasModSystem : ModSystem
         pipeline.Open("ModData/distantvistas");
         joinClock.Restart();
         nextMilestone = 0;
+
+        // Bake epoch sync: caches written in other seasons stay FlagBaked green until
+        // rebaked. Epoch follows GameCalendar.GetSeason (not month day 1).
+        BlockPos? joinPos = null;
+        try
+        {
+            var p = capi.World.Player?.Entity?.Pos;
+            if (p != null) joinPos = new BlockPos((int)p.X, (int)p.Y, (int)p.Z);
+        }
+        catch { /* */ }
+        seasonBakeEpoch = LodSeasonBakeEpoch.FromCalendar(capi.World.Calendar, joinPos);
+        QueueJoinSeasonSync("level finalize");
+        appliedFrostBakeRevision = LodSeasonBake.FrostBakeRevision;
 
         // A singleplayer world whose server side has swept the savegame leaves its results
         // in a sibling cache. Nothing to open on a dedicated server, where the same
@@ -1443,6 +1620,192 @@ public class DistantVistasModSystem : ModSystem
                     $"[distantvistas] detail distance {(int)LodWorld.DetailDistance} - full detail out to " +
                     $"{(int)LodWorld.DetailDistance * 2} blocks (saved). Terrain re-selects over the next few seconds.");
             });
+
+        capi.ChatCommands.Create("dvcolor")
+            .WithDescription(
+                "LOD grass/leaf colour audit: calendar year/month/day/quarter, bake epoch, " +
+                "dirty backlog per level, FlagBaked counts, underfoot L0 and aimed L0/L1/L2.")
+            .HandleWith(_ => TextCommandResult.Success(DescribeColorDiagnostics()));
+    }
+
+    /// <summary>
+    /// Join/epoch colour audit. Outer December green is usually stale FlagBaked RGB or
+    /// a still-draining SeasonDirty backlog — this prints both so you stop guessing.
+    /// </summary>
+    string DescribeColorDiagnostics()
+    {
+        var sb = new System.Text.StringBuilder();
+        var cal = capi.World.Calendar;
+        sb.Append("[distantvistas] color audit: ").Append(LodSeasonBakeEpoch.Describe(cal))
+            .Append(", bakeEpoch ").Append(LodSeasonBakeEpoch.Describe(seasonBakeEpoch))
+            .Append(" (").Append(seasonBakeEpoch).Append(')');
+
+        if (pipeline == null || !pipeline.Active)
+        {
+            sb.Append(". pipeline inactive.");
+            return sb.ToString();
+        }
+
+        int dirty = pipeline.SeasonDirtyCount;
+        pipeline.CountResidentSeasonDirtyByLevel(out int d0, out int d1, out int d2);
+        sb.Append(", season catch-up ").Append(pipeline.SeasonRepaintEpochActive ? "active" : "idle")
+            .Append(", dirty ").Append(dirty)
+            .Append(" (L0 ").Append(d0).Append(" L1 ").Append(d1).Append(" L2 ").Append(d2).Append(')')
+            .Append(", catch-up level ").Append(pipeline.SeasonCatchUpLevel)
+            .Append(", sections repainted this session ").Append(pipeline.SeasonSectionsRepainted)
+            .Append(", idle ").Append(pipeline.SeasonIdleState)
+            .Append(", pending ").Append(pipeline.SeasonIdlePending)
+            .Append(", nearest ").Append(pipeline.SeasonIdleNearestBlocks)
+            .Append(", melted ").Append(pipeline.SeasonIdleMelted)
+            .Append(", recapture ").Append(pipeline.IdleRecaptureState)
+            .Append('.');
+        if (pipeline.SeasonIdleState.StartsWith("blocked:", StringComparison.Ordinal))
+            sb.Append("\n  hint: idle bake is not running (").Append(pipeline.SeasonIdleState).Append(").");
+        if (dirty > 0)
+            sb.Append("\n  hint: dirty>0 — outer green may still be catch-up; stand still and re-run.");
+
+        var at = capi.World.Player.Entity.Pos;
+        long under = L0SectionKeyAt(at.X, at.Z);
+        sb.Append("\n  underfoot L0 ").Append(DescribeSectionPalette(under, "player"));
+
+        BlockSelection? sel = capi.World.Player.CurrentBlockSelection;
+        double aimX = at.X, aimZ = at.Z;
+        bool haveAim = false;
+        if (sel?.Position != null)
+        {
+            aimX = sel.Position.X + 0.5;
+            aimZ = sel.Position.Z + 0.5;
+            haveAim = true;
+            long aimed = L0SectionKeyAt(aimX, aimZ);
+            if (aimed != under)
+                sb.Append("\n  aimed L0 ").Append(DescribeSectionPalette(aimed, "look-at"));
+            else
+                sb.Append("\n  aimed L0 same as underfoot.");
+        }
+        else
+        {
+            sb.Append("\n  aimed: no block selection (look at far LOD terrain for L1/L2).");
+        }
+
+        if (haveAim)
+        {
+            long l1 = LodWorld.ParentKey(L0SectionKeyAt(aimX, aimZ));
+            sb.Append("\n  aimed L1 ").Append(DescribeSectionPalette(l1, "look-at"));
+            if (LodWorld.KeyLevel(l1) < LodWorld.MaxLevel)
+            {
+                long l2 = LodWorld.ParentKey(l1);
+                sb.Append("\n  aimed L2 ").Append(DescribeSectionPalette(l2, "look-at"));
+            }
+        }
+
+        return sb.ToString();
+    }
+
+    static long L0SectionKeyAt(double worldX, double worldZ)
+    {
+        int sx = (int)Math.Floor(worldX / LodSection.SectionBlocks);
+        int sz = (int)Math.Floor(worldZ / LodSection.SectionBlocks);
+        return LodWorld.SectionKey(0, sx, sz);
+    }
+
+    string DescribeSectionPalette(long key, string label)
+    {
+        int level = LodWorld.KeyLevel(key);
+        int sx = LodWorld.KeySx(key), sz = LodWorld.KeySz(key);
+        if (!pipeline.World.Sections.TryGetValue(key, out LodSection? section))
+        {
+            bool known = pipeline.World.HasDataSet.Contains(key);
+            return $"{label} L{level} sx={sx} sz={sz}: {(known ? "cold on disk (not resident)" : "no data")}";
+        }
+
+        int baked = 0, slot0Baked = 0, slottedBaked = 0;
+        int pale = 0, greenish = 0, live = 0, thin = 0, water = 0;
+        int sampleLeaf = 0, sampleGrass = 0;
+        bool haveLeaf = false, haveGrass = false;
+
+        for (int i = 0; i < section.Palette.Count; i++)
+        {
+            LodPaletteEntry e = section.Palette[i];
+            if ((e.Flags & LodPaletteEntry.FlagWater) != 0) { water++; continue; }
+            if ((e.Flags & LodPaletteEntry.FlagThin) != 0) thin++;
+            if ((e.Flags & LodPaletteEntry.FlagBaked) != 0)
+            {
+                baked++;
+                if (e.TintSlot == LodTintRegistry.SlotNone) slot0Baked++;
+                else slottedBaked++;
+                string hue = ClassifyBakedHue(e.Color);
+                if (hue == "winter-pale") pale++;
+                else if (hue == "summer-green") greenish++;
+            }
+            else live++;
+
+            Block? block = capi.World.GetBlock(e.BlockId);
+            if (block == null) continue;
+            string code = block.Code?.Path ?? "";
+            if (!haveLeaf && code.Contains("leaves", System.StringComparison.OrdinalIgnoreCase))
+            {
+                sampleLeaf = e.Color;
+                haveLeaf = true;
+            }
+            else if (!haveGrass && (code.Contains("tallgrass", System.StringComparison.OrdinalIgnoreCase)
+                || code.Contains("soil", System.StringComparison.OrdinalIgnoreCase)
+                || code.StartsWith("grass", System.StringComparison.OrdinalIgnoreCase)))
+            {
+                sampleGrass = e.Color;
+                haveGrass = true;
+            }
+        }
+
+        var sb = new System.Text.StringBuilder();
+        sb.Append(label).Append(" L").Append(level)
+            .Append(" sx=").Append(sx).Append(" sz=").Append(sz)
+            .Append(": palette ").Append(section.Palette.Count)
+            .Append(" (baked ").Append(baked)
+            .Append(" slot0baked ").Append(slot0Baked)
+            .Append(" slotted ").Append(slottedBaked)
+            .Append(" pale ").Append(pale)
+            .Append(" greenish ").Append(greenish)
+            .Append(", live ").Append(live)
+            .Append(", thin ").Append(thin)
+            .Append(", water ").Append(water).Append(')');
+        if (slottedBaked > 0)
+            sb.Append(" hint: slotted baked — climate RGB + live season (expected).");
+        if (slot0Baked > 0)
+            sb.Append(" hint: slot0baked — full-bake leftovers; join heal restores season slots.");
+        if (haveLeaf)
+            sb.Append(" leaf RGB ").Append(RgbHex(sampleLeaf))
+                .Append(' ').Append(ClassifyBakedHue(sampleLeaf));
+        if (haveGrass)
+            sb.Append(" grass/soil RGB ").Append(RgbHex(sampleGrass))
+                .Append(' ').Append(ClassifyBakedHue(sampleGrass));
+        return sb.ToString();
+    }
+
+    /// <summary>RGBA with R in the low byte (same packing as LOD palette / mesh).</summary>
+    static string RgbHex(int rgba)
+    {
+        int r = rgba & 0xFF;
+        int g = (rgba >> 8) & 0xFF;
+        int b = (rgba >> 16) & 0xFF;
+        return $"#{r:x2}{g:x2}{b:x2}";
+    }
+
+    /// <summary>
+    /// Coarse buckets for FlagBaked samples: winter frost is high-L low-sat;
+    /// summer canopy is green-dominant. Not a biome classifier — just for .dvcolor.
+    /// </summary>
+    static string ClassifyBakedHue(int rgba)
+    {
+        int r = rgba & 0xFF;
+        int g = (rgba >> 8) & 0xFF;
+        int b = (rgba >> 16) & 0xFF;
+        int max = GameMath.Max(r, g, b);
+        int min = GameMath.Min(r, g, b);
+        float lum = (r + g + b) / (3f * 255f);
+        float sat = max == 0 ? 0f : (max - min) / (float)max;
+        if (lum >= 0.72f && sat <= 0.22f) return "winter-pale";
+        if (g > r + 12 && g > b + 8 && g >= 70) return "summer-green";
+        return "other";
     }
 
     /// <summary>Writes every setting: a partial write would silently reset the others.</summary>
@@ -1475,6 +1838,7 @@ public class DistantVistasModSystem : ModSystem
         Quietly(() =>
         {
             capi.Event.ChunkDirty -= OnChunkDirty;
+            capi.Event.MapRegionLoaded -= OnMapRegionLoaded;
             capi.Event.LevelFinalize -= OnLevelFinalize;
             capi.Event.LevelFinalize -= RegisterAutoCommand;
             capi.Event.LeaveWorld -= OnLeaveWorld;

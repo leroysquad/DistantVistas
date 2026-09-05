@@ -277,6 +277,27 @@ public class LodWorker : IDisposable
 
     // ---- Capture: chunk column → RLE columns with raw block ids ----
 
+    /// <summary>
+    /// RainHeightMap is the rain-blocking cell. Snowlayer can sit on top of that.
+    /// Peek a few blocks up so a grass rain-height does not drop the snow cover.
+    /// </summary>
+    static int SurfaceYIncludingCover(CaptureJob job, int lx, int lz, int rainY, int maxY)
+    {
+        int startY = rainY;
+        int yEnd = Math.Min(rainY + 8, maxY);
+        for (int y = rainY + 1; y <= yEnd; y++)
+        {
+            IWorldChunk? chunk = job.Chunks[y / ChunkSize];
+            if (chunk == null || chunk.Disposed) break;
+            int blockId = chunk.UnpackAndReadBlock(
+                ((y % ChunkSize) * ChunkSize + lz) * ChunkSize + lx,
+                BlockLayersAccess.FluidOrSolid);
+            if (blockId == 0) break;
+            startY = y;
+        }
+        return startY;
+    }
+
     static CaptureResult? Capture(CaptureJob job)
     {
         const int step = LodSection.ColumnStepBlocks;
@@ -303,8 +324,9 @@ public class LodWorker : IDisposable
             {
                 int lx = cx * step;
                 int lz = cz * step;
-                int startY = Math.Min(job.RainMap[lz * ChunkSize + lx], maxY);
-                if (startY <= 0) continue;
+                int rainY = Math.Min(job.RainMap[lz * ChunkSize + lx], maxY);
+                if (rainY <= 0) continue;
+                int startY = SurfaceYIncludingCover(job, lx, lz, rainY, maxY);
 
                 runs.Clear();
                 int currentBlock = 0;

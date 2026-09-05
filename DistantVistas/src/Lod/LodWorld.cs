@@ -65,6 +65,13 @@ public class LodWorld
     /// <summary>When true, sections loaded from disk with baked palettes join SeasonDirty.</summary>
     public bool SeasonRepaintEpochActive;
 
+    /// <summary>
+    /// Season catch-up marked these for remesh even when palette RGB was unchanged.
+    /// Must bypass the idle "already-meshed waits for travel" gate — otherwise standing
+    /// still leaves December foliage on last-season VBOs (debug e8d91d / hypothesis G).
+    /// </summary>
+    public readonly HashSet<long> SeasonForcedRemesh = new();
+
     /// <summary>Sections whose DB row is stale.</summary>
     public readonly HashSet<long> SaveDirty = new();
 
@@ -372,6 +379,21 @@ public class LodWorld
         }
     }
 
+    /// <summary>
+    /// Parent and L2 grandparent must remesh even while you stand still. Capture
+    /// <see cref="MarkChanged"/> dirties L0; idle skip otherwise keeps the old VBO.
+    /// </summary>
+    public void ForceAncestorGpuRemesh(long childKey)
+    {
+        long key = childKey;
+        while (KeyLevel(key) < MaxLevel)
+        {
+            key = ParentKey(key);
+            SeasonForcedRemesh.Add(key);
+            RenderDirty.Add(key);
+        }
+    }
+
     public void MarkChanged(long key)
     {
         if (Sections.TryGetValue(key, out LodSection? changed))
@@ -395,11 +417,12 @@ public class LodWorld
     /// from keys alone; section data demand-loads when first needed, so join time
     /// and RAM stay independent of how much was ever explored.
     /// </summary>
-    public void InstallStoredKey(int level, int sx, int sz, bool applyToParent, bool provisional = false)
+    public void InstallStoredKey(
+        int level, int sx, int sz, bool applyToParent, bool provisional = false, bool queueMip = true)
     {
         long key = SectionKey(level, sx, sz);
         RegisterInTree(key);
-        if (applyToParent && level < MaxLevel) MipDirty.Add(key);
+        if (queueMip && applyToParent && level < MaxLevel) MipDirty.Add(key);
         if (provisional && level == 0) ProvisionalL0Keys.Add(key);
     }
 
@@ -451,6 +474,9 @@ public class LodWorld
             if (LodMip.DownsampleIntoParent(child, parent, KeySx(childKey) & 1, KeySz(childKey) & 1))
             {
                 MarkChanged(parentKey);
+                // Idle remesh skips already-meshed parents; snowed L0 would stay
+                // under a tan L1/L2 VBO after you walk away. Force GPU rebuild.
+                ForceAncestorGpuRemesh(childKey);
             }
         }
     }
@@ -481,6 +507,7 @@ public class LodWorld
         RenderDirty.Clear();
         SeasonDirty.Clear();
         SeasonRepaintEpochActive = false;
+        SeasonForcedRemesh.Clear();
         SaveDirty.Clear();
         MipDirty.Clear();
         HasDataSet.Clear();

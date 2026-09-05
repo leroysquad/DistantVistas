@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 
 namespace DistantVistas.Checks;
 
@@ -23,6 +23,10 @@ public static class Program
         ("pure", "top-soil tint", TopSoilColorChecks.Run),
         ("pure", "tint clamp", TintClampChecks.Run),
         ("pure", "season bake", SeasonBakeChecks.Run),
+        ("pure", "season idle order", SeasonIdleOrderChecks.Run),
+        ("pure", "idle recapture", IdleRecaptureChecks.Run),
+        ("pure", "frame budget", FrameBudgetChecks.Run),
+        ("pure", "season catch-up", SeasonCatchUpChecks.Run),
         ("pure", "spatial climate", ClimateFieldChecks.Run),
         ("pure", "snow overlay", SnowOverlayChecks.Run),
         ("pure", "server config", ConfigChecks.Run),
@@ -32,6 +36,7 @@ public static class Program
         ("fixture", "frustum", FrustumChecks.Run),
         ("pure", "visited keep", VisitedKeepChecks.Run),
         ("fixture", "block policy", PolicyChecks.Run),
+        ("fixture", "deciduous leaf compat", DeciduousLeafChecks.Run),
         ("pure", "remote keys", RemoteKeyChecks.Run),
         ("pure", "chunk generation", GenerateChecks.Run),
         ("fixture", "server assist", ServerAssistChecks.Run),

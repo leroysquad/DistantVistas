@@ -1,3 +1,110 @@
+## 0.8.46
+- **Near grass like 0.7.76 again.** 0.8.45 capped greedy tops at 12 columns and hard-pulled plant colour on every grassLike top — that painted hard micro-square shade lines in the foreground. Full greedy is back. Plant-pull is far/coarse-only (near ring stays closer to vertex*tint). Greener topsoil bake, climate 40/4, section-keyed upload, and hitch P0 from 0.8.43 stay.
+- **Fewer hitch on huge dirty lists.** Nearest-dirty and keep-overlay no longer full-scan thousands of RenderDirty keys every frame (rotating examine budget). Looking around no longer bypasses mesh-starve for keep/handoff. Uploads hitch-gate to one per frame. SeasonDirty resident checks are cached. Soft-cap cold spill under pressure is a bit stronger when the heap is already heavy.
+
+## 0.8.45
+- **Brown grass plates + hitch.** Mid-LOD hard brown 64-block rectangles were dirt-mean topsoil colours greedy-meshed into one quad per section; denser climate (0.8.44) did not kill them and raised draw cost. Climate lattice is back to cheap 40/4. Grass tops bake greener, join refreshes old SQLite browns and remeshes, shader plant-pulls all up-facing grassLike (not only FlagBaked), and tinted tops no longer greedy into full 64 plates. Section-keyed climate upload from 0.8.44 and hitch P0 from 0.8.43 stay.
+
+## 0.8.44
+- **No brown grass checkerboard.** Mid-distance LOD no longer paints hard brown/tan rectangles over green grass. Climate colours for each tile stay on that tile (opaque/water reuse kept). Grass blend is denser and pulls leftover baked plates toward live plant colour. Hitch opts from 0.8.43 stay.
+
+## 0.8.43
+- **Fewer hitch while looking and walking.** Climate colours for a tile are uploaded once, not three times. Turning no longer rebuilds every memo every frame. Dirty-list cleanup while you walk has a budget so it cannot spike.
+- **RAM stays demand-only.** Join still loads keys, not whole tiles. Cold plates spill under pressure past about two view distances. Soft section cap only makes that spill a bit faster when the heap is already heavy.
+
+## 0.8.42
+- **No hard grass squares.** Ground colour blends in world space so 64-block tiles are not a checkerboard. Leaves stay green. Real snow stays white. Walking still keeps the frame rate.
+
+## 0.8.41
+- **Seasons stay in the shader.** Month changes and join no longer remesh the whole horizon. Grass and leaves keep live season colour. Walking does not dump the canvas.
+- **Land you walked stays while walking.** Coarse parents fill in behind you. Fine remesh and snow recapture wait until you stand still.
+- **Leaves stay green.** Summer foliage is no longer washed brown. Wood stays brown. Real snow stays white.
+- **Far snow is a snowline.** Unloaded ground above the freeze line goes white on top faces. Real snowlayer still recaptures on loaded land when you sit still. Trees frost gray, not snow hats.
+
+## 0.8.40
+- **Land you walked stays.** Discovering a new area no longer deletes the canvas behind you. Walking still keeps the frame rate; snow and season catch-up wait until you stand still.
+- **Sit still, snow and recapture work again.** Login and `/time` pick up winter on far ground and trees. Chunks still arriving do not freeze that pass.
+
+## 0.8.39
+- **Turning and walking keep the frame rate.** Snow, season, and idle recapture wait until you stand still. Sit still and they still finish. Near-ring brightness from 0.8.38 is unchanged.
+
+## 0.8.38
+- **Near terrain a bit brighter.** Grass and trees just past vanilla were sitting in a muddy brown hole. That ring is a little brighter now so grass reads as grass and trees are not mud. Snow stays snow. Far haze is unchanged.
+
+## 0.8.37
+- **Sitting still no longer crashes the game.** Idle recapture was updating the same explored-column lists from the client tick and from a chunk-probe callback at once. Those lists are locked now. Sit still still recaptures walked land. Walking still yields. Multiplayer without the server mod still does not force-load. View distance is never raised. Unexplored land is never generated.
+
+## 0.8.36
+- **Sit still, winter fills in for real.** Land you already walked that was wearing invented snow now recaptures from the actual blocks once you stop moving. Real snowlayer stays bright white. Trees stay gray frost unless they have real snow on them. Walking backs off so vanilla can stream. Multiplayer without Distant Vistas on the server keeps the old inference. A server that has the mod can do the same accurate recapture on explored columns. View distance is never raised. Unexplored land is never generated.
+
+## 0.8.35
+- **June LOD is green, not last winter's snow.** Far plates were still white in June because leftover snowlayer from a winter visit stayed in the cache: Cover would not melt it, recapture only runs on loaded chunks, and join no longer rebaked every disk tile. Cover now strips that leftover snow on land you already walked when vanilla chunks are not there, so the dirt underneath shows. Walking back recaptures alpine snow vanilla still has. Glacier ice stays white. Demand-load Cover still runs in May through October when a plate still has inferred or leftover snow, even if the season token already matches.
+
+## 0.8.34
+- **Join paints nearby LOD in seconds.** Opening a well-explored world no longer spends minutes walking the whole disk cache before anything shows up. Season catch-up now only touches land already in RAM and land the renderer is actually loading for the view. Far plates still pick up the calendar when you look that way. Speed 1 is enough.
+
+## 0.8.33
+- **Walked green stays green.** Flying to a white far pad in May through October, landing until vanilla is green, then backing off no longer paints that land snow again. Cover no longer invents snow on land you already stood on. Leftover winter snowlayer recaptures to the loaded blocks. Alpine snow that vanilla still has stays. Far land you have not walked can still snow on the freeze line. `/time` December still snows far plates.
+- **Season catch-up is cheaper.** Join and `/time` no longer remesh every plate whose colours did not change. Cover reads the climate map once per tile instead of asking live climate per column. Idle walk recenters every 256 blocks. Speed 20 should track the old bake, not a Cover storm.
+
+## 0.8.32
+- **Walked green stays green.** Flying to a white far pad, landing until vanilla is green, then backing off no longer paints that land snow again. LOD recaptures the loaded chunk in May through October and keeps that visit. Alpine snow and frost at height stay where vanilla still has them. Far land you have not walked still snows on the freeze line. `/time` December still snows far plates.
+
+## 0.8.31
+- **Idle bake circles you.** Far-season catch-up no longer walks tiles in random order. It starts underfoot and expands outward, closest unfinished pad first. Walking a tile recenters the ring. `.dvcolor` says if that pass is running, blocked, how far the next pad is, and how many melted.
+
+## 0.8.30
+- **June far plates melt, alpine snow stays.** Far LOD that was still white in June now clears where that height is already green. Snow and frost at elevation keep going: freeze-line air still snows high ground, frosted trees stay gray, real snow stays white. A quiet background pass walks far tiles two at a time so you do not have to walk every pad.
+
+## 0.8.29
+- **Green trees, no snow field.** If grass or leaves on a column are green or partly green and not frost-gray, LOD does not invent snow on the ground under them. Frosted winter canopy can still have a snowed forest floor. Alpine freeze with a real cold reading can still snow bare rock.
+- **Melt by May 1.** May through October no longer invent a snow field from missing climate on far plates. `/time` and join rebake every LOD level, not just L0, so far mountains and midground catch up together. Trees still frost-gray, not snow hats.
+
+## 0.8.28
+- **Square holes at ~2× view distance.** Flying to a missing pad filled it; backing off to where it first appeared punched it empty again. That range is past the 1.5× fine ring, where L3 skipped every L2 child and never registered a gap, so nothing drew and neighbouring seafloor showed through. L2 in front is visited and can cover; a skipped child in the cone is a gap the parent clip-fills. Spawn underfoot still belongs to vanilla. Cake-shelf ban for L3+ on the skyline is unchanged.
+
+## 0.8.27
+- **Wide-open L1/L2 holes over ocean.** 0.8.26 treated a loaded chunk at camera height as "vanilla is drawing this column." Flying loads sky around you, not the water. LOD dumped those pads; the tile itself drew nothing; neighbouring seafloor showed through the hole. Close in it filled; fly back and it was gone again. Ownership now requires the surface slice. Spawn underfoot still belongs to vanilla.
+
+## 0.8.26
+- **Square holes anywhere after discovering land.** LOD hid ground whenever the minimap had a map chunk, even when vanilla was not drawing those columns. Huge 128/256 sky squares on ocean, flats, and hills, on the ground or in the air. A tile now stays LOD until every world chunk covering it is actually loaded, and hide uses the 0.55 skip disc instead of the full view-distance sphere. Spawn underfoot still belongs to vanilla. Cake-shelf ban for L3+ on the skyline is unchanged.
+
+## 0.8.25
+- **Snow on leftover rock and sand.** After 0.8.24, far grass mostly snowed, but sparse ground still stayed bare: rock, sand, gravel, farmland, peat, clay, and paths under trees or in the open. Those surfaces now get snow the same way grass does. Real snow stays white. Trees keep gray frost, not snow hats. Wood stays brown.
+
+## 0.8.24
+- **Snow on the brown squares.** Far 64-block plates that should be winter-snowed were staying bare dirt. Snow now covers those ground tiles from climate and season, column by column, instead of one sample deciding the whole plate. Real snow stays white. Trees keep gray frost, not snow hats. Wood stays brown.
+- **Catch-up until dirty is 0.** Join still recaptures nearby loaded chunks (and peeks above rain height for snow sitting on grass). Far tiles that never got a snowlayer block still receive snow during the season sweep. Wait until season catch-up finishes.
+
+## 0.8.23
+- **Frost, not snow hats.** Far leaves follow the leaf's own climate and season color. Winter frost is gray. Green trees and autumn trees stay different. Height alone does not cut the same look in two. Real snow on the ground stays white.
+- **Join bakes the current season.** Walking in or `/time` is no longer required to get frost on far land. Resident tiles recapture on join; L0 rebakes, then parents inherit.
+- **No 64-block checkerboard.** Grass frost blends across the old square plates. Leaves are not one color for a whole 64×64.
+
+## 0.8.22
+- **Snow sticks after you leave.** Visiting snow recaptured the 64×64 tile white, then walking away drew the parent mesh that still had summer/tan soil. Parents and the next coarser level now remesh after that capture (and after mip), so far snow stays white.
+- **No 64-block checkerboard plates.** Capture used one colour per block type for a whole tile, so neighbours disagreed at the square edge. Each column now keeps its own snow vs grass-frost vs wood row, sampled at that world XZ. Real snow stays white. Bare grass is mottled blobs that cross tile edges, not one tan plate per square.
+
+## 0.8.16
+- **Altitude square holes (ocean and flats).** Flying up after discovering land punched huge sky squares, often in water, in a grid. Flat L1/L2 tiles (ocean, beach, plains) were treated as horizon cake plates and thrown away while hills around them still drew; mid-ground L1 inside the vanilla disc also refused to paint even when vanilla was not drawing that ground. New captures without surface bounds hid LOD on a 2D circle. LOD now keeps covering that ground: L1 ocean plates stay when children cannot replace them, coarse whole is allowed when vanilla does not own the tile (spawn underfoot still blocked), and missing bounds fail open. Cake-shelf ban for L2+ on the skyline is unchanged.
+
+## 0.7.86
+- **Kill FlagBaked seas/clim (purple flicker).** Climate-only bake + live season÷climate on band 3 turned December leaves and even mountains purple as season tables refreshed. Bake climate×season into FlagBaked RGB again; band 3 is identity; heal clears slotted leftovers. Join/month repaint still updates the month.
+- **FOV occlusion forced off.** Mid-ground sky holes beside cliffs never OK — code kept, disabled until a hole-free cull exists.
+
+## 0.7.85
+- **FOV occlusion fail-open harder.** Mid-ground sky chops (ridge hides tile center, player still sees land) needed a bigger pullback: peek margin 160, min distance 384, ~90%+ ray blockers, wider left/right probes. Fossilized margins ≤96 bump to 160. Still never deletes cache. If holes remain after relaunch, kill the feature next.
+
+## 0.7.84
+- **December leaves track frost past vanilla.** FlagBaked stores climate-only RGB and keeps the season tint slot on band 3 so live frost/autumn mixes in the shader (ColorOverlay-equivalent). Full climatexseason bake with bare band 3 (0.7.82/83) froze December as autumn brown just past load distance. Join/month heal restores SlotNone leftovers. Season catch-up from 0.7.83 stays.
+- **Mountain FOV occlusion pulled back.** Center-ray heightfield cull was declaring land behind a cliff "hidden" while you could still see around the edge — sky holes beside peridotite walls. Peek margin default 96 (was 32; fossilized configs at 32 bump automatically), min distance 192, need ~75% blockers, and both left/right offset rays must also occlude before a tile skips draw. Still never deletes cache.
+
+## 0.7.83
+- **Winter join catch-up actually aims at you.** Season nearest-first used player Pos while it was still (0,0) for the first ~20s after finalize on mid-map worlds, so December rebake burned budget on empty ocean while the hills beside you stayed autumn. Anchor falls back to world spawn until the player leaves that trap; budget 48 sections/tick + 16 cold loads; remesh only when palette RGB/slot actually changed (no RenderDirty flood); L0 preferred over coarser parents; progress lines in client-main.log.
+
+## 0.7.82
+- **Revert FlagBaked to full climate×season bake.** The climate-only + live-season experiment left December stuck on autumn/summer just past vanilla and made harsh contrast seams where some sections double-mixed season. Capture/rebake again freezes current calendar climate×season into palette RGB with tint slot 0; the mesher emits bare band 3; the shader skips climate and season on that band. Join/month `QueueSeasonRepaintAll`, nearest-first remesh, and cold EnsureResident stay so month changes still update the canvas without walk-fill. Heal clears leftover slotted FlagBaked rows from 0.7.81.
+
 ## 0.7.80
 - **Far LOD keeps seasonal colour after walk-away.** `FlagBaked` was saved to SQLite but `LodStore.Reclassify` overwrote palette flags on every disk load, so evicted sections came back on the live-tint path and snapped grey-green at distance. Reclassify now keeps the baked bit and slot 0. The mesher tags baked vertices in alpha band 3 (192+) and `lodterrain.vsh` skips climate, keep-origin ratio, and live season on that band so stored RGB is not multiplied again. Legacy caches with a live tint slot are discover-baked automatically when revisited (sync or async load) and during the budgeted month repaint — no manual cache delete.
 - **A/B validation.** Walk an area in January, note grass/leaf hue near vanilla, walk out until only LOD draws the same hillside — hue should match, not revert to summer green. Quit and rejoin (forces disk reload): same hillside should still match. `/time` month change: far land shifts hue gradually without a hitch. Turn-hitch budgets, pressure hysteresis, Linux zip paths, and the cake-plate ban are unchanged from 0.7.79.

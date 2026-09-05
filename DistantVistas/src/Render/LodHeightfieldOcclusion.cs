@@ -9,6 +9,11 @@ namespace DistantVistas;
 /// already in RAM. Skips Submit when a nearer ridge clearly hides the tile top.
 /// Fail open (draw) when height data is missing. Never deletes disk/RAM cache.
 /// Temporal cache + per-frame test budget keep turn hitch cheap when occCull=0.
+///
+/// Side-of-mountain sky holes: a single center ray through a cliff will claim
+/// "occluded" while the player can still see the tile around the edge. 0.7.84
+/// requires a clear majority on the center ray AND matching occlusion on both
+/// lateral offset rays, with a larger peek margin, before skipping draw.
 /// </summary>
 public sealed class LodHeightfieldOcclusion
 {
@@ -20,17 +25,17 @@ public sealed class LodHeightfieldOcclusion
 
     /// <summary>
     /// Extra height (blocks) so peaks/towers that clear a ridge still draw, and
-    /// uncertain cases bias toward drawing.
+    /// uncertain cases bias toward drawing. 0.7.85 default 160 (was 32→96).
     /// </summary>
-    public int PeekMarginBlocks = 32;
+    public int PeekMarginBlocks = 160;
 
     /// <summary>Only L0/L1 (expensive meshes). L2 temporary cover stays for holes.</summary>
     public int MaxLevel = 1;
 
-    /// <summary>Skip the test inside this horizontal distance (blocks).</summary>
-    public double MinDistanceBlocks = 96;
+    /// <summary>Skip the test inside this horizontal distance (blocks). 0.7.85 default 384.</summary>
+    public double MinDistanceBlocks = 384;
 
-    /// <summary>Hard cap on fresh ray tests per frame. Cached results do not count.</summary>
+    /// <summary>Fresh ray tests per frame (cached results free). Default 48.</summary>
     public int MaxTestsPerFrame = 48;
 
     /// <summary>Per-entry yaw slack (radians) before a cached ray result is discarded.</summary>
@@ -123,13 +128,100 @@ public sealed class LodHeightfieldOcclusion
         double dist = Math.Sqrt(distSq);
 
         int margin = PeekMarginBlocks;
-        if (lookY > 0f) margin += (int)(lookY * 48f);
-        if (margin < 8) margin = 8;
+        if (lookY > 0f) margin += (int)(lookY * 64f);
+        if (margin < 96) margin = 96;
 
         int samples = SampleCount;
         if (samples < 4) samples = 4;
         if (samples > 16) samples = 16;
 
+        int tileSx = LodWorld.KeySx(key);
+        int tileSz = LodWorld.KeySz(key);
+
+        // Center ray first. Soft majority is not enough for side-of-cliff holes.
+        if (!RayFullyOccludes(
+                world, camX, camY, camZ, dx, dz, dist, tileMaxY, tileMinY,
+                tileSx, tileSz, level, samples, margin,
+                out int maxOcc, out bool centerHard))
+        {
+            Remember(key, false);
+            return false;
+        }
+
+        occluderMaxY = maxOcc;
+        if (!centerHard)
+        {
+            Remember(key, false);
+            return false;
+        }
+
+        // Lateral rays: half a footprint left/right of the tile center. If either
+        // side still sees the tile top over the ridge, the player can too.
+        double invLen = 1.0 / dist;
+        double px = -dz * invLen; // unit perpendicular in XZ
+        double pz = dx * invLen;
+        // Wide lateral probes: a tall ridge can hide the tile center while the
+        // player still sees land left/right of the silhouette (the sky holes).
+        double side = Math.Max(48.0, footprint * 0.85);
+
+        double ldx = (tileCx + px * side) - camX;
+        double ldz = (tileCz + pz * side) - camZ;
+        double lDist = Math.Sqrt(ldx * ldx + ldz * ldz);
+        if (lDist < 1.0
+            || !RayFullyOccludes(
+                world, camX, camY, camZ, ldx, ldz, lDist, tileMaxY, tileMinY,
+                tileSx, tileSz, level, samples, margin,
+                out _, out bool leftHard)
+            || !leftHard)
+        {
+            Remember(key, false);
+            return false;
+        }
+
+        double rdx = (tileCx - px * side) - camX;
+        double rdz = (tileCz - pz * side) - camZ;
+        double rDist = Math.Sqrt(rdx * rdx + rdz * rdz);
+        if (rDist < 1.0
+            || !RayFullyOccludes(
+                world, camX, camY, camZ, rdx, rdz, rDist, tileMaxY, tileMinY,
+                tileSx, tileSz, level, samples, margin,
+                out _, out bool rightHard)
+            || !rightHard)
+        {
+            Remember(key, false);
+            return false;
+        }
+
+        Remember(key, true);
+        return true;
+    }
+
+    /// <summary>
+    /// Hard occlusion along one XZ ray: enough height samples, tile top/mid clearly
+    /// under the ridge, and at least ~3/4 of samples block LoS to the tile top.
+    /// </summary>
+    bool RayFullyOccludes(
+        LodWorld world,
+        double camX,
+        double camY,
+        double camZ,
+        double dx,
+        double dz,
+        double dist,
+        int tileMaxY,
+        int tileMinY,
+        int tileSx,
+        int tileSz,
+        int level,
+        int samples,
+        int margin,
+        out int occluderMaxY,
+        out bool hardOcclude)
+    {
+        occluderMaxY = 0;
+        hardOcclude = false;
+
+        double footprint = LodSection.SectionBlocks << level;
         double endT = 1.0 - (footprint * 0.45) / dist;
         if (endT > 0.92) endT = 0.92;
         if (endT < 0.35) endT = 0.35;
@@ -137,8 +229,6 @@ public sealed class LodHeightfieldOcclusion
         int hits = 0;
         int topBlockers = 0;
         int maxOcc = int.MinValue;
-        int tileSx = LodWorld.KeySx(key);
-        int tileSz = LodWorld.KeySz(key);
 
         for (int i = 1; i <= samples; i++)
         {
@@ -158,30 +248,24 @@ public sealed class LodHeightfieldOcclusion
             if (y > losTop + margin) topBlockers++;
         }
 
-        if (hits < Math.Max(2, samples / 3))
-        {
-            Remember(key, false);
+        if (hits < Math.Max(3, samples / 2))
             return false;
-        }
 
         occluderMaxY = maxOcc;
 
         if (tileMaxY >= maxOcc + margin)
-        {
-            Remember(key, false);
             return false;
-        }
 
         int tileMidY = (tileMinY + tileMaxY) / 2;
-        if (tileMidY >= maxOcc + (margin / 2))
-        {
-            Remember(key, false);
+        // Mid must clear with full margin, not half — side silhouettes leak otherwise.
+        if (tileMidY >= maxOcc + margin)
             return false;
-        }
 
-        bool occluded = topBlockers >= Math.Max(2, (hits + 1) / 2);
-        Remember(key, occluded);
-        return occluded;
+        // Nearly every hit must block LoS to the tile top (was ~50%→75%).
+        // One soft sample = draw — chopping mid-ground for FPS is worse.
+        int need = Math.Max(hits, Math.Max(3, (hits * 9 + 9) / 10));
+        hardOcclude = topBlockers >= need;
+        return hardOcclude;
     }
 
     bool EntryStillValid(CacheEntry hit, double camX, double camZ, float yawRadians)

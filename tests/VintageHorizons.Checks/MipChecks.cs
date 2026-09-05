@@ -19,9 +19,12 @@ public static class MipChecks
         CliffFaceKeepsTheTallColumn(c);
         RunMerging(c);
         PaletteRemap(c);
+        FlagBakedTintSlotSurvivesMip(c);
         NothingToDo(c);
-        BrightMinorityDoesNotPaintTheCap(c);
-        NearWhiteMinorityDoesNotPaintTheCap(c);
+        BrightSnowMinorityKeepsCap(c);
+        InferredGroundSnowMinorityKeepsCap(c);
+        InferredRockSnowMinorityKeepsCap(c);
+        PaintedBrightMinorityDoesNotStealCap(c);
         BrightMajorityKeepsSnow(c);
         TerrainOverACaveKeepsItsSurface(c);
         FloatingLeafCrownIsStillDropped(c);
@@ -326,6 +329,32 @@ public static class MipChecks
         c.Eq(999, parent.Palette[0].BlockId, "the parent's existing palette entry is undisturbed");
     }
 
+    /// <summary>
+    /// Outer LOD draws parents. FlagBaked + season tint slot must survive mip so the
+    /// far ring keeps climate RGB and live season on band 3.
+    /// </summary>
+    static void FlagBakedTintSlotSurvivesMip(Check c)
+    {
+        var child = new LodSection();
+        child.FindOrAddPaletteEntry(blockId: 50, color: 0x00407040,
+            flags: LodPaletteEntry.FlagBaked, tintSlot: 5);
+        ulong[] runs = { LodSection.PackRun(0, 12, 0) };
+        for (int dz = 0; dz < 2; dz++)
+        {
+            for (int dx = 0; dx < 2; dx++) child.SetColumn(LodSection.ColumnIndex(dx, dz), runs);
+        }
+
+        var parent = new LodSection();
+        LodMip.DownsampleIntoParent(child, parent, 0, 0);
+        ulong[] merged = parent.ColumnRuns(LodSection.ColumnIndex(0, 0)).ToArray();
+        c.True(merged.Length > 0, "FlagBaked child produces a parent column");
+        int pid = LodSection.RunPaletteId(merged[0]);
+        c.True((parent.Palette[pid].Flags & LodPaletteEntry.FlagBaked) != 0,
+            "FlagBaked survives mip into the parent");
+        c.Eq((byte)5, parent.Palette[pid].TintSlot,
+            "FlagBaked season tint slot survives mip into the parent");
+    }
+
     static void NothingToDo(Check c)
     {
         var parent = new LodSection();
@@ -342,14 +371,15 @@ public static class MipChecks
     }
 
     /// <summary>
-    /// One bright column on three rock columns must not become a white parent cap.
-    /// Boyer-Moore used to keep the snow pid after cancelling; closer in those blocks are rock.
+    /// One FlagSnow column on three rock columns still paints the parent white.
+    /// Real snow layer: any FlagSnow on the 2x2 surface must survive L1/L2 mip.
     /// </summary>
-    static void BrightMinorityDoesNotPaintTheCap(Check c)
+    static void BrightSnowMinorityKeepsCap(Check c)
     {
         var child = new LodSection();
         child.FindOrAddPaletteEntry(blockId: 1, color: 0x00445566, flags: 0);
-        child.FindOrAddPaletteEntry(blockId: 2, color: unchecked((int)0x00FCFCFC), flags: 0);
+        child.FindOrAddPaletteEntry(blockId: 2, color: unchecked((int)0x00FCFCFC),
+            flags: LodPaletteEntry.FlagSnow);
 
         child.SetColumn(LodSection.ColumnIndex(0, 0), new[] { LodSection.PackRun(1, 22, 20), LodSection.PackRun(0, 20, 0) });
         child.SetColumn(LodSection.ColumnIndex(1, 0), new[] { LodSection.PackRun(0, 20, 0) });
@@ -361,15 +391,68 @@ public static class MipChecks
         ulong[] merged = parent.ColumnRuns(LodSection.ColumnIndex(0, 0)).ToArray();
         c.True(merged.Length >= 1, "mixed columns still produce a run");
         int topPid = LodSection.RunPaletteId(merged[0]);
-        c.Eq(1, parent.Palette[topPid].BlockId, "a 1-of-4 bright cap does not become the parent surface");
-        c.Eq(20, LodSection.RunYTop(merged[0]), "parent height follows the rock majority");
+        c.Eq(2, parent.Palette[topPid].BlockId, "a 1-of-4 FlagSnow cap stays on the parent surface");
+        c.Eq(22, LodSection.RunYTop(merged[0]), "parent height follows the snow cap");
     }
 
     /// <summary>
-    /// Atlas near-white that is not quite 0xFFFFFF (TrueScale / server samples around
-    /// luma 232) used to skip the 3-of-4 gate and paint the parent cap.
+    /// Inferred winter cover on grass (FlagSnow|FlagFrostGround) is still FlagSnow:
+    /// dirt majority must not flatten a snowed L0 plate to bare soil on mip.
     /// </summary>
-    static void NearWhiteMinorityDoesNotPaintTheCap(Check c)
+    static void InferredGroundSnowMinorityKeepsCap(Check c)
+    {
+        var child = new LodSection();
+        child.FindOrAddPaletteEntry(blockId: 1, color: 0x00305070,
+            flags: (byte)(LodPaletteEntry.FlagBaked | LodPaletteEntry.FlagFrostGround), tintSlot: 2);
+        child.FindOrAddPaletteEntry(blockId: 1, color: LodSeasonBake.SnowFieldRgb,
+            flags: (byte)(LodPaletteEntry.FlagSnow | LodPaletteEntry.FlagFrostGround));
+
+        child.SetColumn(LodSection.ColumnIndex(0, 0), new[] { LodSection.PackRun(1, 22, 20), LodSection.PackRun(0, 20, 0) });
+        child.SetColumn(LodSection.ColumnIndex(1, 0), new[] { LodSection.PackRun(0, 20, 0) });
+        child.SetColumn(LodSection.ColumnIndex(0, 1), new[] { LodSection.PackRun(0, 20, 0) });
+        child.SetColumn(LodSection.ColumnIndex(1, 1), new[] { LodSection.PackRun(0, 20, 0) });
+
+        var parent = new LodSection();
+        LodMip.DownsampleIntoParent(child, parent, 0, 0);
+        ulong[] merged = parent.ColumnRuns(LodSection.ColumnIndex(0, 0)).ToArray();
+        c.True(merged.Length >= 1, "mixed inferred-snow columns still produce a run");
+        int topPid = LodSection.RunPaletteId(merged[0]);
+        c.True((parent.Palette[topPid].Flags & LodPaletteEntry.FlagSnow) != 0,
+            "a 1-of-4 inferred FlagSnow cap stays snow through mip, not majority dirt");
+        c.Eq(22, LodSection.RunYTop(merged[0]), "parent height follows the inferred snow cap");
+    }
+
+    /// <summary>
+    /// Inferred winter cover on rock (FlagSnow|FlagBaked, no FlagFrostGround) is
+    /// still FlagSnow: dirt majority must not flatten a 1-of-4 snowed rock column.
+    /// </summary>
+    static void InferredRockSnowMinorityKeepsCap(Check c)
+    {
+        var child = new LodSection();
+        child.FindOrAddPaletteEntry(blockId: 1, color: 0x00445566, flags: 0);
+        child.FindOrAddPaletteEntry(blockId: 30, color: LodSeasonBake.SnowFieldRgb,
+            flags: (byte)(LodPaletteEntry.FlagSnow | LodPaletteEntry.FlagBaked));
+
+        child.SetColumn(LodSection.ColumnIndex(0, 0), new[] { LodSection.PackRun(1, 22, 20), LodSection.PackRun(0, 20, 0) });
+        child.SetColumn(LodSection.ColumnIndex(1, 0), new[] { LodSection.PackRun(0, 20, 0) });
+        child.SetColumn(LodSection.ColumnIndex(0, 1), new[] { LodSection.PackRun(0, 20, 0) });
+        child.SetColumn(LodSection.ColumnIndex(1, 1), new[] { LodSection.PackRun(0, 20, 0) });
+
+        var parent = new LodSection();
+        LodMip.DownsampleIntoParent(child, parent, 0, 0);
+        ulong[] merged = parent.ColumnRuns(LodSection.ColumnIndex(0, 0)).ToArray();
+        c.True(merged.Length >= 1, "mixed inferred-rock-snow columns still produce a run");
+        int topPid = LodSection.RunPaletteId(merged[0]);
+        c.True((parent.Palette[topPid].Flags & LodPaletteEntry.FlagSnow) != 0,
+            "a 1-of-4 inferred rock FlagSnow cap stays snow through mip, not majority dirt");
+        c.Eq(22, LodSection.RunYTop(merged[0]), "parent height follows the inferred rock snow cap");
+    }
+
+    /// <summary>
+    /// Painted whitish frost (bright RGB, no FlagSnow) must NOT steal the parent cap
+    /// from rock majority — that is peat-style frost paint, not a snow layer.
+    /// </summary>
+    static void PaintedBrightMinorityDoesNotStealCap(Check c)
     {
         var child = new LodSection();
         child.FindOrAddPaletteEntry(blockId: 1, color: 0x00445566, flags: 0);
@@ -383,20 +466,19 @@ public static class MipChecks
         var parent = new LodSection();
         LodMip.DownsampleIntoParent(child, parent, 0, 0);
         ulong[] merged = parent.ColumnRuns(LodSection.ColumnIndex(0, 0)).ToArray();
-        c.True(merged.Length >= 1, "mixed near-white columns still produce a run");
+        c.True(merged.Length >= 1, "mixed painted-frost columns still produce a run");
         int topPid = LodSection.RunPaletteId(merged[0]);
-        c.Eq(1, parent.Palette[topPid].BlockId, "a 1-of-4 luma-232 cap does not become the parent surface");
-        c.True(LodPaletteRepair.IsBrightCap(unchecked((int)0x00E8E8E8)), "luma 232 is a bright cap");
-        c.False(LodPaletteRepair.IsMissingTextureWhite(unchecked((int)0x00E8E8E8)),
-            "luma 232 is not unknown.png, so Fill must not steal real snow");
+        c.Eq(1, parent.Palette[topPid].BlockId, "bright paint without FlagSnow follows majority rock");
+        c.Eq(20, LodSection.RunYTop(merged[0]), "parent height follows the rock majority");
     }
 
-    /// <summary>Four snow-capped columns stay snow: that is a real snow field, not a missing tex.</summary>
+    /// <summary>Four FlagSnow-capped columns stay snow: that is a real snow field.</summary>
     static void BrightMajorityKeepsSnow(Check c)
     {
         var child = new LodSection();
         child.FindOrAddPaletteEntry(blockId: 1, color: 0x00445566, flags: 0);
-        child.FindOrAddPaletteEntry(blockId: 2, color: unchecked((int)0x00FCFCFC), flags: 0);
+        child.FindOrAddPaletteEntry(blockId: 2, color: unchecked((int)0x00FCFCFC),
+            flags: LodPaletteEntry.FlagSnow);
         ulong[] snowOverRock = { LodSection.PackRun(1, 22, 18), LodSection.PackRun(0, 18, 0) };
         for (int dz = 0; dz < 2; dz++)
         {

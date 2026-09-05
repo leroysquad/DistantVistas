@@ -12,21 +12,28 @@ public struct LodPaletteEntry
     public int BlockId;
 
     /// <summary>
-    /// Base colour for live-tint sections; final baked RGB when <see cref="FlagBaked"/>.
+    /// Base colour for live-tint sections; climate×season RGB when <see cref="FlagBaked"/>.
     /// </summary>
     public int Color;
 
     public byte Flags;
 
     /// <summary>
-    /// Which live tint applies (see LodTintRegistry). Derived from the block, never
-    /// persisted: an existing cache gets correct per-species tints without re-capturing,
-    /// and the mapping stays right if a game update moves a block to a different map.
+    /// Which live tint / season slot applies (see LodTintRegistry). FlagBaked rows
+    /// use <see cref="LodTintRegistry.SlotNone"/> — season is already in <see cref="Color"/>.
     /// </summary>
     public byte TintSlot;
 
     public const byte FlagWater = 1;
-    // Bits 2 and 4 are free: they held tint classes, now superseded by TintSlot.
+
+    /// <summary>
+    /// Ground frost mottling: same BlockId may occupy several palette rows, one per
+    /// world-locked mottle bin (TintSlot holds the bin 0..N-1). Bit was free after
+    /// tint-class retirement.
+    /// </summary>
+    public const byte FlagFrostGround = 2;
+
+    // Bit 4 is free: held a tint class, now superseded by TintSlot.
 
     /// <summary>
     /// Not terrain at all (fire, meta markers): dropped at capture so it never becomes
@@ -42,10 +49,18 @@ public struct LodPaletteEntry
     public const byte FlagThin = 16;
 
     /// <summary>
-    /// Palette colour already includes climate + season maps from capture/repaint.
-    /// Tint slot 0; shader must not multiply live tints again.
+    /// Climate×season already mixed into <see cref="Color"/>; live band-3 is identity.
     /// </summary>
     public const byte FlagBaked = 32;
+
+    /// <summary>
+    /// Snow surface seen from the sky. Real snowlayer/ice is FlagSnow alone.
+    /// Inferred winter cover on soil/grass is FlagSnow|FlagFrostGround; inferred
+    /// cover on rock/sand/gravel/farmland is FlagSnow|FlagBaked (same BlockId,
+    /// white RGB) so far L0 can show snow when the snowlayer block was never captured.
+    /// Painted FlagBaked frost on grass is NOT this — that is a colour mix.
+    /// </summary>
+    public const byte FlagSnow = 64;
 }
 
 /// <summary>
@@ -87,6 +102,117 @@ public class LodSection
     public readonly bool[] Captured = new bool[GridSize * GridSize];
 
     public int CapturedColumns;
+
+    /// <summary>
+    /// Last calendar bake token whose RGB was uploaded to a mesh. RAM-only; idle
+    /// season sweep uses it to remesh a stale VBO once per epoch without hitching
+    /// every visit.
+    /// </summary>
+    public int SeasonLookToken;
+
+    /// <summary>
+    /// Last <see cref="SeasonLookToken"/> at which this side captured a real
+    /// (non-provisional) loaded chunk into this L0. RAM-only diagnostic.
+    /// Must not suppress recapture while inferred or leftover snow remains.
+    /// </summary>
+    public int LoadedCaptureLookToken;
+
+    /// <summary>
+    /// True when any palette row is a snow surface (real snowlayer or inferred cover).
+    /// </summary>
+    public bool HasSnowSurface()
+    {
+        for (int i = 0; i < Palette.Count; i++)
+        {
+            if ((Palette[i].Flags & LodPaletteEntry.FlagSnow) != 0) return true;
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Inferred Cover snow (FlagSnow plus FlagBaked) still in a captured run.
+    /// Palette leftovers do not count — unused snow rows stay after a melt.
+    /// Real snowlayer is FlagSnow without FlagBaked.
+    /// </summary>
+    public bool HasInferredSnowSurface()
+    {
+        int cols = GridSize * GridSize;
+        for (int col = 0; col < cols; col++)
+        {
+            if (!Captured[col]) continue;
+            int from = ColumnStart[col];
+            int to = ColumnStart[col + 1];
+            for (int r = from; r < to; r++)
+            {
+                int pid = RunPaletteId(Runs[r]);
+                if ((uint)pid >= (uint)Palette.Count) continue;
+                byte flags = Palette[pid].Flags;
+                if ((flags & LodPaletteEntry.FlagSnow) != 0
+                    && (flags & LodPaletteEntry.FlagBaked) != 0)
+                    return true;
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// FlagSnow on a captured column in this quadrant (inferred or leftover snowlayer).
+    /// Recapture is per-chunk; do not use section-wide <see cref="HasSnowSurface"/>.
+    /// </summary>
+    public bool QuadrantHasSnowSurface(int quadrant)
+    {
+        int x0 = (quadrant & 1) * QuadrantColumns;
+        int z0 = (quadrant >> 1) * QuadrantColumns;
+        for (int z = z0; z < z0 + QuadrantColumns; z++)
+        {
+            int row = z * GridSize + x0;
+            for (int x = 0; x < QuadrantColumns; x++)
+            {
+                int col = row + x;
+                if (!Captured[col]) continue;
+                int from = ColumnStart[col];
+                int to = ColumnStart[col + 1];
+                for (int r = from; r < to; r++)
+                {
+                    int pid = RunPaletteId(Runs[r]);
+                    if ((uint)pid >= (uint)Palette.Count) continue;
+                    if ((Palette[pid].Flags & LodPaletteEntry.FlagSnow) != 0) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    /// <summary>
+    /// Cover-inferred snow in this quadrant (FlagSnow plus FlagBaked). Real snowlayer
+    /// is FlagSnow alone and does not count.
+    /// </summary>
+    public bool QuadrantHasInferredSnow(int quadrant)
+    {
+        int x0 = (quadrant & 1) * QuadrantColumns;
+        int z0 = (quadrant >> 1) * QuadrantColumns;
+        for (int z = z0; z < z0 + QuadrantColumns; z++)
+        {
+            int row = z * GridSize + x0;
+            for (int x = 0; x < QuadrantColumns; x++)
+            {
+                int col = row + x;
+                if (!Captured[col]) continue;
+                int from = ColumnStart[col];
+                int to = ColumnStart[col + 1];
+                for (int r = from; r < to; r++)
+                {
+                    int pid = RunPaletteId(Runs[r]);
+                    if ((uint)pid >= (uint)Palette.Count) continue;
+                    byte flags = Palette[pid].Flags;
+                    if ((flags & LodPaletteEntry.FlagSnow) != 0
+                        && (flags & LodPaletteEntry.FlagBaked) != 0)
+                        return true;
+                }
+            }
+        }
+        return false;
+    }
 
     /// <summary>
     /// Quadrants (one vanilla chunk column each, bit = qz*2+qx) whose columns did NOT
@@ -314,9 +440,36 @@ public class LodSection
 
     public int FindOrAddPaletteEntry(int blockId, int color, byte flags, byte tintSlot = 0)
     {
+        bool frostGround = (flags & LodPaletteEntry.FlagFrostGround) != 0;
+        bool snow = (flags & LodPaletteEntry.FlagSnow) != 0;
+        bool bakedLook = (flags & LodPaletteEntry.FlagBaked) != 0 && !frostGround && !snow;
         for (int i = 0; i < Palette.Count; i++)
         {
-            if (Palette[i].BlockId == blockId) return i;
+            if (Palette[i].BlockId != blockId) continue;
+            // Real snow never shares a row with FlagBaked grass/wood of the same id.
+            if (snow)
+            {
+                if ((Palette[i].Flags & LodPaletteEntry.FlagSnow) == 0) continue;
+                return i;
+            }
+            if ((Palette[i].Flags & LodPaletteEntry.FlagSnow) != 0) continue;
+            // One row per (block, mottle bin) so speckles survive greedy merge.
+            if (frostGround)
+            {
+                if ((Palette[i].Flags & LodPaletteEntry.FlagFrostGround) == 0) continue;
+                if (Palette[i].TintSlot != tintSlot) continue;
+            }
+            else if ((Palette[i].Flags & LodPaletteEntry.FlagFrostGround) != 0)
+            {
+                continue;
+            }
+            else if (bakedLook)
+            {
+                if ((Palette[i].Flags & LodPaletteEntry.FlagBaked) == 0) continue;
+                if ((Palette[i].Flags & LodPaletteEntry.FlagFrostGround) != 0) continue;
+                if (!LodSeasonBake.SameFoliageLook(Palette[i].Color, color)) continue;
+            }
+            return i;
         }
         Palette.Add(new LodPaletteEntry
         {
@@ -327,6 +480,16 @@ public class LodSection
         });
         snapPaletteCount = -1;
         return Palette.Count - 1;
+    }
+
+    /// <summary>
+    /// Foliage identity is blockId + baked seasonal look. Winter grays merge.
+    /// Green vs autumn stay split. Never FlagFrostGround.
+    /// </summary>
+    public int FindOrAddFoliageLook(int blockId, int color, byte flags)
+    {
+        flags = (byte)((flags | LodPaletteEntry.FlagBaked) & ~LodPaletteEntry.FlagFrostGround);
+        return FindOrAddPaletteEntry(blockId, color, flags, (byte)LodTintRegistry.SlotNone);
     }
 
     /// <summary>
@@ -362,23 +525,63 @@ public class LodSection
   public void InvalidatePaletteSnapshot() => snapPaletteCount = -1;
 
     /// <summary>
-    /// World position of the top block of the first run that uses <paramref name="paletteId"/>.
+    /// World position for seasonal bake of <paramref name="paletteId"/>.
+    /// Prefers the highest canopy top among matching runs so climate/frost samples
+    /// cold ridges instead of the first (often warm valley-edge) column. Each palette
+    /// row is one (block, snow|frost-bin|baked) style — not one RGB per blockId.
     /// </summary>
     public bool TryFindPaletteTop(long sectionKey, int paletteId, out int x, out int y, out int z)
     {
         int cols = GridSize * GridSize;
+        int bestY = int.MinValue;
+        bool found = false;
+        x = y = z = 0;
         for (int col = 0; col < cols; col++)
         {
             if (!Captured[col]) continue;
             foreach (ulong run in ColumnRuns(col))
             {
                 if (RunPaletteId(run) != paletteId) continue;
-                (x, y, z) = LodPipeline.CaptureBlockPos(sectionKey, col, run);
-                return true;
+                (int cx, int cy, int cz) = LodPipeline.CaptureBlockPos(sectionKey, col, run);
+                if (!found || cy > bestY)
+                {
+                    x = cx;
+                    y = cy;
+                    z = cz;
+                    bestY = cy;
+                    found = true;
+                }
             }
         }
-        x = y = z = 0;
-        return false;
+        return found;
+    }
+
+    /// <summary>
+    /// Highest exclusive Y of a captured column in this quadrant. Empty / missing
+    /// columns stay 0 so alpine recapture does not fire on a hole.
+    /// </summary>
+    public int QuadrantMaxY(int quadrant)
+    {
+        int x0 = (quadrant & 1) * QuadrantColumns;
+        int z0 = (quadrant >> 1) * QuadrantColumns;
+        int maxY = 0;
+        for (int z = z0; z < z0 + QuadrantColumns; z++)
+        {
+            int row = z * GridSize + x0;
+            for (int x = 0; x < QuadrantColumns; x++)
+            {
+                int col = row + x;
+                if (!Captured[col]) continue;
+                int from = ColumnStart[col];
+                int to = ColumnStart[col + 1];
+                for (int r = from; r < to; r++)
+                {
+                    int y = RunYTop(Runs[r]);
+                    if (y > maxY) maxY = y;
+                }
+            }
+        }
+        return maxY;
     }
 
     /// <summary>

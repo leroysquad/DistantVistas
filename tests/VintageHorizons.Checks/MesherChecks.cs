@@ -223,7 +223,7 @@ public static class MesherChecks
             "ordinary grey-green tops keep the climate slot");
         c.Eq(LodMesher.BakedBase,
             AlphaOf(Column(LodPaletteEntry.FlagBaked, tintSlot: 5)),
-            "FlagBaked uses the fourth alpha band regardless of stored slot");
+            "FlagBaked is bare band 3 (season already in RGB; no live slot)");
     }
 
     static void WaterIsASeparatePass(Check c)

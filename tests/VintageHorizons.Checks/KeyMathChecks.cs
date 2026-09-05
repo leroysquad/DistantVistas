@@ -17,6 +17,7 @@ public static class KeyMathChecks
         WantedLevelFromSquaredDistance(c);
         WantedLevelHonoursVisualCap(c);
         CaptureSamplePositionIsTheBlockItself(c);
+        ForceAncestorRemeshQueuesParents(c);
     }
 
     static void VanillaHandoffUsesSurfaceDistance(Check c)
@@ -63,6 +64,25 @@ public static class KeyMathChecks
         c.Eq(63, x, "x decodes from the fast axis of the column index");
         c.Eq(1, z, "z decodes from the slow axis of the column index");
         c.Eq(1, y, "a one-block run at y=1 samples y=1");
+    }
+
+    static void ForceAncestorRemeshQueuesParents(Check c)
+    {
+        var world = new LodWorld();
+        long l0 = LodWorld.SectionKey(0, 4, 6);
+        world.ForceAncestorGpuRemesh(l0);
+        long l1 = LodWorld.ParentKey(l0);
+        long l2 = LodWorld.ParentKey(l1);
+        long l3 = LodWorld.ParentKey(l2);
+        long top = l3;
+        for (int i = 3; i < LodWorld.MaxLevel; i++)
+            top = LodWorld.ParentKey(top);
+        c.True(world.SeasonForcedRemesh.Contains(l1), "L0 capture forces L1 remesh after leave");
+        c.True(world.SeasonForcedRemesh.Contains(l2), "L0 capture forces L2 remesh after leave");
+        c.True(world.SeasonForcedRemesh.Contains(l3), "L0 capture forces L3 cake-plate remesh");
+        c.True(world.SeasonForcedRemesh.Contains(top), "L0 capture walks ancestors to MaxLevel");
+        c.True(world.RenderDirty.Contains(l1), "L1 is render-dirty so idle skip cannot keep the tan VBO");
+        c.False(world.SeasonForcedRemesh.Contains(l0), "the L0 itself is remeshed via MarkChanged, not this set");
     }
 
     /// <summary>

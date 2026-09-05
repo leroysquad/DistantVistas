@@ -24,6 +24,8 @@ public class LodServerCaptureSystem : ModSystem
     const string ConfigFile = "distantvistas-server.json";
 
     ICoreServerAPI sapi = null!;
+    LodExploredColumnLoader? exploredLoader;
+    readonly LodStreamingGate serverStream = new();
     LodPipeline? pipeline;
     LodPlayerPregen? pregen;
     LodSavegameSweep? sweep;
@@ -56,6 +58,12 @@ public class LodServerCaptureSystem : ModSystem
     bool deferredSweepPending;
 
     public override bool ShouldLoad(EnumAppSide forSide) => forSide == EnumAppSide.Server;
+
+    /// <summary>
+    /// Same-process lookup for the client idle path. Dedicated clients see null.
+    /// GetModSystem can miss a server-only system from the client loader.
+    /// </summary>
+    internal static LodServerCaptureSystem? Instance { get; private set; }
 
     /// <summary>Set once the cache is open; the assist handshake reports it.</summary>
     public bool Capturing => pipeline?.Active == true;
@@ -101,12 +109,20 @@ public class LodServerCaptureSystem : ModSystem
     public bool ExpectsToHave(long key) =>
         pipeline != null && pipeline.World.HasDataSet.Contains(key);
 
+    /// <summary>
+    /// Explored-column loads for SP idle recapture and dedicated-server accurate
+    /// capture. Null only before StartServerSide. No new network messages.
+    /// </summary>
+    public IExploredColumnLoader? ExploredColumns => exploredLoader;
+
     /// <summary>Admin settings, loaded once; both server systems read this copy.</summary>
     public LodServerConfig Config { get; private set; } = new();
 
     public override void StartServerSide(ICoreServerAPI api)
     {
         sapi = api;
+        Instance = this;
+        exploredLoader = new LodExploredColumnLoader(api);
 
         bool configReadable = true;
         try
@@ -241,6 +257,7 @@ public class LodServerCaptureSystem : ModSystem
         // colour-unresolved and the receiving client fills colour in, which it can do
         // from the block code alone. Tint slots are likewise client-only and stay 0.
         pipeline = new LodPipeline(sapi, Mod.Logger, (_, _, _, _) => (0, 0, false));
+        DeciduousLeafCompat.Bind(sapi);
         pipeline.Open("ModData/distantvistas", "-server");
 
         tickListenerId = sapi.Event.RegisterGameTickListener(OnServerPipelineTick, 50);
@@ -251,10 +268,26 @@ public class LodServerCaptureSystem : ModSystem
     }
 
     int serverSweepPlayer;
+    int serverSeasonBakeEpoch = -1;
 
     void OnServerPipelineTick(float dt)
     {
         if (pipeline == null || !pipeline.Active) return;
+
+        int epoch = LodSeasonBakeEpoch.FromCalendar(sapi.World.Calendar);
+        if (serverSeasonBakeEpoch < 0) serverSeasonBakeEpoch = epoch;
+        else if (epoch != serverSeasonBakeEpoch)
+        {
+            serverSeasonBakeEpoch = epoch;
+            pipeline.QueueDeciduousLeafRefreshAll();
+            if (DeciduousLeafCompat.Present)
+            {
+                Mod.Logger.Notification(
+                    "[DistantVistas] Calendar bake epoch {0}: queuing Deciduous leaf dormancy refresh.",
+                    LodSeasonBakeEpoch.Describe(epoch));
+            }
+        }
+
         pipeline.Tick();
 
         var players = sapi.World.AllOnlinePlayers;
@@ -267,6 +300,14 @@ public class LodServerCaptureSystem : ModSystem
             (int)Math.Floor(pos.X / chunkSize),
             (int)Math.Floor(pos.Z / chunkSize),
             24);
+
+        if (!sapi.Server.IsDedicated || exploredLoader == null) return;
+        exploredLoader.Tick();
+        serverStream.Tick();
+        serverStream.SetVanillaBusy(exploredLoader.IsVanillaBusy);
+        foreach (var p in players)
+            serverStream.NotePlayer(p.PlayerUID, p.Entity.Pos.X, p.Entity.Pos.Z);
+        pipeline.TickIdleAccurateRecapture(pos.X, pos.Z, exploredLoader, serverStream.IsStreaming);
     }
 
     // ---- /vhgen: build the cache around a player, generating what nobody visited ----
@@ -561,6 +602,7 @@ public class LodServerCaptureSystem : ModSystem
 
     void OnChunkColumnLoaded(Vec2i chunkCoord, IWorldChunk[] chunks)
     {
+        serverStream.NoteChunkArrival();
         pipeline!.QueueColumn(chunkCoord.X, chunkCoord.Y); // Vec2i.Y is the Z chunk coord
     }
 
@@ -599,6 +641,7 @@ public class LodServerCaptureSystem : ModSystem
         pipeline?.Close();
         pipeline?.Dispose();
         pipeline = null;
+        if (Instance == this) Instance = null;
     }
 }
 

@@ -133,6 +133,8 @@ public static class LodPaletteRepair
 
     /// <summary>
     /// Refresh stable (position-independent) colours. Null = keep stored colour (chisels etc.).
+    /// Discover-baked rows keep their climate×season RGB: overwriting them with untinted
+    /// atlas means (and leaving FlagBaked) made far grass/leaves draw greyscale forever.
     /// </summary>
     public static int RefreshStable(LodSection section, System.Func<int, int?> colorOf)
     {
@@ -141,6 +143,8 @@ public static class LodPaletteRepair
         for (int i = 0; i < section.Palette.Count; i++)
         {
             LodPaletteEntry entry = section.Palette[i];
+            if ((entry.Flags & LodPaletteEntry.FlagBaked) != 0) continue;
+
             int? provided = colorOf(entry.BlockId);
             if (!provided.HasValue) continue;
 

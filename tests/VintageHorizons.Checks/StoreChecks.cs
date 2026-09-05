@@ -18,6 +18,7 @@ public static class StoreChecks
         AColourlessCacheIsRepaired(c);
         MissingTextureWhiteTakesNeighbour(c);
         AStaleStableColourIsRefreshed(c);
+        RefreshStableSkipsFlagBaked(c);
         DerivedMipUpgradeKeepsDetailedLeaves(c);
         DisposingTheOfferReaderReleasesItsFileHandle(c);
         Rejection(c);
@@ -334,6 +335,33 @@ public static class StoreChecks
             "a refreshed palette does not rewrite every time it loads");
     }
 
+    /// <summary>
+    /// Discover-baked climate×season RGB must survive disk load. RefreshStable used to
+    /// overwrite FlagBaked with untinted atlas greys and leave the flag on — far leaves
+    /// drew greyscale forever. Skip baked rows entirely.
+    /// </summary>
+    static void RefreshStableSkipsFlagBaked(Check c)
+    {
+        int bakedGreen = unchecked((int)0xFF408020);
+        int staleStable = unchecked((int)0xFF806040);
+        var section = new LodSection();
+        section.FindOrAddPaletteEntry(blockId: 21, color: bakedGreen, flags: LodPaletteEntry.FlagBaked);
+        section.FindOrAddPaletteEntry(blockId: 22, color: staleStable, flags: 0);
+
+        int refreshed = LodPaletteRepair.RefreshStable(section, id =>
+            id == 21 ? unchecked((int)0xFF010101)
+            : id == 22 ? unchecked((int)0xFF336699)
+            : null);
+
+        c.Eq(1, refreshed, "only the non-baked stable entry is refreshed");
+        c.Eq(bakedGreen, section.Palette[0].Color,
+            "FlagBaked summer/winter RGB is not wiped by RefreshStable");
+        c.Eq(unchecked((int)0xFF336699), section.Palette[1].Color,
+            "non-baked stable colour still refreshes");
+        c.True((section.Palette[0].Flags & LodPaletteEntry.FlagBaked) != 0,
+            "FlagBaked remains set after RefreshStable");
+    }
+
     static void DerivedMipUpgradeKeepsDetailedLeaves(Check c)
     {
         string dir = Path.Combine(Path.GetTempPath(), "vh-mip-upgrade-" + Guid.NewGuid().ToString("N"));
@@ -518,8 +546,8 @@ public static class StoreChecks
         LodPaletteEntry e = back!.Palette[0];
         c.True((e.Flags & LodPaletteEntry.FlagBaked) != 0,
             "FlagBaked survives palette reclassify on load");
-        c.Eq((byte)LodTintRegistry.SlotNone, e.TintSlot,
-            "baked entries keep tint slot 0 after reclassify");
+        c.Eq((byte)0, e.TintSlot,
+            "FlagBaked clears live season slots on reclassify (season is in RGB)");
         c.True((e.Flags & LodPaletteEntry.FlagThin) != 0,
             "live block flags are still refreshed on load");
     }

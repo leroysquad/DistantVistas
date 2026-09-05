@@ -22,7 +22,7 @@ public static class PolicyChecks
         c.Eq(LodPaletteEntry.FlagWater, Flags(EnumBlockMaterial.Water, "water-still-7"), "water is translucent");
         c.Eq(LodPaletteEntry.FlagWater, Flags(EnumBlockMaterial.Lava, "lava-still-7"), "lava uses the water path");
         c.Eq(LodPaletteEntry.FlagWater, Flags(EnumBlockMaterial.Ice, "lakeice"), "lake ice uses the water path");
-        c.Eq((byte)0, Flags(EnumBlockMaterial.Ice, "glacierice"), "glacier ice is opaque, not a lake");
+        c.Eq(LodPaletteEntry.FlagSnow, Flags(EnumBlockMaterial.Ice, "glacierice"), "glacier ice is FlagSnow, not a lake");
         c.True(LodBlockPolicy.IsClimateUntinted(new Block
             {
                 BlockMaterial = EnumBlockMaterial.Ice,
@@ -62,6 +62,11 @@ public static class PolicyChecks
         c.Eq(LodPaletteEntry.FlagThin, Flags(EnumBlockMaterial.Plant, "flower-forgetmenot"), "flowers are thin");
         c.Eq(LodPaletteEntry.FlagThin, Flags(EnumBlockMaterial.Plant, "fern-normal"), "ferns are thin");
         c.Eq(LodPaletteEntry.FlagThin, Flags(EnumBlockMaterial.Plant, "tallfern-normal"), "tall ferns are thin");
+        // Tritan20 Leaf Litter (and Deciduous Trees companion piles): path leaflitter-*.
+        c.Eq(LodPaletteEntry.FlagThin, Flags(EnumBlockMaterial.Plant, "leaflitter-1"),
+            "leaf litter piles are thin ground cover");
+        c.Eq(LodPaletteEntry.FlagThin, Flags(EnumBlockMaterial.Plant, "leaflitter-snowy-8"),
+            "snowy leaf litter piles are thin ground cover");
 
         c.Eq((byte)0, Flags(EnumBlockMaterial.Plant, "tallgrass-tall"), "dense grass stays solid");
         c.Eq((byte)0, Flags(EnumBlockMaterial.Plant, "seaweed-top"), "unlisted plants stay solid");

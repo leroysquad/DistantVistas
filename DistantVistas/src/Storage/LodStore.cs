@@ -423,6 +423,8 @@ public class LodStore : SQLiteDBConnection
         LodPaletteEntry e = section.Palette[index];
         bool baked = (e.Flags & LodPaletteEntry.FlagBaked) != 0;
         e.Flags = (byte)(flags | (baked ? LodPaletteEntry.FlagBaked : 0));
+        // FlagBaked: climate×season is in Color; clear live season slots
+        // (0.7.84/85 seas/clim leftovers purple-flickered).
         e.TintSlot = baked ? (byte)LodTintRegistry.SlotNone : slot;
         section.Palette[index] = e;
     }

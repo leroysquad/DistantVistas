@@ -147,26 +147,45 @@ public static class StaticAssetChecks
     }
 
     /// <summary>
-    /// Far season is a live shader clock, like night ambient. If these tokens
-    /// disappear, backing out of vanilla range will snap autumn to grey-green again.
+    /// Live-tint rows use the season shader clock. FlagBaked band 3 is identity —
+    /// climate×season is in RGB (seas/clim on baked was the purple flicker).
     /// </summary>
     static void LiveSeasonClock(Check c)
     {
         string vsh = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "assets", "distantvistas", "shaders", "lodterrain.vsh"));
-        c.True(vsh.Contains("uniform float seasonRel"), "lodterrain.vsh has live seasonRel");
-        c.True(vsh.Contains("seasonTints"), "lodterrain.vsh has seasonTints");
-        c.True(vsh.Contains("band != 1"), "lodterrain.vsh skips season on water");
+        string fsh = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "assets", "distantvistas", "shaders", "lodterrain.fsh"));
         c.True(vsh.Contains("bakedAlbedo") || vsh.Contains("band == 3"),
-            "lodterrain.vsh skips live tint on discover-baked band 3");
+            "lodterrain.vsh has discover-baked band 3");
+        c.True(vsh.Contains("if (bakedAlbedo)"),
+            "lodterrain.vsh gates FlagBaked to identity tint");
+        c.False(vsh.Contains("seas / clim"),
+            "lodterrain.vsh must not divide season by climate on FlagBaked");
+        c.False(fsh.Contains("seas / clim"),
+            "lodterrain.fsh must not divide season by climate on FlagBaked");
         c.False(vsh.Contains("uniform float seasonTempX"),
             "lodterrain.vsh does not drive vegetation with a global seasonTempX");
-        c.True(vsh.Contains("keepClimateLow") && vsh.Contains("climateLow00"),
-            "lodterrain.vsh looks up the coarse climate field at vertex XZ");
-        c.True(vsh.Contains("localCl.a"),
-            "lodterrain.vsh seasonWeight uses the local climate temperature");
+        c.True(fsh.Contains("uniform float seasonRel") && fsh.Contains("seasonTints"),
+            "lodterrain.fsh has live seasonRel / seasonTints");
+        c.True(fsh.Contains("band != 1"),
+            "lodterrain.fsh skips season on water");
+        c.True(fsh.Contains("!bakedAlbedo") && fsh.Contains("seasonAmount"),
+            "lodterrain.fsh applies live season only on non-baked bands");
+        c.True(fsh.Contains("sampleClimateField") && fsh.Contains("climateGridStep"),
+            "lodterrain.fsh samples world-space climate, not section-corner 64 plates");
+        c.True(fsh.Contains("climateLow") && fsh.Contains("keepClimateLow"),
+            "lodterrain.fsh looks up the coarse climate field at world XZ");
+        c.True(fsh.Contains("seasonAmount(localCl.a"),
+            "lodterrain.fsh seasonWeight uses the local climate temperature");
         c.False(vsh.Contains("(yLevel - tintYLow) * 1.5"),
             "lodterrain.vsh does not add canopy altitude onto worldgen seasonTempX");
+        c.False(fsh.Contains("climateLow00"),
+            "lodterrain.fsh does not use per-section 4-corner climate (64-tile plates)");
+        c.True(fsh.Contains("valuenoise(worldPos.xyz / period)"),
+            "lodterrain.fsh breaks greedy-mesh plates with world-space noise");
+        c.True((LodClimateField.CellBlocks & (LodClimateField.CellBlocks - 1)) != 0,
+            "climate cells are not a power of two (32/64 snap to section edges)");
     }
 
     /// <summary>
@@ -196,6 +215,21 @@ public static class StaticAssetChecks
             "lodterrain.vsh dist == 1 is the real far rim, not 512 blocks inside the land we hold");
         c.True(fsh.Contains("if (dist > 1.0) discard;"),
             "lodterrain.fsh keeps the far discard as the one true far clip");
+
+        c.True(vsh.Contains("NEAR_LIFT_BLOCKS") && vsh.Contains("nearFade"),
+            "lodterrain.vsh computes nearFade in block space from overdraw start");
+        c.True(vsh.Contains("NEAR_LIFT_BLOCKS = 180.0"),
+            "lodterrain.vsh near lift is 180 blocks (not a cache-width fraction)");
+        c.True(fsh.Contains("in float nearFade") && fsh.Contains("mix(1.0, 1.10, nearFade)"),
+            "lodterrain.fsh applies 1.10 near-ring exposure");
+        c.True(fsh.Contains("dirtBrown") && fsh.Contains("mix(0.40, 0.18, nearFade)"),
+            "lodterrain.fsh mild dirt-side wash only, pulled back in the near ring");
+        c.True(fsh.Contains("chromaGreen") && fsh.Contains("groundSnowline"),
+            "lodterrain.fsh skips dirt wash on chromatic green and snowline tops");
+        c.False(Regex.IsMatch(fsh, @"\bsnowMix\s*="),
+            "lodterrain.fsh does not assign alpine snowMix hats");
+        c.True(fsh.Contains("if (!brightSnow)") && fsh.Contains("mix(1.0, 1.10, nearFade)"),
+            "lodterrain.fsh skips the near lift on already-bright snow");
 
         // Gap fill: the renderer draws a parent mesh clipped to one child
         // footprint. Both halves of that contract live in the shaders.

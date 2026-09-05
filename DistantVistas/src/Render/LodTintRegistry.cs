@@ -270,8 +270,8 @@ public class LodTintRegistry
                 // the same class of fix as rgbaAmbientIn for night. Baking both maps
                 // here froze far land on the last 30s sample, so autumn snapped to
                 // grey-green the moment vanilla unloaded.
-                int rgba = world.ApplyColorMapOnRgba(
-                    block.ClimateColorMap, (string?)null,
+                int rgba = LodSeasonBake.ApplyLodColorMaps(
+                    world, block.ClimateColorMap, null,
                     unchecked((int)0xFFFFFFFF), sx, y, sz);
 
                 // Unpacked by hand rather than through ColorUtil.ToRGBAFloats, which
@@ -319,6 +319,11 @@ public class LodTintRegistry
 
     public static void ClampTintAwayFromWhite(ref float r, ref float g, ref float b)
     {
+        // December frost / snow-band season samples are high-L low-sat. Clamping them
+        // toward MaxTintLuminance darkens frost into a muddy green that no longer
+        // reads as winter next to vanilla near-field foliage.
+        if (IsSnowLikeTint(r, g, b)) return;
+
         float lum = (r + g + b) / 3f;
         if (lum <= MaxTintLuminance || lum <= 0f) return;
         float k = MaxTintLuminance / lum;

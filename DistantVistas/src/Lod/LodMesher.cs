@@ -1,3 +1,4 @@
+
 using System.Buffers;
 namespace DistantVistas;
 
@@ -34,15 +35,21 @@ public static class LodMesher
     // water and flowers can be see-through by different amounts.
     const byte WaterBase = LodTintRegistry.MaxSlots;
     const byte ThinBase = LodTintRegistry.MaxSlots * 2;
-    /// <summary>Fourth alpha band: discover-baked albedo, no live climate/season multiply.</summary>
+    /// <summary>
+    /// Fourth alpha band: climate×season already in RGB; shader uses identity tint.
+    /// </summary>
     public const byte BakedBase = LodTintRegistry.MaxSlots * 3;
 
     static byte AlphaFor(byte paletteFlags, byte tintSlot, int color)
     {
-        // Discover-baked palette: final RGB already includes climate + season.
+        byte slot = tintSlot < LodTintRegistry.MaxSlots ? tintSlot : (byte)LodTintRegistry.SlotNone;
+        // Full climate×season bake — band 3 identity only. Encoding a live season
+        // slot here re-enabled seas/clim purple flicker (0.7.84/85).
+        // Inferred winter snow is FlagSnow (and usually FlagBaked). Never live-tint it.
+        if ((paletteFlags & LodPaletteEntry.FlagSnow) != 0)
+            return BakedBase;
         if ((paletteFlags & LodPaletteEntry.FlagBaked) != 0)
             return BakedBase;
-        byte slot = tintSlot < LodTintRegistry.MaxSlots ? tintSlot : (byte)LodTintRegistry.SlotNone;
         // Skip live tint for stored colours that are already brown earth, or
         // snow/ice that would turn green if a grass high-tint were multiplied
         // on. Greyscale and dull-olive grass MUST keep the climate slot or far
@@ -122,6 +129,7 @@ public static class LodMesher
                     int yTop = LodSection.RunYTop(run);
                     int yBottom = LodSection.RunYBottom(run);
                     int pid = LodSection.RunPaletteId(run);
+                    if ((self.PaletteFlags[pid] & LodPaletteEntry.FlagSkip) != 0) continue;
                     bool isTranslucent = IsTranslucent(self.PaletteFlags[pid]);
 
                     // Sealed underwater hull: drop opaque cave geometry below the
@@ -290,6 +298,9 @@ public static class LodMesher
             int color = self.PaletteColors[first.Pid];
             if (first.Water) color = LodPaletteRepair.WaterDrawColor(color);
             byte alpha = AlphaFor(self.PaletteFlags[first.Pid], self.PaletteTintSlots[first.Pid], color);
+            // 0.8.46: restore 0.7.76 full greedy. maxSpan=12 painted hard micro-square
+            // shade lines in the foreground (dFdx facets). Brown plates are handled by
+            // greener topsoil bake + far-only plant-pull, not by chopping quads.
 
             for (int i = start; i < end; i++)
             {

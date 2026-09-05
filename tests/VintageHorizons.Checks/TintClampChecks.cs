@@ -8,7 +8,8 @@ public static class TintClampChecks
 {
     public static void Run(Check c)
     {
-        SnowWhiteIsPulledDown(c);
+        FrostPaleTintIsPreserved(c);
+        BrightNonFrostStillClamped(c);
         OrdinaryGrassUnchanged(c);
         HighSampleStaysBelowSnowBand(c);
         SnowLikeHighCopiesLow(c);
@@ -20,13 +21,33 @@ public static class TintClampChecks
         SeasonWeightTemperateIsHigh(c);
     }
 
-    static void SnowWhiteIsPulledDown(Check c)
+    /// <summary>
+    /// December frost / snow-band season samples must stay bright. Clamping them
+    /// to MaxTintLuminance was crushing winter into muddy green on FlagBaked LOD.
+    /// </summary>
+    static void FrostPaleTintIsPreserved(Check c)
     {
-        float r = 1f, g = 1f, b = 1f;
+        float r = 0.92f, g = 0.94f, b = 0.90f;
+        c.True(LodTintRegistry.IsSnowLikeTint(r, g, b), "frost sample is snow-like");
+        float or = r, og = g, ob = b;
+        LodTintRegistry.ClampTintAwayFromWhite(ref r, ref g, ref b);
+        c.Eq(or, r, "frost pale red is not crushed");
+        c.Eq(og, g, "frost pale green is not crushed");
+        c.Eq(ob, b, "frost pale blue is not crushed");
+
+        float wr = 1f, wg = 1f, wb = 1f;
+        LodTintRegistry.ClampTintAwayFromWhite(ref wr, ref wg, ref wb);
+        c.Eq(1f, wr, "pure white frost/snow-band tint is preserved (block snow albedo is separate)");
+    }
+
+    static void BrightNonFrostStillClamped(Check c)
+    {
+        // High luma, enough chroma that it is not a frost band sample.
+        float r = 1f, g = 0.95f, b = 0.70f;
+        c.False(LodTintRegistry.IsSnowLikeTint(r, g, b), "warm bright sample is not snow-like");
         LodTintRegistry.ClampTintAwayFromWhite(ref r, ref g, ref b);
         c.Near(LodTintRegistry.MaxTintLuminance, (r + g + b) / 3.0, 0.0001,
-            "a snow-white climate sample is pulled down to MaxTintLuminance");
-        c.True(r < 0.8f && g < 0.8f && b < 0.8f, "no channel stays in the plastic-white band");
+            "bright non-frost climate sample is still pulled to MaxTintLuminance");
     }
 
     static void OrdinaryGrassUnchanged(Check c)

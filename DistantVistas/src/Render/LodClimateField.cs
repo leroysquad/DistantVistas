@@ -9,8 +9,16 @@ namespace DistantVistas;
 /// </summary>
 public sealed class LodClimateField
 {
-    public const int CellBlocks = 64;
+    /// <summary>
+    /// Not a power of two. 32/64 snap to L0 section edges and paint a checkerboard.
+    /// 40-block cells / 4x4 upload (0.8.42) keep draw cheap. Brown 64-plates are fixed
+    /// by greener topsoil bake + shader plant pull on grassLike tops, not denser climate.
+    /// </summary>
+    public const int CellBlocks = 40;
     public const int MaxCells = 8192;
+    /// <summary>World-space samples uploaded per draw (4x4). Shader bilinear + warp.</summary>
+    public const int GridSize = 4;
+    public const int WarpPadBlocks = 16;
 
     public struct Sample
     {
@@ -140,7 +148,45 @@ public sealed class LodClimateField
 
     public static float Lerp(float a, float b, float t) => a + (b - a) * t;
 
-    static int FloorDiv(int a, int b)
+    /// <summary>
+    /// World-aligned step so a 4x4 grid covers the section plus warp pad.
+    /// Coarser LOD uses a larger step; it stays on the same origin lattice.
+    /// </summary>
+    public static int GridStep(int footprint)
+    {
+        const int intervals = GridSize - 1;
+        int needed = Math.Max(1, footprint + 2 * WarpPadBlocks);
+        int step = (needed + intervals - 1) / intervals;
+        // Keep step >= CellBlocks so each lattice corner is a unique cell (bilinear
+        // between identical corners would recreate flat 24-block plates).
+        return Math.Max(CellBlocks, step);
+    }
+
+    public static int GridOrigin(int world, int step) =>
+        FloorDiv(world - WarpPadBlocks, step) * step;
+
+    /// <summary>
+    /// Cell index inside a GridSize upload. Adjacent sections that share a
+    /// world XZ pick the same world-space samples (no 64-block seam jump).
+    /// </summary>
+    public static void WorldToGrid(
+        int worldX, int worldZ, int originX, int originZ, int step,
+        out int ix, out int iz, out float fx, out float fz)
+    {
+        float gx = (worldX - originX) / (float)step;
+        float gz = (worldZ - originZ) / (float)step;
+        float maxG = GridSize - 1.001f;
+        gx = Math.Clamp(gx, 0f, maxG);
+        gz = Math.Clamp(gz, 0f, maxG);
+        ix = (int)MathF.Floor(gx);
+        iz = (int)MathF.Floor(gz);
+        fx = gx - ix;
+        fz = gz - iz;
+    }
+
+    public static int SampleWorld(int origin, int index, int step) => origin + index * step;
+
+    public static int FloorDiv(int a, int b)
     {
         int q = a / b;
         return ((a ^ b) < 0 && a % b != 0) ? q - 1 : q;

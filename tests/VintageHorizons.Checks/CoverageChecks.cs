@@ -116,6 +116,17 @@ public static class CoverageChecks
             "behind the camera, farther land does not force an L0 request");
         c.False(LodCoveragePolicy.RequestVisitedKeepMesh(0, false, true, false, at2x, TrailAnchor, true, false),
             "the frontier tile (nothing drawn past it) is not intervening");
+        int wantedAt2x = LodWorld.WantedLevelFor(at2x);
+        if (wantedAt2x < 2) wantedAt2x = 2;
+        c.True(LodCoveragePolicy.RequestKeepCircleParent(
+                wantedAt2x, false, true, false, at2x, TrailAnchor, wantedAt2x),
+            "missing wanted-level parent inside 2x keep-circle is requested");
+        c.False(LodCoveragePolicy.RequestKeepCircleParent(
+                0, false, true, false, at2x, TrailAnchor, wantedAt2x),
+            "do not request L0 at 2x — that was the turn hitch");
+        c.False(LodCoveragePolicy.RequestKeepCircleParent(
+                wantedAt2x, true, true, false, at2x, TrailAnchor, wantedAt2x),
+            "already-meshed keep-circle parent is not re-requested");
         c.False(LodCoveragePolicy.DescendForVisitedKeep(2, true, at2x, TrailAnchor),
             "do not walk every L0 at 2x view distance");
         c.False(LodCoveragePolicy.DescendForVisitedKeep(2, true, at2x, TrailAnchor, true, true),
@@ -195,16 +206,26 @@ public static class CoverageChecks
             "past 1.5x turning does not promote L2 plates to L0");
         c.True(LodCoveragePolicy.HorizonLeadCone(true, 0f),
             "shelf ban has no distance cap");
-        c.False(LodCoveragePolicy.StopDescentAtAvailableRung(2, 2, false, true, true, true, 0f, 800, 512),
-            "past 1.5x an L2 in the cone still does not stop");
+        c.True(LodCoveragePolicy.StopDescentAtAvailableRung(2, 2, false, true, true, true, 0f, 800, 512),
+            "past 1.5x a land-like L2 in the cone covers; skipping it is a hole");
+        // Jack's ocean/forest pad: VD 640, vantage → tile ≈ 1217 blocks (1.90x).
+        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(
+                2, 3, false, true, true, true, 0f, true, true, 1217, 640),
+            "L2 child of a flattened L3 at 1.9x VD is visited, not skipped into sky");
+        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(
+                0, 3, false, true, true, true, 0f, true, true, 1217, 640),
+            "past 1.5x do not walk L0 under a land-like parent (turn hitch)");
         c.False(LodCoveragePolicy.PastHorizonDraw(400, 512),
             "inside 3x is still the horizon band");
         c.True(LodCoveragePolicy.PastHorizonDraw(1600, 512),
             "past 3x we stop; Farseer heightmaps are the silhouettes");
         c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, true, 0f, true, false, 1600, 512),
             "past 3x do not walk L0");
-        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(1, 2, false, true, true, true, 0f, true, false, 1600, 512),
-            "past 3x do not walk L1 either");
+        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(1, 2, false, true, true, true, 0f, true, false, 1600, 512),
+            "Farseer off: past 3x still walk L1 so the skyline is not empty");
+        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(
+                1, 2, false, true, true, true, 0f, true, false, 1600, 512, true),
+            "Farseer on: past 3x empty-stop, do not walk L1");
         c.Eq(1, LodCoveragePolicy.LeadConeMaxDrawLevel, "in-cone max draw level is L1");
         c.Eq(2, LodCoveragePolicy.LeadConeMaxCoverLevel, "in-cone whole cover caps at L2");
         c.False(LodCoveragePolicy.MayLeadConeCoarseCover(3, true, true, 0f, 400, 512, true),
@@ -259,7 +280,9 @@ public static class CoverageChecks
         c.True(LodCoveragePolicy.MayDrawCoarseParent(1, false, true, true),
             "land-like L1 in the lead cone may still draw");
         c.False(LodCoveragePolicy.MayDrawCoarseParent(1, false, false, true),
-            "an L1 plate in the lead cone is not drawn");
+            "an L1 plate in the lead cone is not drawn when children can replace it");
+        c.True(LodCoveragePolicy.MayDrawCoarseParent(1, false, false, true, 0f, 0, 0, true),
+            "an L1 plate covers in the lead cone when children cannot replace it");
         c.True(LodCoveragePolicy.MayDrawCoarseParent(0, true, false, true),
             "L0 is not a coarse parent plate");
         c.False(LodCoveragePolicy.SkipDrawTooFine(1, 2, false, true, true, true),
@@ -420,7 +443,9 @@ public static class CoverageChecks
         c.False(LodCoveragePolicy.StopDescentAtAvailableRung(1, 2, false, true, false, true, 0f),
             "an L1 plate in the lead cone still walks to L0 (and fills only the missing ones)");
         c.False(LodCoveragePolicy.MayDrawCoarseParent(1, false, false, true, 0f),
-            "an L1 plate in the lead cone is still not drawn whole");
+            "an L1 plate in the lead cone is still not drawn whole when children can replace it");
+        c.True(LodCoveragePolicy.MayDrawCoarseParent(1, false, false, true, 0f, 200, 512, true),
+            "altitude: L1 ocean plate covers mid-ground when children cannot replace it");
         c.False(LodCoveragePolicy.StopDescentAtAvailableRung(2, 2, false, true, true, true, 0f),
             "L2 still walks to L1 in the lead cone; it does not stop as a shelf");
         c.False(LodCoveragePolicy.MayDrawCoarseParent(2, false, true, true, 0f),
@@ -447,7 +472,8 @@ public static class CoverageChecks
     /// point of a 64x64 tile hid the whole square as soon as the circle
     /// touched it. Vanilla does not cover the far half, so that was a moving
     /// sky hole. Only a tile whose farthest corner is still inside the skip
-    /// sphere may be treated as vanilla-owned.
+    /// sphere may be treated as vanilla-owned. That sphere is the 0.55
+    /// overdraw disc, not full view distance.
     /// </summary>
     static void SkipDiscOwnsWholeTileOnly(Check c)
     {
@@ -477,16 +503,28 @@ public static class CoverageChecks
 
     /// <summary>
     /// Raising view distance grows a geometric circle before vanilla has those
-    /// columns. LOD stays until every map-chunk in the footprint is present.
+    /// columns. LOD stays until every map-chunk AND every world column in the
+    /// footprint is present. Map-chunk-only (explored minimap) is not vanilla.
+    /// Hide radius is the 0.55 skip disc, not full view distance.
     /// </summary>
     static void VanillaOwnsOnlyLoadedChunks(Check c)
     {
-        c.False(LodCoveragePolicy.VanillaOwnsFootprint(true, false),
+        c.False(LodCoveragePolicy.VanillaOwnsFootprint(true, false, false),
             "3D-inside without loaded chunks is not vanilla (grow-VD sky circle)");
-        c.False(LodCoveragePolicy.VanillaOwnsFootprint(false, true),
+        c.False(LodCoveragePolicy.VanillaOwnsFootprint(false, true, true),
             "loaded chunks outside the 3D sphere stay LOD (high camera / shrink VD)");
-        c.True(LodCoveragePolicy.VanillaOwnsFootprint(true, true),
-            "a loaded chunk whose whole tile sits inside view distance goes to vanilla");
+        c.True(LodCoveragePolicy.VanillaOwnsFootprint(true, true, true),
+            "a loaded chunk whose whole tile sits inside the skip disc goes to vanilla");
+        c.False(LodCoveragePolicy.VanillaOwnsFootprint(true, true, false),
+            "explored map chunks without tessellated world columns stay LOD (square holes)");
+        c.False(LodCoveragePolicy.WorldColumnIsTessellated(true, false),
+            "sky chunks at the camera are not a tessellated ocean tile (wide-open hole)");
+        c.True(LodCoveragePolicy.WorldColumnIsTessellated(true, true),
+            "surface slice loaded: vanilla may own the column");
+        c.True(LodCoveragePolicy.WorldColumnIsTessellated(false, true),
+            "surface slice loaded without camera-Y air still counts");
+        c.False(LodCoveragePolicy.WorldColumnIsTessellated(false, false),
+            "nothing loaded at the surface is not vanilla");
 
         var have = new HashSet<long>();
         static long K(int cx, int cz) => ((long)cz << 32) | (uint)cx;
@@ -526,6 +564,10 @@ public static class CoverageChecks
             "spawn L3 underfoot does not paint whole");
         c.False(LodCoveragePolicy.MaySubmitCoarseWhole(1, coverage * 0.5, coverage),
             "an L1 whose near edge is inside the coverage radius does not SubmitMeshedGaps");
+        c.True(LodCoveragePolicy.MaySubmitCoarseWhole(1, coverage * 0.5, coverage, vanillaOwns: false),
+            "altitude mid-ground L1 still paints whole when vanilla is not drawing it");
+        c.False(LodCoveragePolicy.MaySubmitCoarseWhole(1, 0, coverage, vanillaOwns: false),
+            "underfoot L1 still does not paint whole even when vanilla does not own it");
         c.True(LodCoveragePolicy.MaySubmitCoarseWhole(2, coverage, coverage),
             "far L2 at the coverage radius may still draw whole (no 0.7.51 hole)");
         c.True(LodCoveragePolicy.MaySubmitCoarseWhole(2, coverage + 64, coverage),

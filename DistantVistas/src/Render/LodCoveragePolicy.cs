@@ -139,13 +139,32 @@ public static class LodCoveragePolicy
     }
 
     /// <summary>
-    /// Hand the tile to vanilla when the whole AABB is inside view distance
-    /// and every map-chunk covering it is loaded. A geometric circle alone
-    /// punches sky when you raise VD before the columns arrive.
+    /// Hand the tile to vanilla when the whole AABB is inside the skip disc,
+    /// every map-chunk covering it has arrived, and every world column is
+    /// actually loaded at the surface. Map chunks stay for explored land
+    /// (minimap); vanilla only tessellates world chunks. Explored-but-unloaded
+    /// ground is LOD, not sky. A geometric circle alone punches sky when you
+    /// raise VD before the columns arrive (0.7.48). Camera-Y air is not a
+    /// world column — see WorldColumnIsTessellated.
     /// </summary>
     public static bool VanillaOwnsFootprint(
-        bool entireAabbInsideVanilla3D, bool allMapChunksLoaded) =>
-        entireAabbInsideVanilla3D && allMapChunksLoaded;
+        bool entireAabbInsideVanilla3D, bool allMapChunksLoaded, bool allWorldColumnsLoaded) =>
+        entireAabbInsideVanilla3D && allMapChunksLoaded && allWorldColumnsLoaded;
+
+    /// <summary>
+    /// Vanilla draws the surface of a column, not air at the camera.
+    /// Flying over ocean loads sky chunks around you; those are not water
+    /// and not seafloor. Treating camera-Y as owned discards the LOD tile
+    /// and leaves a wide-open hole — neighbouring tiles still draw, so you
+    /// see their seafloor through it. Close in it fills; fly back and the
+    /// hole returns. cameraYChunkLoaded is never proof.
+    /// </summary>
+    public static bool WorldColumnIsTessellated(
+        bool cameraYChunkLoaded, bool surfaceChunkLoaded)
+    {
+        _ = cameraYChunkLoaded;
+        return surfaceChunkLoaded;
+    }
 
     /// <summary>
     /// At least one vanilla map-chunk covering this block AABB is present.
@@ -286,10 +305,18 @@ public static class LodCoveragePolicy
     /// Far L1/L2 whose near edge is past the coverage radius may still draw whole.
     /// Not a blanket "nearDist &lt; view distance" ban  -  that hid far children of
     /// a tile you are standing in (0.7.51 rectangle / chunkster).
+    /// vanillaOwns defaults true so spawn-plate tests stay valid. When vanilla
+    /// is NOT drawing that tile, a mid-ground L1 whose near edge sits inside
+    /// the 0.55 disc is still land: refusing it at altitude punched 128x128
+    /// sky squares. nearDist == 0 stays blocked for L1+ (underfoot / spawn).
     /// </summary>
     public static bool MaySubmitCoarseWhole(
-        int level, double nearDist, double vanillaCoverageRadius) =>
-        level < 1 || nearDist >= vanillaCoverageRadius;
+        int level, double nearDist, double vanillaCoverageRadius, bool vanillaOwns = true)
+    {
+        if (level < 1) return true;
+        if (nearDist >= vanillaCoverageRadius) return true;
+        return !vanillaOwns && nearDist > 0;
+    }
 
     /// <summary>
     /// Idle remesh. Already-meshed land waits for a 64-block origin shift, except
@@ -332,6 +359,20 @@ public static class LodCoveragePolicy
         && (IsDrawFullDetail(distance, viewDistanceAnchor)
             || MustCoverIntervening(level, hasData, inLeadCone, fartherLoaded,
                 distance, viewDistanceAnchor));
+
+    /// <summary>
+    /// Missing wanted-level (L2+) parent inside the keep-circle. Not L0 at 2×
+    /// (that was the turn hitch). Walking starts these so the trail is land.
+    /// </summary>
+    public static bool RequestKeepCircleParent(
+        int level, bool hasMesh, bool hasData, bool insideVanilla,
+        double distance, double viewDistanceAnchor, int wantedLevel)
+    {
+        if (hasMesh || insideVanilla || !hasData) return false;
+        if (level < 2) return false;
+        if (!IsNearVisitedTrail(distance, viewDistanceAnchor)) return false;
+        return level == wantedLevel || level == wantedLevel + 1;
+    }
 
     /// <summary>
     /// Walk into children that already hold captured land inside the 1.0x draw
@@ -488,12 +529,13 @@ public static class LodCoveragePolicy
     /// hole-fill (draw L1 children of a missing L2), not a walk all the way to L0
     /// unless that L0 already has data. Captured L0/L1 is the land the player
     /// already stood on; refusing those at range is a sky rectangle, not a saving.
-    /// In the lead cone at horizon pitch L2+ is never coverage: walk until
-    /// real L0/L1 land so the skyline is not a shelf. Looking down, the cone
-    /// is the ground; a parent mesh is coverage and this does not force empty L0.
-    /// A captured child that is intervening land in the lead cone is always
-    /// visited: the parent did not stop on a mesh of its own (or we would not
-    /// be here), so refusing the child is a hole, not a saving.
+    /// In the lead cone at horizon pitch L2+ is never coverage: walk L1, and
+    /// past 1.5x also walk L2 so an L3 cannot skip four pads into sky. Looking
+    /// down, the cone is the ground; a parent mesh is coverage and this does
+    /// not force empty L0. A captured child that is intervening land in the
+    /// lead cone is always visited: the parent did not stop on a mesh of its
+    /// own (or we would not be here), so refusing the child is a hole, not a
+    /// saving.
     /// </summary>
     public static bool ShouldVisitChildForDraw(
         int childLevel, int wanted, bool drawFullDetail, bool parentHasMesh,
@@ -511,9 +553,14 @@ public static class LodCoveragePolicy
         // Fine ring: L0/L1 in front, or any child under a plate.
         if (HorizonLeadConeFine(inLeadCone, lookDown01, nearDist, viewDistance)
             && (childLevel <= LeadConeMaxDrawLevel || !parentLandLike)) return true;
-        // Past that, still walk to L1 on the skyline so L2/L3 do not sit as shelves.
+        // Past 1.5x: still walk L1 (no L2 shelf) and L2 (MayLeadConeCoarseCover).
+        // L3 used to skip every L2 child with no AddGap — a 256-block hole at
+        // ~1.9x VD (fly to the pad and it fills; back off and it is empty again).
+        // Do not walk L0 here: that is the turn hitch.
         if (HorizonLeadCone(inLeadCone, lookDown01)
-            && (childLevel == 1 || !parentLandLike)) return true;
+            && (childLevel == LeadConeMaxDrawLevel
+                || childLevel == LeadConeMaxCoverLevel
+                || !parentLandLike)) return true;
         if (childLevel >= wanted) return true;
         // Hole-fill of one rung. Missing L2 visits L1; it does not visit L0.
         if (!parentHasMesh && childLevel >= Math.Max(0, wanted - 1)) return true;
@@ -524,10 +571,10 @@ public static class LodCoveragePolicy
     /// <summary>
     /// This node has a GPU mesh, we are outside the 1.0x ring, and this rung is
     /// not coarser than wanted (L1 hole-fill when wanted is 2+ still counts).
-    /// In the lead cone only L0/L1 land-like meshes may stop the walk; L2+
-    /// never stops, even with enough relief, because a huge L2 still reads as
-    /// a cake shelf on the horizon. Behind the lead cone a plate may stop
-    /// (cheap stand-in; the tight frustum still culls the submit).
+    /// In the lead cone L0/L1 land-like meshes may stop; land-like L2 may
+    /// also stop past the 1.5x fine ring (MayLeadConeCoarseCover). L3+ never
+    /// stops in the cone. Behind the lead cone a plate may stop (cheap
+    /// stand-in; the tight frustum still culls the submit).
     /// </summary>
     public static bool StopDescentAtAvailableRung(
         int level, int wanted, bool drawFullDetail, bool hasMesh,
@@ -565,14 +612,16 @@ public static class LodCoveragePolicy
 
     /// <summary>
     /// Whether CollectDrawNodes may add this L1+ mesh to the draw list.
-    /// Never over vanilla-owned ground. Never a flat plate in the lead cone.
-    /// L2+ in the lead cone is refused unless MayLeadConeCoarseCover says the
-    /// land-like L2 parent is temporary cover (PreferParentCoverage, or
-    /// land-like L2 past the fine ring). L3+ never qualifies. Looking down, L2+ and even a plains plate may
-    /// cover so incomplete L0 does not punch sky. Behind the cone a plate may
-    /// stay as a cheap stand-in. L0 is not a coarse parent; IncompleteL0 is a
-    /// separate rule (DrawIncompleteL0). A refused parent must still register
-    /// a gap so ancestors can clip-fill.
+    /// Never over vanilla-owned ground. Never an L2+ flat plate in the lead cone.
+    /// L1 plates (ocean/beach/plains) may cover in the cone when
+    /// PreferParentCoverage says children cannot replace them. L2+ in the lead
+    /// cone is refused unless MayLeadConeCoarseCover says the land-like L2
+    /// parent is temporary cover (PreferParentCoverage, or land-like L2 past
+    /// the fine ring). L3+ never qualifies. Looking down, L2+ and even a plains
+    /// plate may cover so incomplete L0 does not punch sky. Behind the cone a
+    /// plate may stay as a cheap stand-in. L0 is not a coarse parent;
+    /// IncompleteL0 is a separate rule (DrawIncompleteL0). A refused parent
+    /// must still register a gap so ancestors can clip-fill.
     /// </summary>
     public static bool MayDrawCoarseParent(
         int level, bool insideVanilla, bool landLike, bool inLeadCone,
@@ -588,7 +637,14 @@ public static class LodCoveragePolicy
                 return true;
             return false;
         }
-        if (!landLike && HorizonLeadCone(inLeadCone, lookDown01)) return false;
+        if (!landLike && HorizonLeadCone(inLeadCone, lookDown01))
+        {
+            // L1 ocean/beach/plains fail IsLandLikeCoarseMesh (relief < 4).
+            // Banning those plates in the cone left 128x128 sky squares between
+            // forest hills after you flew up. Children that can replace the
+            // parent still win the walk; keep the plate only when they cannot.
+            return level == LeadConeMaxDrawLevel && preferParentCoverage;
+        }
         return true;
     }
 

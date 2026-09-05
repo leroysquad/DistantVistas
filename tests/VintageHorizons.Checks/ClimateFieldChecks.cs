@@ -13,6 +13,32 @@ public static class ClimateFieldChecks
         WalkDoesNotRecolorFar(c);
         UnfilledFallsBackToKeep(c);
         SeasonWeightUsesLocalTemp(c);
+        CellBlocksAvoidSectionSnap(c);
+        AdjacentSectionsShareWorldSamples(c);
+    }
+
+    static void CellBlocksAvoidSectionSnap(Check c)
+    {
+        c.Eq(40, LodClimateField.CellBlocks,
+            "climate cells are 40 blocks so they straddle 64-tile seams");
+        c.True((LodClimateField.CellBlocks & (LodClimateField.CellBlocks - 1)) != 0,
+            "climate cells are not a power of two (32/64 snap to section edges)");
+    }
+
+    static void AdjacentSectionsShareWorldSamples(Check c)
+    {
+        const int footprint = 64;
+        int step = LodClimateField.GridStep(footprint);
+        c.Eq(40, step, "L0 climate grid step is 40, not 64");
+        int gxL = LodClimateField.GridOrigin(0, step);
+        int gxR = LodClimateField.GridOrigin(footprint, step);
+        int gz = LodClimateField.GridOrigin(0, step);
+        LodClimateField.WorldToGrid(footprint, 0, gxL, gz, step, out int ixL, out _, out _, out _);
+        LodClimateField.WorldToGrid(footprint, 0, gxR, gz, step, out int ixR, out _, out _, out _);
+        int worldL = LodClimateField.SampleWorld(gxL, ixL, step);
+        int worldR = LodClimateField.SampleWorld(gxR, ixR, step);
+        c.Eq(worldL, worldR,
+            "L0 seam at 64 uses the same world-space climate cell from both tiles");
     }
 
     static LodClimateField.Sample Valley => new()
@@ -81,7 +107,7 @@ public static class ClimateFieldChecks
         c.Eq(before.LowB, after.LowB, "walk does not rewrite far blue");
         c.Eq(before.LowTemp, after.LowTemp, "walk does not rewrite far temperature");
         c.True(field.TryGet(10000 + 10, 8000 + 10, out _),
-            "a point inside the same 64-block cell hits the same sample");
+            "a point inside the same climate cell hits the same sample");
         c.False(field.TryGet(10000 + LodClimateField.CellBlocks, 8000, out _),
             "the next cell is not filled by a neighbour write");
     }

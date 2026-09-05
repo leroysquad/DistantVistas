@@ -12,8 +12,10 @@ in vec4 rgbaFog;
 in float dist;
 in float fogAmount;
 in float edgeFade;
+in float nearFade;
 in vec3 tint;
 in vec2 localXZ;
+in float tintBlend;
 
 // Gap fill: a coarser parent mesh drawn only inside one child footprint that
 // nothing finer covered this frame (minX, minZ, maxX, maxZ in section-local
@@ -42,7 +44,20 @@ uniform vec3 rgbaAmbientIn;
 // mountaintops the same lush green as the valley floor.
 // Must equal LodTintRegistry.MaxSlots; LoadShader logs an error if it does not.
 const int TINT_SLOTS = 64;
+const int CLIMATE_GRID = 4;
 uniform float snowLineY;
+uniform float sectionOriginX;
+uniform float sectionOriginZ;
+uniform float climateGridOriginX;
+uniform float climateGridOriginZ;
+uniform float climateGridStep;
+uniform vec4 climateLow[16];
+uniform vec4 climateHigh[16];
+uniform vec4 keepClimateLow;
+uniform vec4 keepClimateHigh;
+uniform vec4 seasonTints[TINT_SLOTS];
+uniform float seasonRel;
+uniform vec4 fallbackSeasonTint;
 
 // Blend factors per band, now that alpha carries the slot instead of an opacity.
 // Flowers are crossed quads in vanilla; as a solid cube they read as a grey blob, so
@@ -71,6 +86,37 @@ layout(location = 3) out vec4 outGPosition;
 #include skycolor.fsh
 #include underwatereffects.fsh
 
+vec4 sampleClimateField(vec2 worldXZ)
+{
+    // 40-block blobs (cheap 4x4). Warp straddles 64-tile seams; plate kill is
+    // greener bake + grassLike plant pull below, not denser climate uploads.
+    float n0 = valuenoise(vec3(worldXZ.x, 19.0, worldXZ.y) / 40.0);
+    float n1 = valuenoise(vec3(worldXZ.x, 71.0, worldXZ.y) / 40.0);
+    vec2 warped = worldXZ + (vec2(n0, n1) - 0.5) * 28.0;
+    vec2 g = (warped - vec2(climateGridOriginX, climateGridOriginZ)) / max(1.0, climateGridStep);
+    g = clamp(g, vec2(0.0), vec2(float(CLIMATE_GRID) - 1.001));
+    vec2 cell = floor(g);
+    vec2 f = g - cell;
+    f = f * f * (3.0 - 2.0 * f);
+    int x0 = int(cell.x);
+    int z0 = int(cell.y);
+    int i00 = x0 + z0 * CLIMATE_GRID;
+    int i10 = i00 + 1;
+    int i01 = i00 + CLIMATE_GRID;
+    int i11 = i01 + 1;
+    vec4 lo = mix(mix(climateLow[i00], climateLow[i10], f.x), mix(climateLow[i01], climateLow[i11], f.x), f.y);
+    vec4 hi = mix(mix(climateHigh[i00], climateHigh[i10], f.x), mix(climateHigh[i01], climateHigh[i11], f.x), f.y);
+    return mix(lo, hi, tintBlend);
+}
+
+float seasonAmount(float tempByte, float mapAlpha)
+{
+    float x = tempByte * 255.0;
+    float seasonWeight = clamp(0.5 - cos(x / 42.0) / 2.3 + max(0.0, 128.0 - x) / 512.0 - max(0.0, x - 130.0) / 200.0, 0.0, 1.0);
+    float amt = clamp(mapAlpha * seasonWeight, 0.0, 1.0);
+    return amt * step(0.0, seasonRel + 1.0);
+}
+
 void main()
 {
     if (dist > 1.0) discard;
@@ -85,35 +131,104 @@ void main()
     float sunAngle = max(0.0, dot(normal, sunPosition));
     float shade = 0.55 + 0.45 * sunAngle;
     // Flat tops: match vanilla up-face light so grass/snow in the overdraw ring
-    // is not a darker plate against the chunks in front.
+    // is not a darker plate against the chunks in front. Near ring goes to 1.0.
     float up = clamp(normal.y, 0.0, 1.0);
-    if (up > 0.55) shade = max(shade, up * 0.95);
+    if (up > 0.55) shade = max(shade, up * mix(0.95, 1.0, nearFade));
 
     // Decode the tint slot, then snow line on up-facing terrain.
     // Only the blend band is needed here; the tint itself arrives interpolated.
     int band = int(vertexColor.a * 255.0 + 0.5) / TINT_SLOTS;  // 0 opaque, 1 water, 2 thin, 3 baked
     bool translucent = band == 1 || band == 2;
+    int slotRaw = int(vertexColor.a * 255.0 + 0.5);
+    int slot = clamp(slotRaw - band * TINT_SLOTS, 0, TINT_SLOTS - 1);
+    bool bakedAlbedo = band == 3;
 
-    vec3 albedo = vertexColor.rgb * tint;
+    vec3 liveTint = tint;
+    vec4 localCl = sampleClimateField(vec2(sectionOriginX + localXZ.x, sectionOriginZ + localXZ.y));
+    vec4 keepCl = mix(keepClimateLow, keepClimateHigh, tintBlend);
+    if (!bakedAlbedo && slot > 0 && band != 1) {
+        vec3 keepRgb = max(keepCl.rgb, vec3(0.04));
+        liveTint *= clamp(localCl.rgb / keepRgb, vec3(0.25), vec3(4.0));
+        if (seasonTints[slot].a > 0.0) {
+            float seasonAmt = seasonAmount(localCl.a, seasonTints[slot].a);
+            if (seasonAmt > 0.0)
+                liveTint = mix(liveTint, seasonTints[slot].rgb, seasonAmt);
+        }
+    }
+
+    vec3 albedo = vertexColor.rgb * liveTint;
     float outAlpha = band == 2 ? THIN_ALPHA : (band == 1 ? WATER_ALPHA : 1.0);
     // Foam / missing-tex water stores near-white and then looks like ice.
     // Force a water blue so streams stay streams without a remesh.
     if (band == 1 && (albedo.r + albedo.g + albedo.b) > 1.65)
         albedo = vec3(0.18, 0.38, 0.50);
 
+    bool brightSnow = false;
     if (!translucent) {
-        // Alpine overlay only. Winter valleys leave snowLineY disabled so captured
-        // snow and seasonal grass match the foreground instead of a white sheet.
         float upness = clamp(normal.y, 0.0, 1.0);
-        float snowMix = smoothstep(snowLineY, snowLineY + 48.0, yLevel) * upness * 0.45;
-        albedo = mix(albedo, vec3(0.82, 0.85, 0.88), snowMix);
-    }
+        float lum = (albedo.r + albedo.g + albedo.b) * (1.0 / 3.0);
+        // Chromatic green is grass/leaves. Dirt-washing that toward brown is why
+        // FlagBaked foliage went mud. Thin plants (band 2) already skipped this.
+        bool chromaGreen = albedo.g > albedo.r + 0.02 && albedo.g > albedo.b && lum < 0.78;
+        // Real snow / ice tops are bright white FlagSnow albedo - leave them alone.
+        brightSnow = lum > 0.72;
 
-    // Water is a smooth surface; only break up land.
-    if (!translucent) {
-        float period = max(4.0, columnBlocks * 6.0);
-        float n = valuenoise(worldPos.xyz / period);
-        albedo *= 1.0 + 0.10 * (n - 0.5);
+        // Mid/far brown plates: pull grassLike toward world-space plant colour.
+        // 0.8.46: near ring (columnBlocks~1, nearFade high) stays closer to 0.7.76
+        // vertex*tint continuity — hard plant-pull + climate lattice made foreground
+        // micro-squares. Coarse columns still get a strong pull.
+        if (!brightSnow && upness > 0.55 && band != 1) {
+            bool rockGrey = abs(albedo.r - albedo.g) < 0.06
+                && abs(albedo.g - albedo.b) < 0.06
+                && lum > 0.28;
+            bool grassLike = !rockGrey && (
+                chromaGreen
+                || (lum > 0.10 && lum < 0.72
+                    && albedo.g >= albedo.b
+                    && albedo.g >= albedo.r * 0.55)
+                || (upness > 0.82 && lum > 0.12 && lum < 0.68
+                    && albedo.b < max(albedo.r, albedo.g) + 0.03));
+            float pullGate = smoothstep(1.0, 2.75, columnBlocks) * (1.0 - nearFade * 0.90);
+            if (grassLike && pullGate > 0.04) {
+                vec3 plant = clamp(localCl.rgb, vec3(0.05), vec3(1.0));
+                if (fallbackSeasonTint.a > 0.0) {
+                    float amt = seasonAmount(localCl.a, fallbackSeasonTint.a);
+                    if (amt > 0.0) plant = mix(plant, fallbackSeasonTint.rgb, amt);
+                }
+                float plantLuma = max((plant.r + plant.g + plant.b) * (1.0 / 3.0), 0.08);
+                float mixAmt = (bakedAlbedo ? 0.90 : 0.78) * pullGate;
+                albedo = mix(albedo, plant * (lum / plantLuma), mixAmt);
+                lum = (albedo.r + albedo.g + albedo.b) * (1.0 / 3.0);
+                chromaGreen = albedo.g > albedo.r + 0.02 && albedo.g > albedo.b && lum < 0.78;
+            }
+        }
+
+        // TopoHorizon-style snowline: whiten up-facing soil/grass above the live
+        // freeze line. White, not a 0.45 gray hat. Skip thin canopy (band 2).
+        float groundSnowline = 0.0;
+        if (!brightSnow && band != 2 && upness > 0.55 && snowLineY < 90000.0) {
+            groundSnowline = smoothstep(snowLineY - 12.0, snowLineY + 20.0, yLevel) * upness;
+            albedo = mix(albedo, vec3(0.93, 0.95, 0.98), groundSnowline);
+            lum = (albedo.r + albedo.g + albedo.b) * (1.0 / 3.0);
+            brightSnow = lum > 0.72 || groundSnowline > 0.65;
+            chromaGreen = chromaGreen && groundSnowline < 0.15;
+        }
+
+        // Mild dirt wash on brown soil/rock SIDES only. Never chromatic green,
+        // never snow-white / FlagSnow-bright tops, never grass tops.
+        if (!brightSnow && !chromaGreen && upness < 0.70) {
+            vec3 dirtBrown = vec3(0.46, 0.33, 0.20);
+            float sideAmt = (1.0 - smoothstep(0.18, 0.70, upness))
+                * (1.0 - smoothstep(0.58, 0.80, lum));
+            albedo = mix(albedo, dirtBrown, sideAmt * mix(0.40, 0.18, nearFade));
+        }
+
+        // Break greedy-mesh plates. World-space, scaled by column size.
+        if (!brightSnow) {
+            float period = max(4.0, columnBlocks * 6.0);
+            float n = valuenoise(worldPos.xyz / period);
+            albedo *= 1.0 + 0.16 * (n - 0.5);
+        }
     }
 
     vec4 terraColor = vec4(albedo, outAlpha);
@@ -124,6 +239,9 @@ void main()
     // the near ground has already gone dark, which is why far sand was a glowing
     // yellow band. DisableLodFog only skips extra pastViewHaze, not this.
     terraColor.rgb *= shade * rgbaAmbientIn;
+    // Modest near-ring exposure (1.10). Skip already-bright snow so caps do not blow.
+    if (!brightSnow)
+        terraColor.rgb *= mix(1.0, 1.10, nearFade);
     terraColor.rgb = clamp(terraColor.rgb, 0.0, 1.0);
 
     // Same applyFog path as vanilla chunks. Skip applySpheresFog (height fog punches

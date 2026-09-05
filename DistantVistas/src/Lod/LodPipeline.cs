@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
+using DistantVistas.Net;
 using Vintagestory.API.Common;
 using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
@@ -42,20 +43,24 @@ public class LodPipeline
 
     /// <summary>
     /// Applies per tick: one when idle, more while results are stacked up, always
-    /// under a time budget. One per tick was 20 columns a second, and a creative
-    /// flight at max view distance streams three to four times that: the excess sat
-    /// in the queue until the chunk unloaded, and was then dropped at schedule time.
+    /// under a time budget. Player looking/walking/hitch uses
+    /// <see cref="LodFrameBudget.CaptureApplies"/> — queue, do not drop.
     /// </summary>
-    const int CaptureAppliesPerTick = 1;
-    const int CaptureAppliesPerTickBusy = 8;
     const double CaptureApplyBudgetMs = 4.0;
-    const int CaptureBusyThreshold = 4;
 
     const int PropagationsPerTick = 4;
     const int CatchUpPropagationsPerTick = 48;
-    const int CatchUpPropagationThreshold = 16;
     const int SectionSavesPerTick = 2;
-    const int SeasonRepaintSectionsPerTick = 2;
+    /// <summary>
+    /// After the join burst drains, keep circling resident plates around the player.
+    /// Closest unfinished first; two a tick. Skip entirely under mesh pressure.
+    /// Remesh only on palette change or a stale VBO for this bake token.
+    /// </summary>
+    const int SeasonIdleSectionsPerTick = 2;
+    const int SeasonIdleSkipWalkCap = 64;
+    const int DeciduousStripSectionsPerTick = 4;
+    /// <summary>Log season catch-up every N pipeline ticks while the epoch is active.</summary>
+    const int SeasonProgressLogEveryTicks = 150;
     const int ChunkSize = GlobalConstants.ChunkSize;
 
     /// <summary>
@@ -108,9 +113,91 @@ public class LodPipeline
 
     public int SeasonSectionsRepainted { get; private set; }
 
+    /// <summary>Sections waiting for budgeted season rebake / legacy heal.</summary>
+    public int SeasonDirtyCount => World.SeasonDirty.Count;
+    int seasonDirtyResidentFrame = -1;
+    bool seasonDirtyHasResident;
+    readonly bool[] seasonDirtyLevelResident = new bool[3];
+
+    /// <summary>
+    /// LOD level currently being drained (0..MaxLevel). -1 when idle / only cold left.
+    /// </summary>
+    public int SeasonCatchUpLevel { get; private set; } = -1;
+
+    /// <summary>
+    /// Packed calendar bake token. Idle sweep remeshes a section once per token when
+    /// the resident mesh is still last season.
+    /// </summary>
+    public int SeasonLookToken;
+
+    /// <summary>Skip idle season work this tick (mesh pressure only).</summary>
+    public bool YieldSeasonWork;
+
+    /// <summary>Looking, walking, or hitch — not chunk arrivals.</summary>
+    public bool PlayerBusy;
+
+    /// <summary>Vanilla streaming, 16-block walk hold, or two chunk arrivals.</summary>
+    public bool StreamingBusy;
+
+    /// <summary>A real XZ step this tick (keep-circle must stay alive).</summary>
+    public bool StepBusy;
+
+    /// <summary>Previous frame over <see cref="LodFrameBudget.FrameBusyMs"/>.</summary>
+    public bool LastFrameWasHitch;
+
+    /// <summary>Yaw/pitch past the look deadzone. Distinct from 16-block streaming.</summary>
+    public bool LookBusy;
+
+    /// <summary>Idle-sweep sections whose palette actually melted or frosted.</summary>
+    public int SeasonIdleMelted { get; private set; }
+
+    /// <summary>Times the idle walk finished a player-centered lap and restarted.</summary>
+    public int SeasonIdleLap { get; private set; }
+
+    /// <summary>Resident sections not yet baked on the current lap.</summary>
+    public int SeasonIdlePending { get; private set; }
+
+    /// <summary>Blocks from the player to the next idle target; -1 if none.</summary>
+    public int SeasonIdleNearestBlocks { get; private set; } = -1;
+
+    /// <summary>Why idle did not bake this tick, or a short running status.</summary>
+    public string SeasonIdleState { get; private set; } = "idle";
+
+    /// <summary>Why idle accurate recapture did not run, or a short running status.</summary>
+    public string IdleRecaptureState { get; private set; } = "off";
+
+    public int IdleRecaptureQueued { get; private set; }
+    public int IdleRecaptureLoads { get; private set; }
+
+    readonly HashSet<long> idleRecaptureVisited = new();
+    readonly List<(long Key, double DistSq)> idleRecaptureScratch = new();
+    int idleRecaptureScratchIndex;
+    double idleRecaptureAnchorX;
+    double idleRecaptureAnchorZ;
+    bool idleRecaptureAnchorSet;
+
+    int seasonProgressTicks;
+    int seasonIdleLogTicks;
+    int seasonEpochKeepUntilTick;
+    double seasonIdleAnchorX;
+    double seasonIdleAnchorZ;
+    bool seasonIdleAnchorSet;
+    readonly HashSet<long> seasonIdleVisited = new();
+    readonly List<(long Key, double DistSq)> seasonIdleScratch = new();
+    int seasonIdleScratchIndex;
+
+    /// <summary>True while a join or bake-epoch season sync is draining.</summary>
+    public bool SeasonRepaintEpochActive => World.SeasonRepaintEpochActive;
+
     readonly ConcurrentDictionary<long, byte> queuedColumns = new();
     readonly ConcurrentQueue<long> pendingColumns = new();
     readonly BlockPos paletteSamplePos = new(0, 0, 0);
+
+    /// <summary>L0 sections waiting for Deciduous Collapse strip + force recapture.</summary>
+    readonly HashSet<long> deciduousRefresh = new();
+    readonly List<long> deciduousRefreshDone = new();
+    readonly List<long> seasonRepaintDone = new();
+    readonly List<(long Key, double DistSq)> seasonRepaintScratch = new();
 
     /// <summary>
     /// False until the store exists. Nothing may touch sections before then: applying a
@@ -170,7 +257,23 @@ public class LodPipeline
     public void QueueColumn(int cx, int cz)
     {
         if (!NeedsCapture(cx, cz)) return;
+        EnqueueColumn(cx, cz);
+    }
 
+    /// <summary>
+    /// Re-capture even when the quadrant is already full. Used when Deciduous dormancy
+    /// changes what a leaf cell means without ChunkDirty firing (blocks are not removed).
+    /// Skip unloaded columns: a soil-only RLE from missing chunks would wipe snow.
+    /// </summary>
+    public void ForceQueueColumn(int cx, int cz)
+    {
+        if (!Active) return;
+        if (api.World.BlockAccessor.GetMapChunk(cx, cz) == null) return;
+        EnqueueColumn(cx, cz);
+    }
+
+    void EnqueueColumn(int cx, int cz)
+    {
         if (pendingColumns.Count >= MaxPendingColumns)
         {
             Interlocked.Increment(ref columnsDropped);
@@ -190,8 +293,13 @@ public class LodPipeline
     /// draws as a regular 32-block checkerboard of cliffs into void. Skip only when
     /// THIS chunk's quadrant is already captured by this side. A quadrant that is
     /// captured but provisional (peek, sweep, another player) is still work: the loaded
-    /// chunk is the real terrain and replaces it. Cold (non-resident) HasDataSet keys
-    /// skip to avoid ChunkDirty GC thrash unless they are known sparse, incomplete or
+    /// chunk is the real terrain and replaces it. Melt season (May–Oct) also recaptures
+    /// a full non-provisional quadrant that still has inferred FlagSnow or a leftover
+    /// snowlayer top — Cover must not invent on visited land, and a stuck snowlayer
+    /// BlockId only goes away by recapture. Winter still recaptures inferred Cover
+    /// snow (FlagSnow+FlagBaked) when the chunk is loaded; real FlagSnow-only stays skipped.
+    /// Cold (non-resident) HasDataSet keys skip to
+    /// avoid ChunkDirty GC thrash unless they are known sparse, incomplete or
     /// provisional; once the renderer residencies a partial section, the next dirty
     /// event or sweep fills missing quadrants.
     /// </summary>
@@ -207,7 +315,22 @@ public class LodPipeline
             int colOz = ((cz * ChunkSize) % sb) / LodSection.ColumnStepBlocks;
             int q = LodSection.QuadrantOf(colOx, colOz);
             if (sec.QuadrantFullyCaptured(q) && !sec.IsProvisionalQuadrant(q))
-                return false;
+            {
+                int month = 0;
+                try { month = api.World.Calendar.Month; }
+                catch { /* shutdown */ }
+                int sea = 110;
+                try { sea = api.World.SeaLevel; }
+                catch { /* */ }
+                bool hasSnow = sec.QuadrantHasSnowSurface(q);
+                bool pendingVisit = sec.LoadedCaptureLookToken != SeasonLookToken
+                    && sec.QuadrantMaxY(q) > sea + 12;
+                if (!LodIdleRecapturePolicy.LoadedColumnNeedsRecapture(
+                    fullyCaptured: true, provisional: false,
+                    inferredSnow: sec.QuadrantHasInferredSnow(q),
+                    month, hasSnow, pendingVisit))
+                    return false;
+            }
             // Track sparse pre-0.7.7 one-quadrant sections so cold skips stay open.
             World.ClassifySparseL0(sectionKey, sec);
             return true;
@@ -282,6 +405,125 @@ public class LodPipeline
 
         sweepRow++;
         if (sweepRow > radiusChunks) sweepRow = -radiusChunks;
+    }
+
+    /// <summary>
+    /// Player-priority idle: remesh from already-loaded columns first, then (when a
+    /// server-side loader exists) pull explored savegame columns one at a time.
+    /// Loaded recapture yields only while looking/walking/mesh pressure. Chunk
+    /// arrivals and join epoch still yield extra disk loads, not RAM recapture.
+    /// Does not raise viewDistance. Does not generate unexplored land.
+    /// </summary>
+    public void TickIdleAccurateRecapture(
+        double px, double pz, IExploredColumnLoader? loader, bool streaming)
+    {
+        if (!Active)
+        {
+            IdleRecaptureState = "off";
+            return;
+        }
+        if (!LodIdleRecapturePolicy.AllowLoadedRecapture(PlayerBusy, YieldSeasonWork))
+        {
+            IdleRecaptureState = LastFrameWasHitch ? "yield: hitch"
+                : LookBusy ? "yield: looking"
+                : PlayerBusy ? "yield: walking"
+                : "yield: mesh pressure";
+            return;
+        }
+
+        if (!idleRecaptureAnchorSet
+            || LodSeasonIdleOrder.PlayerMovedEnough(idleRecaptureAnchorX, idleRecaptureAnchorZ, px, pz))
+        {
+            idleRecaptureVisited.Clear();
+            idleRecaptureAnchorX = px;
+            idleRecaptureAnchorZ = pz;
+            idleRecaptureAnchorSet = true;
+            FillIdleRecaptureScratch(px, pz);
+        }
+        else if (idleRecaptureScratchIndex >= idleRecaptureScratch.Count)
+        {
+            idleRecaptureVisited.Clear();
+            FillIdleRecaptureScratch(px, pz);
+        }
+
+        if (idleRecaptureScratch.Count == 0 || idleRecaptureScratchIndex >= idleRecaptureScratch.Count)
+        {
+            IdleRecaptureState = "no resident L0";
+            return;
+        }
+
+        int queued = 0;
+        int loads = 0;
+        int probes = 0;
+        int skipped = 0;
+        bool stillIdle() => LodIdleRecapturePolicy.AllowExploredLoad(
+            PlayerBusy, YieldSeasonWork, streaming)
+            && loader is not { IsVanillaBusy: true };
+
+        while (idleRecaptureScratchIndex < idleRecaptureScratch.Count
+            && (queued < LodIdleRecapturePolicy.ForceQueuePerTick
+                || (loader != null && loads < LodIdleRecapturePolicy.LoadsPerTick)))
+        {
+            long key = idleRecaptureScratch[idleRecaptureScratchIndex++].Key;
+            idleRecaptureVisited.Add(key);
+            int didQueue = 0;
+            int didLoad = 0;
+            int didProbe = 0;
+            WalkSectionColumns(key, (cx, cz) =>
+            {
+                if (!NeedsCapture(cx, cz)) return;
+                if (api.World.BlockAccessor.GetMapChunk(cx, cz) != null)
+                {
+                    if (queued + didQueue >= LodIdleRecapturePolicy.ForceQueuePerTick) return;
+                    int before = pendingColumns.Count;
+                    ForceQueueColumn(cx, cz);
+                    if (pendingColumns.Count > before) didQueue++;
+                    return;
+                }
+                if (loader == null) return;
+                if (loads + didLoad >= LodIdleRecapturePolicy.LoadsPerTick) return;
+                ExploredLoadAttempt attempt = loader.TryRequest(cx, cz, stillIdle);
+                if (attempt == ExploredLoadAttempt.Loading) didLoad++;
+                else if (attempt == ExploredLoadAttempt.Probing) didProbe++;
+            });
+            queued += didQueue;
+            loads += didLoad;
+            probes += didProbe;
+            if (didQueue == 0 && didLoad == 0 && didProbe == 0)
+            {
+                skipped++;
+                if (skipped >= LodIdleRecapturePolicy.SkipWalkCap) break;
+            }
+        }
+
+        IdleRecaptureQueued += queued;
+        IdleRecaptureLoads += loads;
+        IdleRecaptureState = loads > 0 || queued > 0 || probes > 0
+            ? $"queued {queued}, load {loads}, probe {probes}"
+            : "idle";
+    }
+
+    void FillIdleRecaptureScratch(double px, double pz)
+    {
+        LodSeasonIdleOrder.FillNearestCapped(
+            idleRecaptureScratch, World.Sections.Keys, idleRecaptureVisited, px, pz,
+            LodFrameBudget.ScratchCap, maxDistBlocks: 0,
+            static key => LodWorld.KeyLevel(key) == 0);
+        idleRecaptureScratchIndex = 0;
+    }
+
+    void WalkSectionColumns(long sectionKey, Action<int, int> visit)
+    {
+        int sb = LodSection.SectionBlocks;
+        int chunksPerEdge = sb / ChunkSize;
+        if (chunksPerEdge < 1) chunksPerEdge = 1;
+        int sx = LodWorld.KeySx(sectionKey);
+        int sz = LodWorld.KeySz(sectionKey);
+        for (int dz = 0; dz < chunksPerEdge; dz++)
+        {
+            for (int dx = 0; dx < chunksPerEdge; dx++)
+                visit(sx * chunksPerEdge + dx, sz * chunksPerEdge + dz);
+        }
     }
 
     /// <summary>
@@ -392,7 +634,8 @@ public class LodPipeline
         CachedSectionsLoaded = store.LoadAllKeys((level, sx, sz, applyToParent, provisional) =>
         {
             Remote.AddLocalKey(LodWorld.SectionKey(level, sx, sz));
-            World.InstallStoredKey(level, sx, sz, applyToParent, provisional != 0);
+            World.InstallStoredKey(level, sx, sz, applyToParent, provisional != 0,
+                LodFrameBudget.QueueMipOnStoreIndex);
         });
         Active = true;
         logger.Notification("LOD cache: {0}", dbPath);
@@ -471,11 +714,11 @@ public class LodPipeline
         InstallLoadedSections();
         ScheduleCaptures();
         ApplyCaptureResults();
-        int propagationBudget = World.MipDirty.Count > CatchUpPropagationThreshold
-            ? CatchUpPropagationsPerTick
-            : PropagationsPerTick;
-        World.ProcessPropagation(propagationBudget);
+        World.ProcessPropagation(LodFrameBudget.PropagationsThisTick(
+            PlayerBusy, World.MipDirty.Count, CatchUpPropagationsPerTick, PropagationsPerTick));
         ProcessSeasonRepaint();
+        ProcessSeasonIdleSweep();
+        ProcessDeciduousLeafRefresh();
         SaveSomeDirtySections(SectionSavesPerTick);
         tickCounter++;
     }
@@ -487,7 +730,18 @@ public class LodPipeline
     public bool MaybeEvictAround(double x, double z)
     {
         if (tickCounter % 100 != 0 || World.LoadFromStore == null) return false;
-        World.EvictColdSections(x, z, 50);
+        // Soft-cap spill: under pressure only (caller gates MeshPressureActive).
+        // Never dumps the SQLite index into RAM; only drops cold residents already loaded.
+        // 0.8.46: when the heap is already multi-GB / over soft, spill harder (still
+        // never inside the keep ring — EvictColdSections respects distance).
+        int budget = 50;
+        int soft = LodMemoryBudget.MaxResidentSections;
+        int n = World.Sections.Count;
+        if (soft > 0 && n > soft)
+            budget = 220;
+        else if (soft > 0 && n > (soft * 85) / 100)
+            budget = 120;
+        World.EvictColdSections(x, z, budget);
         return tickCounter % 1200 == 0;
     }
 
@@ -530,18 +784,22 @@ public class LodPipeline
     /// </summary>
     void AfterSectionLoaded(long key, LodSection section, ref int repaired)
     {
+        seasonIdleVisited.Remove(key);
         repaired += RepairUncoloredPalette?.Invoke(section) ?? 0;
-        int healed = HealLegacyPalette?.Invoke(section, key) ?? 0;
-        if (healed > 0)
+        // Live tint is shader uniforms. Do not remesh the resident set on load,
+        // ForceAncestor, or SeasonForced. Leftover FlagBaked vegetation and
+        // inferred Cover snow wait for the sit-still idle sweep.
+        section.SeasonLookToken = SeasonLookToken;
+        // Deciduous hides canopy without ChunkDirty: strip Collapse from cached leaf
+        // sections as they load so winter join does not keep a summer canopy blob.
+        // Month change ForceQueues for spring canopy return; load only strips.
+        if (DeciduousLeafCompat.Present
+            && LodWorld.KeyLevel(key) == 0
+            && DeciduousLeafCompat.SectionHasLeafPalette(section, api.World)
+            && StripCollapsedDeciduousLeaves(key, section))
         {
-            repaired += healed;
+            World.MarkChanged(key);
             World.RenderDirty.Add(key);
-        }
-        if (World.SeasonRepaintEpochActive
-            && (LodSeasonBake.SectionHasBakedEntries(section)
-                || LodSeasonBake.SectionNeedsLegacyHeal(section)))
-        {
-            World.SeasonDirty.Add(key);
         }
     }
 
@@ -561,6 +819,7 @@ public class LodPipeline
     void ScheduleCaptures()
     {
         int chunkYCount = api.World.BlockAccessor.MapSizeY / ChunkSize;
+        captureRainRetry.Clear();
 
         for (int n = 0; n < CaptureSchedulesPerTick
              && Worker.PendingCaptures < MaxWorkerCaptureBacklog
@@ -572,7 +831,13 @@ public class LodPipeline
 
             IMapChunk? mapChunk = api.World.BlockAccessor.GetMapChunk(cx, cz);
             ushort[]? rainMap = mapChunk?.RainHeightMap;
-            if (rainMap == null) continue;
+            if (rainMap == null)
+            {
+                // Map chunk present but rain map not ready yet — retry next tick.
+                // Missing map chunk stays dropped: a soil-only RLE would wipe snow.
+                if (mapChunk != null) captureRainRetry.Add(key);
+                continue;
+            }
 
             var chunks = new IWorldChunk?[chunkYCount];
             for (int cy = 0; cy < chunkYCount; cy++)
@@ -588,6 +853,13 @@ public class LodPipeline
                 RainMap = (ushort[])rainMap.Clone(),
             });
         }
+
+        for (int i = 0; i < captureRainRetry.Count; i++)
+        {
+            if (pendingColumns.Count >= MaxPendingColumns) break;
+            long retry = captureRainRetry[i];
+            if (queuedColumns.TryAdd(retry, 0)) pendingColumns.Enqueue(retry);
+        }
     }
 
     // ---- Applying capture results: block ids → section palette ids ----
@@ -601,15 +873,18 @@ public class LodPipeline
 
     const int MaxDeferredCaptures = 64;
 
+    readonly List<long> captureRainRetry = new();
+
     readonly System.Diagnostics.Stopwatch applyClock = new();
 
     void ApplyCaptureResults()
     {
-        // Idle: one a tick, as always. Backed up: several, until the time budget is
-        // spent. The clock is checked between applies, so the floor of one stands even
-        // when a single apply overruns; a result is never split.
-        bool busy = Worker.CaptureResults.Count >= CaptureBusyThreshold || deferredCaptures.Count > 0;
-        int budget = busy ? CaptureAppliesPerTickBusy : CaptureAppliesPerTick;
+        // Idle: one a tick. Backed up while sitting still: several, until the time
+        // budget is spent. Looking applies one. Sit-hitch applies none. Walking
+        // still applies one so discovered land lands on the canvas.
+        int backlog = Worker.CaptureResults.Count + deferredCaptures.Count;
+        int budget = LodFrameBudget.CaptureApplies(
+            PlayerBusy, LastFrameWasHitch, backlog, StepBusy);
         int applied = 0;
         applyClock.Restart();
 
@@ -662,11 +937,57 @@ public class LodPipeline
         }
     }
 
+    /// <summary>
+    /// Palette identity: snow, frost-mottle bin, and baked wood/soil never collapse
+    /// onto one row. Packed as blockId | flags | tintSlot.
+    /// </summary>
+    static long PaletteStyleKey(int blockId, byte flags, byte tintSlot) =>
+        ((long)(uint)blockId << 16) | ((long)flags << 8) | tintSlot;
+
+    /// <summary>
+    /// Snow and frost-bin identity is a function of world XZ + block, not of the
+    /// climate sample. Reuse the first bake in this batch for that style.
+    /// </summary>
+    static bool TryCachedPaletteStyle(
+        Block block,
+        int blockId,
+        int x,
+        int z,
+        Dictionary<long, int> pidByStyle,
+        out long style,
+        out int pid)
+    {
+        byte flags = LodBlockPolicy.FlagsFor(block);
+        byte tintSlot = (byte)LodTintRegistry.SlotNone;
+        if ((flags & LodPaletteEntry.FlagSnow) != 0 || LodBlockPolicy.IsSnowLayer(block))
+        {
+            flags = (byte)(LodBlockPolicy.FlagsFor(block) | LodPaletteEntry.FlagSnow);
+            flags &= unchecked((byte)~LodPaletteEntry.FlagFrostGround);
+        }
+        else if (LodSeasonBake.IsGroundFrost(block))
+        {
+            // Grass/soil live-tint; do not cache FlagBaked frost-mottle identity.
+            style = 0;
+            pid = 0;
+            return false;
+        }
+        else
+        {
+            style = 0;
+            pid = 0;
+            return false;
+        }
+
+        style = PaletteStyleKey(blockId, flags, tintSlot);
+        return pidByStyle.TryGetValue(style, out pid);
+    }
+
     void ApplyOneCaptureResult(CaptureResult result)
     {
         LodSection section = World.GetOrCreateSection(result.SectionKey);
 
-        var pidByBlockId = new Dictionary<int, int>();
+        // Per-(block, snow|frostBin|baked) — not one colour for the whole 64×64.
+        var pidByStyle = new Dictionary<long, int>();
         ulong[]?[] batch = result.RunsByColumn;
 
         for (int col = 0; col < batch.Length; col++)
@@ -678,14 +999,34 @@ public class LodPipeline
             for (int i = 0; i < runs.Length; i++)
             {
                 int blockId = LodSection.RunPaletteId(runs[i]); // raw block id from capture
-                if (!pidByBlockId.TryGetValue(blockId, out int pid))
+                Block? live = null;
+                int bx = 0, by = 0, bz = 0;
+                if ((uint)blockId < (uint)api.World.Blocks.Count)
                 {
-                    // One palette entry per block id per section, coloured from the first
-                    // run seen. For chiselled blocks that means one chisel's material mix
-                    // stands in for the whole section - coarse, but theirs, where the
-                    // centre probe answered with the placeholder texture for all of them.
-                    pid = RegisterPaletteEntry(section, result.SectionKey, blockId, col, runs[i]);
-                    pidByBlockId[blockId] = pid;
+                    live = api.World.Blocks[blockId];
+                    (bx, by, bz) = CaptureBlockPos(result.SectionKey, col, runs[i]);
+                    paletteSamplePos.Set(bx, by, bz);
+                    // Deciduous Collapse = fully hidden leaf cell. Omit; keep Fan + wood.
+                    if (DeciduousLeafCompat.ShouldOmitLeafRun(live, paletteSamplePos)) continue;
+                }
+
+                int pid;
+                if (live != null
+                    && TryCachedPaletteStyle(live, blockId, bx, bz, pidByStyle, out long style, out pid)
+                    && (uint)pid < (uint)section.Palette.Count)
+                {
+                    // Same snow / frost-bin row already baked from this batch.
+                }
+                else
+                {
+                    ResolveCapturePalette(result.SectionKey, blockId, col, runs[i],
+                        out int color, out byte flags, out byte tintSlot);
+                    style = PaletteStyleKey(blockId, flags, tintSlot);
+                    if (!pidByStyle.TryGetValue(style, out pid))
+                    {
+                        pid = UpsertPaletteEntry(section, blockId, color, flags, tintSlot);
+                        pidByStyle[style] = pid;
+                    }
                 }
 
                 // Decorative ground cover never becomes terrain: a flower would
@@ -732,108 +1073,633 @@ public class LodPipeline
             changed = true;
         }
 
+        if (!result.Provisional)
+        {
+            section.LoadedCaptureLookToken = SeasonLookToken;
+            // Unbake leftover FlagBaked vegetation and melt leftover inferred
+            // Cover snow. Do not invent FlagSnow — far snow is the shader snowline.
+            if (RebakeSeasonPalette != null)
+            {
+                int painted = RebakeSeasonPalette(section, result.SectionKey);
+                if (painted > 0) changed = true;
+            }
+        }
+
         if (changed)
         {
             World.ClassifySparseL0(result.SectionKey, section);
             World.MarkChanged(result.SectionKey);
+            World.ForceAncestorGpuRemesh(result.SectionKey);
         }
     }
 
     /// <summary>
-    /// World position of the top block of a run. The describer must get the block's own
-    /// position, not a stand-in: chiselled blocks answer GetColorWithoutTint from the
-    /// block entity at that exact position, and a probe at the chunk-column centre made
-    /// every chisel average unknown.png instead - a real cache held that near-white
-    /// (0x00FCFCFC) 8319 times. Capture results are always level 0, where a column is
-    /// one block wide, and yTop is exclusive (a run spans [yBottom, yTop)).
+    /// World position of the top of a run (for climate/season bake and frost).
+    /// Level L columns span (ColumnStepBlocks &lt;&lt; L) blocks; section keys are in
+    /// level space. Using L0-only math (sx * 64) on L1+ sampled half/quarter world
+    /// coords — debug e8d91d post-fix-heat: every L1 probe airTempC ~35–50°C and
+    /// frostAmt=0 while L0 at the same hills was −8°C / frost 0.38 (far green band).
+    /// Sample column centre so fat L≥1 columns still hit the right climate cell.
+    /// yTop is exclusive (a run spans [yBottom, yTop)).
     /// </summary>
     public static (int X, int Y, int Z) CaptureBlockPos(long sectionKey, int col, ulong run)
     {
+        int level = LodWorld.KeyLevel(sectionKey);
+        int step = LodSection.ColumnStepBlocks << level;
+        int sectionBlocks = LodSection.SectionBlocks << level;
         int localX = col % LodSection.GridSize;
         int localZ = col / LodSection.GridSize;
-        return (LodWorld.KeySx(sectionKey) * LodSection.SectionBlocks + localX,
-                LodSection.RunYTop(run) - 1,
-                LodWorld.KeySz(sectionKey) * LodSection.SectionBlocks + localZ);
+        int half = step >> 1;
+        return (
+            LodWorld.KeySx(sectionKey) * sectionBlocks + localX * step + half,
+            LodSection.RunYTop(run) - 1,
+            LodWorld.KeySz(sectionKey) * sectionBlocks + localZ * step + half);
     }
 
-    int RegisterPaletteEntry(LodSection section, long sectionKey, int blockId, int col, ulong run)
+    void ResolveCapturePalette(long sectionKey, int blockId, int col, ulong run,
+        out int color, out byte flags, out byte tintSlot)
     {
-        Block block = api.World.Blocks[blockId];
         (int x, int y, int z) = CaptureBlockPos(sectionKey, col, run);
-        (int color, byte tintSlot, bool baked) = describePalette(blockId, x, y, z);
-        byte flags = LodBlockPolicy.FlagsFor(block);
-        if (baked)
+        if ((uint)blockId >= (uint)api.World.Blocks.Count)
         {
-            flags |= LodPaletteEntry.FlagBaked;
-            tintSlot = (byte)LodTintRegistry.SlotNone;
+            color = 0;
+            flags = 0;
+            tintSlot = 0;
+            return;
         }
 
+        Block block = api.World.Blocks[blockId];
+        bool baked;
+        (color, tintSlot, baked) = describePalette(blockId, x, y, z);
+        flags = LodBlockPolicy.FlagsFor(block);
+
+        // Real snow / opaque ice: FlagSnow bright white only. Never FlagFrostGround.
+        if ((flags & LodPaletteEntry.FlagSnow) != 0
+            || LodBlockPolicy.IsSnowLayer(block))
+        {
+            flags = (byte)(LodBlockPolicy.FlagsFor(block) | LodPaletteEntry.FlagSnow);
+            flags &= unchecked((byte)~LodPaletteEntry.FlagFrostGround);
+            tintSlot = (byte)LodTintRegistry.SlotNone;
+            return;
+        }
+
+        if (!baked) return;
+
+        flags |= LodPaletteEntry.FlagBaked;
+        // Ground frost only: mottle bin in TintSlot. Foliage never uses FrostMottleBin.
+        if (LodSeasonBake.IsGroundFrost(block))
+        {
+            flags |= LodPaletteEntry.FlagFrostGround;
+            tintSlot = (byte)LodSeasonBake.FrostMottleBin(x, z);
+        }
+        else
+        {
+            flags &= unchecked((byte)~LodPaletteEntry.FlagFrostGround);
+            tintSlot = (byte)LodTintRegistry.SlotNone;
+        }
+    }
+
+    int UpsertPaletteEntry(LodSection section, int blockId, int color, byte flags, byte tintSlot)
+    {
+        bool frostGround = (flags & LodPaletteEntry.FlagFrostGround) != 0;
+        bool snow = (flags & LodPaletteEntry.FlagSnow) != 0;
+        bool bakedLook = (flags & LodPaletteEntry.FlagBaked) != 0 && !frostGround && !snow;
         for (int i = 0; i < section.Palette.Count; i++)
         {
             if (section.Palette[i].BlockId != blockId) continue;
-            if (baked)
+            if (snow)
             {
-                LodPaletteEntry e = section.Palette[i];
-                e.Color = color;
-                e.Flags = (byte)(e.Flags | LodPaletteEntry.FlagBaked);
-                e.TintSlot = LodTintRegistry.SlotNone;
-                section.Palette[i] = e;
-                section.InvalidatePaletteSnapshot();
+                if ((section.Palette[i].Flags & LodPaletteEntry.FlagSnow) == 0) continue;
             }
+            else if ((section.Palette[i].Flags & LodPaletteEntry.FlagSnow) != 0)
+            {
+                continue;
+            }
+            else if (frostGround)
+            {
+                if ((section.Palette[i].Flags & LodPaletteEntry.FlagFrostGround) == 0) continue;
+                if (section.Palette[i].TintSlot != tintSlot) continue;
+            }
+            else if ((section.Palette[i].Flags & LodPaletteEntry.FlagFrostGround) != 0)
+            {
+                continue;
+            }
+            else if (bakedLook)
+            {
+                if ((section.Palette[i].Flags & LodPaletteEntry.FlagBaked) == 0) continue;
+                if (!LodSeasonBake.SameFoliageLook(section.Palette[i].Color, color)) continue;
+                return i;
+            }
+
+            LodPaletteEntry e = section.Palette[i];
+            e.Color = color;
+            e.Flags = flags;
+            e.TintSlot = tintSlot;
+            section.Palette[i] = e;
+            section.InvalidatePaletteSnapshot();
             return i;
         }
 
-        if (baked) flags |= LodPaletteEntry.FlagBaked;
         return section.FindOrAddPaletteEntry(blockId, color, flags, tintSlot);
     }
 
     /// <summary>
-    /// On calendar month change: every section that holds data may need a seasonal repaint.
+    /// On bake-epoch change: resident RAM may need a seasonal repaint. Disk rows
+    /// rebake when the renderer demand-loads them — HasDataSet is not a work queue.
     /// </summary>
     public void QueueSeasonRepaintAll()
     {
         World.SeasonRepaintEpochActive = true;
-        foreach (long key in World.HasDataSet)
-            World.SeasonDirty.Add(key);
-        foreach (long key in World.Sections.Keys)
-            World.SeasonDirty.Add(key);
+        seasonProgressTicks = 0;
+        SeasonCatchUpLevel = 0;
+        seasonIdleVisited.Clear();
+        seasonIdleAnchorSet = false;
+        seasonEpochKeepUntilTick = tickCounter + LodSeasonCatchUp.JoinEpochKeepTicks;
+        LodSeasonCatchUp.PruneNonResident(World.SeasonDirty, World.Sections.ContainsKey);
+        if (LodSeasonCatchUp.EnqueueResidentOnEpoch)
+            LodSeasonCatchUp.EnqueueResident(World.SeasonDirty, World.Sections.Keys);
+    }
+
+    /// <summary>
+    /// Map-region heatmaps only exist while the region is client-loaded. Discovering
+    /// new chunks loads the region; far LOD baked earlier used the engine placeholder
+    /// climate (11842740) and stayed summer-green. Re-queue overlapping sections so
+    /// frost bake sees the real ClimateMap.
+    /// </summary>
+    public int QueueSeasonRepaintForMapRegion(int regionX, int regionZ)
+    {
+        _ = regionX;
+        _ = regionZ;
+        // Live climate corners are shader uniforms / LodTintRegistry, not a remesh.
+        return 0;
+    }
+
+    /// <summary>Resident SeasonDirty counts at L0/L1/L2 for .dvcolor.</summary>
+    public void CountResidentSeasonDirtyByLevel(out int l0, out int l1, out int l2)
+    {
+        l0 = l1 = l2 = 0;
+        foreach (long key in World.SeasonDirty)
+        {
+            if (!World.Sections.ContainsKey(key)) continue;
+            switch (LodWorld.KeyLevel(key))
+            {
+                case 0: l0++; break;
+                case 1: l1++; break;
+                default: l2++; break;
+            }
+        }
+    }
+
+    /// <summary>
+    /// Deciduous dormancy can flip without ChunkDirty. Queue resident L0 leaf sections
+    /// for an in-place Collapse strip plus forced re-capture (spring canopy return).
+    /// Cold rows join via <see cref="AfterSectionLoaded"/> when demand-loaded.
+    /// </summary>
+    public void QueueDeciduousLeafRefreshAll()
+    {
+        if (!DeciduousLeafCompat.Present) return;
+        foreach (KeyValuePair<long, LodSection> kv in World.Sections)
+        {
+            if (LodWorld.KeyLevel(kv.Key) != 0) continue;
+            if (DeciduousLeafCompat.SectionHasLeafPalette(kv.Value, api.World))
+                deciduousRefresh.Add(kv.Key);
+        }
     }
 
     void ProcessSeasonRepaint()
     {
-        if (RebakeSeasonPalette == null || World.SeasonDirty.Count == 0) return;
+        if (RebakeSeasonPalette == null) return;
 
-        int budget = SeasonRepaintSectionsPerTick;
-        var done = new List<long>(budget);
-        foreach (long key in World.SeasonDirty)
+        // Orphan sync: SeasonForced keys dropped from RenderDirty after a failed
+        // TryStart would stall forever while SeasonForced stayed high (probe-h).
+        if (World.SeasonForcedRemesh.Count > 0)
         {
-            if (budget <= 0) break;
-            if (!World.Sections.TryGetValue(key, out LodSection? section))
-            {
-                // Cold row: leave in SeasonDirty until demand load brings it in.
-                continue;
-            }
+            foreach (long fk in World.SeasonForcedRemesh)
+                World.RenderDirty.Add(fk);
+        }
 
-            if (!LodSeasonBake.SectionHasBakedEntries(section)
-                && !LodSeasonBake.SectionNeedsLegacyHeal(section))
+        int budget = LodFrameBudget.ResidentPaletteThisTick(
+            PlayerBusy || StreamingBusy, LastFrameWasHitch);
+        if (World.SeasonDirty.Count == 0)
+        {
+            // Remesh may still be draining after palette work finished.
+            // Do not wait on cold HasDataSet — epoch ends with cache still on disk.
+            if (World.SeasonForcedRemesh.Count == 0)
+                TryEndSeasonEpoch();
+            return;
+        }
+        if (budget <= 0)
+            return;
+
+        ResolveSeasonAnchor(out double px, out double pz);
+
+        // L0 palette first so nearby fine tiles catch up before coarse parents.
+        // Every level rebakes: inferred FlagSnow lives on dirt that may not be
+        // FlagBaked, and far L2/L3 never inherit a child's snow cover via remesh-only.
+        int focusLevel = -1;
+        if (SeasonDirtyHasResidentAtLevel(0))
+            focusLevel = 0;
+        else
+        {
+            for (int L = 1; L <= LodWorld.MaxLevel; L++)
             {
-                done.Add(key);
-                continue;
+                if (!SeasonDirtyHasResidentAtLevel(L)) continue;
+                focusLevel = L;
+                break;
             }
+        }
+        SeasonCatchUpLevel = focusLevel;
+
+        seasonRepaintScratch.Clear();
+        if (SeasonCatchUpLevel >= 0)
+        {
+            foreach (long key in World.SeasonDirty)
+            {
+                if (!World.Sections.ContainsKey(key)) continue;
+                if (LodWorld.KeyLevel(key) != SeasonCatchUpLevel) continue;
+                double distSq = LodWorld.NearestDistanceSqTo(key, px, pz);
+                seasonRepaintScratch.Add((key, distSq));
+            }
+            seasonRepaintScratch.Sort((a, b) => a.DistSq.CompareTo(b.DistSq));
+        }
+
+        seasonRepaintDone.Clear();
+        int changedThisTick = 0;
+        for (int i = 0; i < seasonRepaintScratch.Count && budget > 0; i++)
+        {
+            long key = seasonRepaintScratch[i].Key;
+            if (!World.Sections.TryGetValue(key, out LodSection? section)) continue;
 
             int changed = RebakeSeasonPalette(section, key);
             if (changed > 0)
             {
                 World.MarkChanged(key);
-                World.RenderDirty.Add(key);
                 SeasonSectionsRepainted++;
+                changedThisTick++;
+                World.RenderDirty.Add(key);
             }
-            done.Add(key);
+            section.SeasonLookToken = SeasonLookToken;
+            seasonRepaintDone.Add(key);
             budget--;
         }
 
-        foreach (long key in done) World.SeasonDirty.Remove(key);
-        if (World.SeasonDirty.Count == 0) World.SeasonRepaintEpochActive = false;
+        // Cold HasDataSet is not catch-up work. Sorting that set every tick is why
+        // a well-explored world sat for minutes before the first mesh. The renderer
+        // demand-loads what it draws; AfterSectionLoaded Cover-rebakes those.
+
+        foreach (long key in seasonRepaintDone) World.SeasonDirty.Remove(key);
+        // Palette drain alone is not catch-up done — GPU meshes still hold last season
+        // RGB until SeasonForcedRemesh empties. Clearing epoch here left a hard seam
+        // (white sections remeshed near the player, green VBO next door) while dirty=0
+        // and forced remesh stalled (debug e8d91d post-fix-bandfollow).
+        if (World.SeasonDirty.Count == 0 && World.SeasonForcedRemesh.Count == 0)
+            TryEndSeasonEpoch();
+
+        seasonProgressTicks++;
+        if (World.SeasonRepaintEpochActive
+            && (seasonProgressTicks % SeasonProgressLogEveryTicks == 0 || changedThisTick > 0 && seasonProgressTicks <= 2))
+        {
+            CountResidentSeasonDirtyByLevel(out int d0, out int d1, out int d2);
+            logger.Notification(
+                "[DistantVistas] Season catch-up: level {0}, dirtyAtLevel {1}, dirtyTotal {2} "
+                + "(L0 {3} L1 {4} L2 {5}), forcedRemesh {6}, repainted this session {7}, "
+                + "changed this tick {8}, anchor {9:0},{10:0}",
+                SeasonCatchUpLevel,
+                SeasonCatchUpLevel == 0 ? d0 : SeasonCatchUpLevel == 1 ? d1 : d2,
+                World.SeasonDirty.Count, d0, d1, d2,
+                World.SeasonForcedRemesh.Count,
+                SeasonSectionsRepainted, changedThisTick, px, pz);
+        }
+    }
+
+    /// <summary>
+    /// Cheap player-centered lap after the join burst. Closest unfinished pad first,
+    /// then the next ring out. Remesh queue does not stall the walk — that used to
+    /// freeze idle forever on a stuck ancestor key. Hash-order round-robin is gone.
+    /// </summary>
+    void ProcessSeasonIdleSweep()
+    {
+        if (RebakeSeasonPalette == null)
+        {
+            SeasonIdleState = "no rebake";
+            return;
+        }
+        if (PlayerBusy)
+        {
+            SeasonIdleState = "blocked: looking or walking";
+            return;
+        }
+        if (YieldSeasonWork)
+        {
+            SeasonIdleState = "blocked: mesh pressure";
+            return;
+        }
+        if (World.SeasonRepaintEpochActive)
+        {
+            SeasonIdleState = "blocked: join epoch";
+            return;
+        }
+        if (HasResidentSeasonDirty())
+        {
+            SeasonIdleState = "blocked: catch-up";
+            return;
+        }
+
+        ResolveSeasonAnchor(out double px, out double pz);
+        if (!seasonIdleAnchorSet
+            || LodSeasonIdleOrder.PlayerMovedEnough(seasonIdleAnchorX, seasonIdleAnchorZ, px, pz))
+        {
+            seasonIdleVisited.Clear();
+            seasonIdleAnchorX = px;
+            seasonIdleAnchorZ = pz;
+            seasonIdleAnchorSet = true;
+            LodSeasonIdleOrder.FillNearestCapped(
+                seasonIdleScratch, World.Sections.Keys, seasonIdleVisited, px, pz,
+                LodFrameBudget.ScratchCap, maxDistBlocks: 0);
+            seasonIdleScratchIndex = 0;
+        }
+        else if (seasonIdleScratchIndex >= seasonIdleScratch.Count)
+        {
+            if (World.Sections.Count > 0)
+            {
+                seasonIdleVisited.Clear();
+                SeasonIdleLap++;
+                LodSeasonIdleOrder.FillNearestCapped(
+                    seasonIdleScratch, World.Sections.Keys, seasonIdleVisited, px, pz,
+                    LodFrameBudget.ScratchCap, maxDistBlocks: 0);
+                seasonIdleScratchIndex = 0;
+            }
+        }
+
+        SeasonIdlePending = Math.Max(0, seasonIdleScratch.Count - seasonIdleScratchIndex);
+        if (seasonIdleScratch.Count == 0 || seasonIdleScratchIndex >= seasonIdleScratch.Count)
+        {
+            SeasonIdleNearestBlocks = -1;
+            SeasonIdleState = "no resident plates";
+            return;
+        }
+
+        SeasonIdleNearestBlocks = (int)Math.Sqrt(seasonIdleScratch[seasonIdleScratchIndex].DistSq);
+        int month = 0;
+        try { month = api.World.Calendar.Month; }
+        catch { /* shutdown */ }
+        int baked = 0;
+        int melted = 0;
+        int skipped = 0;
+        int budget = SeasonIdleSectionsPerTick;
+        while (budget > 0 && seasonIdleScratchIndex < seasonIdleScratch.Count)
+        {
+            long key = seasonIdleScratch[seasonIdleScratchIndex++].Key;
+            if (!World.Sections.TryGetValue(key, out LodSection? section)) continue;
+
+            seasonIdleVisited.Add(key);
+            if (!LodSeasonBake.SectionNeedsIdleSeasonPass(
+                section, SeasonLookToken, month, api.World.Blocks))
+            {
+                skipped++;
+                if (skipped >= SeasonIdleSkipWalkCap) break;
+                continue;
+            }
+
+            int changed = RebakeSeasonPalette(section, key);
+            baked++;
+            section.SeasonLookToken = SeasonLookToken;
+            if (changed > 0)
+            {
+                World.MarkChanged(key);
+                SeasonSectionsRepainted++;
+                SeasonIdleMelted++;
+                melted++;
+                World.RenderDirty.Add(key);
+            }
+            budget--;
+        }
+
+        SeasonIdleState = melted > 0
+            ? $"lap {SeasonIdleLap}, nearest {SeasonIdleNearestBlocks}, pending {SeasonIdlePending}, melted {melted}"
+            : $"lap {SeasonIdleLap}, nearest {SeasonIdleNearestBlocks}, pending {SeasonIdlePending}";
+
+        seasonIdleLogTicks++;
+        if (seasonIdleLogTicks % SeasonProgressLogEveryTicks == 0 || melted > 0 && seasonIdleLogTicks <= 2)
+        {
+            logger.Notification(
+                "[DistantVistas] Season idle: {0}, baked {1}, remesh {2}",
+                SeasonIdleState, baked, World.SeasonForcedRemesh.Count);
+        }
+    }
+
+    void TryEndSeasonEpoch()
+    {
+        if (LodSeasonCatchUp.KeepJoinEpoch(
+            tickCounter, seasonEpochKeepUntilTick, residentDirty: 0, forcedRemesh: 0))
+            return;
+        World.SeasonRepaintEpochActive = false;
+        SeasonCatchUpLevel = -1;
+    }
+
+    bool HasResidentSeasonDirty()
+    {
+        EnsureSeasonDirtyResidentCache();
+        return seasonDirtyHasResident;
+    }
+
+    bool SeasonDirtyHasResidentAtLevel(int level)
+    {
+        EnsureSeasonDirtyResidentCache();
+        if ((uint)level < 3) return seasonDirtyLevelResident[level];
+        foreach (long key in World.SeasonDirty)
+        {
+            if (LodWorld.KeyLevel(key) != level) continue;
+            if (World.Sections.ContainsKey(key)) return true;
+        }
+        return false;
+    }
+
+    void EnsureSeasonDirtyResidentCache()
+    {
+        int stamp = World.SeasonDirty.Count
+            ^ (World.Sections.Count * 397)
+            ^ (Environment.TickCount & ~0x3F);
+        if (stamp == seasonDirtyResidentFrame) return;
+        seasonDirtyResidentFrame = stamp;
+        seasonDirtyHasResident = false;
+        seasonDirtyLevelResident[0] = false;
+        seasonDirtyLevelResident[1] = false;
+        seasonDirtyLevelResident[2] = false;
+        foreach (long key in World.SeasonDirty)
+        {
+            if (!World.Sections.ContainsKey(key)) continue;
+            seasonDirtyHasResident = true;
+            int lvl = LodWorld.KeyLevel(key);
+            if ((uint)lvl < 3) seasonDirtyLevelResident[lvl] = true;
+            if (seasonDirtyLevelResident[0] && seasonDirtyLevelResident[1] && seasonDirtyLevelResident[2])
+                break;
+        }
+    }
+
+    /// <summary>
+    /// Prefer the live player once they are actually in the world. Before that
+    /// (or when Pos is still the 0,0 startup trap on mid-map worlds), use spawn.
+    /// </summary>
+    void ResolveSeasonAnchor(out double px, out double pz)
+    {
+        var spawn = api.World.DefaultSpawnPosition;
+        px = spawn.X;
+        pz = spawn.Z;
+
+        if (api.World is not Vintagestory.API.Client.IClientWorldAccessor cworld) return;
+        var entity = cworld.Player?.Entity;
+        if (entity == null) return;
+
+        double ex = entity.Pos.X;
+        double ez = entity.Pos.Z;
+        bool nearOrigin = Math.Abs(ex) < 32 && Math.Abs(ez) < 32;
+        bool spawnFar = Math.Abs(spawn.X) > 256 || Math.Abs(spawn.Z) > 256;
+        if (nearOrigin && spawnFar) return; // still on the 0,0 trap — keep spawn
+
+        px = ex;
+        pz = ez;
+    }
+
+    void ProcessDeciduousLeafRefresh()
+    {
+        if (!DeciduousLeafCompat.Present || deciduousRefresh.Count == 0) return;
+        if (LastFrameWasHitch) return;
+
+        int budget = PlayerBusy ? 1 : DeciduousStripSectionsPerTick;
+        deciduousRefreshDone.Clear();
+        foreach (long key in deciduousRefresh)
+        {
+            if (budget <= 0) break;
+            if (LodWorld.KeyLevel(key) != 0)
+            {
+                deciduousRefreshDone.Add(key);
+                continue;
+            }
+            if (!World.EnsureResident(key)) continue;
+            if (!World.Sections.TryGetValue(key, out LodSection? section))
+            {
+                deciduousRefreshDone.Add(key);
+                continue;
+            }
+
+            if (!DeciduousLeafCompat.SectionHasLeafPalette(section, api.World))
+            {
+                deciduousRefreshDone.Add(key);
+                continue;
+            }
+
+            bool stripped = StripCollapsedDeciduousLeaves(key, section);
+            ForceQueueSectionChunks(key);
+            if (stripped)
+            {
+                World.MarkChanged(key);
+                World.RenderDirty.Add(key);
+            }
+            deciduousRefreshDone.Add(key);
+            budget--;
+        }
+
+        foreach (long key in deciduousRefreshDone) deciduousRefresh.Remove(key);
+    }
+
+    /// <summary>
+    /// Drop Collapse leaf runs from a resident section. Wood and Fan branchy leaves stay.
+    /// </summary>
+    bool StripCollapsedDeciduousLeaves(long sectionKey, LodSection section)
+    {
+        int total = LodSection.GridSize * LodSection.GridSize;
+        var nextRuns = new ulong[section.Runs.Length];
+        var nextStart = new int[total + 1];
+        int offset = 0;
+        bool changed = false;
+
+        for (int col = 0; col < total; col++)
+        {
+            nextStart[col] = offset;
+            int from = section.ColumnStart[col], to = section.ColumnStart[col + 1];
+            for (int r = from; r < to; r++)
+            {
+                ulong run = section.Runs[r];
+                int pid = LodSection.RunPaletteId(run);
+                if ((uint)pid >= (uint)section.Palette.Count)
+                {
+                    nextRuns[offset++] = run;
+                    continue;
+                }
+
+                int blockId = section.Palette[pid].BlockId;
+                if ((uint)blockId >= (uint)api.World.Blocks.Count)
+                {
+                    nextRuns[offset++] = run;
+                    continue;
+                }
+
+                Block block = api.World.Blocks[blockId];
+                (int x, int y, int z) = CaptureBlockPos(sectionKey, col, run);
+                paletteSamplePos.Set(x, y, z);
+                if (DeciduousLeafCompat.ShouldOmitLeafRun(block, paletteSamplePos))
+                {
+                    changed = true;
+                    continue;
+                }
+
+                nextRuns[offset++] = run;
+            }
+        }
+        nextStart[total] = offset;
+        if (!changed) return false;
+
+        Array.Resize(ref nextRuns, offset);
+        section.Runs = nextRuns;
+        section.ColumnStart = nextStart;
+        return true;
+    }
+
+    /// <summary>
+    /// Re-capture nearest resident L0 (no distance ring). A 256-block band left far
+    /// snow on summer cache after login and /time.
+    /// </summary>
+    public void ForceRecaptureResidentL0(string reason)
+    {
+        ResolveSeasonAnchor(out double px, out double pz);
+        ForceRecaptureResidentL0(reason, px, pz);
+    }
+
+    public void ForceRecaptureResidentL0(string reason, double px, double pz)
+    {
+        if (!Active) return;
+        var visited = new HashSet<long>();
+        var scratch = new List<(long Key, double DistSq)>();
+        LodSeasonIdleOrder.FillNearestCapped(
+            scratch, World.Sections.Keys, visited, px, pz,
+            LodFrameBudget.ScratchCap, maxDistBlocks: 0,
+            static key => LodWorld.KeyLevel(key) == 0);
+        int queued = 0;
+        for (int i = 0; i < scratch.Count; i++)
+        {
+            int before = pendingColumns.Count;
+            ForceQueueSectionChunks(scratch[i].Key);
+            queued += Math.Max(0, pendingColumns.Count - before);
+        }
+        if (queued > 0)
+            api.Logger.Notification(
+                "[DistantVistas] Force-recapture resident L0 ({0}): {1} column(s) queued",
+                reason, queued);
+    }
+
+    void ForceQueueSectionChunks(long sectionKey)
+    {
+        int sb = LodSection.SectionBlocks;
+        int chunksPerEdge = sb / ChunkSize;
+        if (chunksPerEdge < 1) chunksPerEdge = 1;
+        int sx = LodWorld.KeySx(sectionKey);
+        int sz = LodWorld.KeySz(sectionKey);
+        for (int dz = 0; dz < chunksPerEdge; dz++)
+        {
+            for (int dx = 0; dx < chunksPerEdge; dx++)
+                ForceQueueColumn(sx * chunksPerEdge + dx, sz * chunksPerEdge + dz);
+        }
     }
 
     // ---- Persistence ----
