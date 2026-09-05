@@ -7,9 +7,10 @@ namespace DistantVistas;
 
 /// <summary>
 /// Login visit-sweep overlay (layout locked):
-/// 1. Full-screen landscape backdrop
-/// 2. Centered arched solid-gold title graphic above the panel
-/// 3. Loading panel with progress % and status below
+/// 1. Opaque full-screen cover (always — even when PNG assets are missing)
+/// 2. Full-screen landscape backdrop when packaged
+/// 3. Centered arched solid-gold title graphic above the panel
+/// 4. Loading panel with progress % and status below
 /// </summary>
 public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
 {
@@ -28,21 +29,21 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     const float TitleMaxWidthPx = 560f;
     const int ArchedTitleW = 560;
     const int ArchedTitleH = 150;
+    static readonly float[] OpaqueCover = { 0.05f, 0.06f, 0.09f, 1f };
     static readonly float[] DarkFill = { 0.06f, 0.08f, 0.11f, 1f };
     static readonly float[] BarTrack = { 0.12f, 0.14f, 0.18f, 1f };
     static readonly float[] BarFill = { 0.28f, 0.55f, 0.82f, 1f };
-    static readonly float[] PanelFill = { 0.10f, 0.12f, 0.16f, 0.92f };
+    static readonly float[] PanelFill = { 0.10f, 0.12f, 0.16f, 0.96f };
     static readonly double[] Gold = { 0.95, 0.84, 0.48, 1.0 };
 
     readonly ICoreClientAPI capi;
     readonly LoadedTexture backdrop;
     readonly LoadedTexture titleImage;
     readonly LoadedTexture titleFallbackTex;
+    readonly LoadedTexture whiteSolid;
     readonly LoadedTexture percentTex;
     readonly LoadedTexture statusTex;
     readonly Vec4f tint = new();
-    readonly CairoFont percentFont;
-    readonly CairoFont statusFont;
 
     bool active;
     bool gfxReady;
@@ -51,7 +52,6 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     float fraction;
     string status = "";
     string percentLabel = "0%";
-    int whiteSubId = -1;
 
     public LodLoginBakeScreenRenderer(ICoreClientAPI capi)
     {
@@ -59,11 +59,15 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         backdrop = new LoadedTexture(capi);
         titleImage = new LoadedTexture(capi);
         titleFallbackTex = new LoadedTexture(capi);
+        whiteSolid = new LoadedTexture(capi);
         percentTex = new LoadedTexture(capi);
         statusTex = new LoadedTexture(capi);
         percentFont = CairoFont.WhiteDetailText().WithFontSize(18);
         statusFont = CairoFont.WhiteSmallText();
     }
+
+    readonly CairoFont percentFont;
+    readonly CairoFont statusFont;
 
     public bool Active
     {
@@ -75,12 +79,12 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
             if (value)
             {
                 gfxReady = false;
-                EnsureGraphicsLoaded();
+                PrepareImmediate();
             }
         }
     }
 
-    public double RenderOrder => 1.03;
+    public double RenderOrder => 2.0;
     public int RenderRange => 9999;
 
     public void SetProgress(float progress, string detail)
@@ -88,6 +92,13 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         fraction = Math.Clamp(progress, 0f, 1f);
         status = detail ?? "";
         percentLabel = $"{(int)Math.Round(fraction * 100)}%";
+        RebuildText();
+    }
+
+    /// <summary>Call as early as LevelFinalize allows so the first painted frame is already opaque.</summary>
+    public void PrepareImmediate()
+    {
+        EnsureGraphicsLoaded();
         RebuildText();
     }
 
@@ -101,6 +112,10 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         float w = rapi.FrameWidth;
         float h = rapi.FrameHeight;
         if (w <= 0 || h <= 0) return;
+
+        // Opaque base — must cover sky/vanilla/LOD even when assets or white tex fail.
+        tint.Set(OpaqueCover[0], OpaqueCover[1], OpaqueCover[2], OpaqueCover[3]);
+        DrawSolid(0, 0, w, h, 198, tint);
 
         DrawBackdrop(w, h);
 
@@ -128,7 +143,8 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
             int titleTexId = !titleMissing && titleImage.TextureId > 0
                 ? titleImage.TextureId
                 : titleFallbackTex.TextureId;
-            rapi.Render2DTexture(titleTexId, titleX, blockTop, titleW, titleH, 204);
+            if (titleTexId > 0)
+                rapi.Render2DTexture(titleTexId, titleX, blockTop, titleW, titleH, 204);
         }
 
         tint.Set(PanelFill[0], PanelFill[1], PanelFill[2], PanelFill[3]);
@@ -155,7 +171,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         if (!backdropMissing && backdrop.TextureId > 0)
         {
             capi.Render.Render2DTexture(backdrop.TextureId, 0, 0, w, h, 200);
-            tint.Set(0.04f, 0.05f, 0.08f, 0.35f);
+            tint.Set(0.04f, 0.05f, 0.08f, 0.45f);
             DrawSolid(0, 0, w, h, 199, tint);
             return;
         }
@@ -166,8 +182,8 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
 
     void DrawSolid(float x, float y, float width, float height, float z, Vec4f color)
     {
-        int subId = WhiteSubId();
-        if (subId < 0) return;
+        int subId = WhiteTextureId();
+        if (subId <= 0) return;
         capi.Render.Render2DTexture(subId, x, y, width, height, z, color);
     }
 
@@ -177,11 +193,26 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         capi.Render.Render2DLoadedTexture(tex, x, y, z);
     }
 
-    int WhiteSubId()
+    int WhiteTextureId()
     {
-        if (whiteSubId >= 0) return whiteSubId;
-        whiteSubId = 0;
-        return whiteSubId;
+        EnsureWhiteSolid();
+        return whiteSolid.TextureId;
+    }
+
+    void EnsureWhiteSolid()
+    {
+        if (whiteSolid.TextureId > 0) return;
+
+        using ImageSurface surface = new(Format.Argb32, 2, 2);
+        using Context ctx = new(surface);
+        ctx.SetSourceRGBA(1, 1, 1, 1);
+        ctx.Rectangle(0, 0, 2, 2);
+        ctx.Fill();
+
+        int texId = capi.Gui.LoadCairoTexture(surface, false);
+        whiteSolid.TextureId = texId;
+        whiteSolid.Width = 2;
+        whiteSolid.Height = 2;
     }
 
     void RebuildText()
@@ -195,6 +226,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     void EnsureGraphicsLoaded()
     {
         if (gfxReady) return;
+        EnsureWhiteSolid();
         LoadedTexture bd = backdrop;
         LoadedTexture ti = titleImage;
         backdropMissing = !TryLoadTexture(capi, BackdropAsset, ref bd);
@@ -281,6 +313,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         backdrop.Dispose();
         titleImage.Dispose();
         titleFallbackTex.Dispose();
+        whiteSolid.Dispose();
         percentTex.Dispose();
         statusTex.Dispose();
         capi.Event.UnregisterRenderer(this, EnumRenderStage.Ortho);

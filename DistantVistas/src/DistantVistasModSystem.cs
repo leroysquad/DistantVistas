@@ -1067,6 +1067,7 @@ public class DistantVistasModSystem : ModSystem
         }
         else
         {
+            loginBakeOverlay!.Show();
             loginBake = new LodLoginBake(
                 capi, pipeline, renderer, loginBakeOverlay!, tints.PlantTintFallback, UntintedForRebake);
             loginBake.Begin();
@@ -1288,6 +1289,7 @@ public class DistantVistasModSystem : ModSystem
         loginBake?.Dispose();
         loginBake = null;
         renderer.LoginBakeComplete = false;
+        renderer.LoginBakeOverlayActive = false;
         assist?.Reset();
         // Belongs to the world being left: the next one is a different savegame with a
         // different sibling cache, and holding this open would keep a file handle on a

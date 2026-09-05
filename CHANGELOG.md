@@ -1,3 +1,9 @@
+## 0.7.98
+- **CRITICAL: login sweep overlay + flicker fixes.** Screen renderer now paints an **opaque full-screen base every frame** (real Cairo white texture — no broken `TextureId=0` solids), raises ortho `RenderOrder` to 2.0, and prepares graphics immediately on show. LOD terrain draw is **suppressed** while the overlay is active so teleports cannot flash sky/terrain through.
+- **Targeted incomplete revisit.** When the miss audit finds gaps (e.g. 192 of 10,208), the sweep queues **only those keys** — not the entire visited canvas. Full revisit remains for clean-audit **season refresh** outside the window.
+- **Sweep throttle.** Short settle windows after each teleport and bake reduce chunk/LOD thrash between stops.
+- **Unchanged:** skip-if-complete within season/30-day window, Esc cancel/resume, `LodLoginBakeInputLock` crash fix.
+
 ## 0.7.97
 - **Dense season samples per L0 stop (schema v2).** Each visit stop now writes a `stop` header (section bounds, chunk columns, quadrant coverage, provisional flags, snow vote) plus **4096 `column` rows** — one per cell in the 64×64 grid, including uncaptured gaps with coverage flags. Captured columns add block ids/codes/domain/path, RGB, palette flags, run geometry, subsurface block, canopy, snow stack, climate, and calendar fields.
 - **Skip / resume / crash fix unchanged (0.7.96–0.7.95).** Complete canvas within season/30-day window skips the overlay; Esc cancel/resume; `LodLoginBakeInputLock` crash fix retained.

@@ -167,6 +167,9 @@ public class LodTerrainRenderer : IRenderer
     /// <summary>Login bake finished: visited land keeps baked colours until relog.</summary>
     public bool LoginBakeComplete { get; set; }
 
+    /// <summary>Login visit sweep overlay is up — skip LOD draws so teleports cannot flash sky/terrain through.</summary>
+    public bool LoginBakeOverlayActive { get; set; }
+
     // Climate tints: sampled on a lattice one slot per frame so the field mean
     // is not one hashed row. Season is NOT in this table - that is a live
     // shader clock (seasonRel / seasonTints) uploaded every draw, same idea as
@@ -2485,6 +2488,8 @@ public class LodTerrainRenderer : IRenderer
 
     public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
     {
+        if (LoginBakeOverlayActive) return;
+
         if (frameCounter == 0)
         {
             LodMemoryBudget.Probe();

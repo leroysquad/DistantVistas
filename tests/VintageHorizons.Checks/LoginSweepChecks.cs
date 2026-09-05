@@ -59,6 +59,17 @@ public static class LoginSweepChecks
         c.Eq(LodLoginSweepPlanMode.RevisitVisited, plan.Mode, "visited canvas uses revisit mode");
         c.Eq("Revisiting visited land", plan.ModeLabel, "revisit mode label");
         c.Eq(2, plan.Keys.Count, "revisit plan includes every visited L0 key");
+
+        long bad = LodWorld.SectionKey(0, 2, 3);
+        var misses = new List<LodLoginBakeAudit.Miss>
+        {
+            new(bad, LodLoginBakeAudit.MissReason.EmptyCapture),
+            new(bad, LodLoginBakeAudit.MissReason.BakeIncomplete),
+        };
+        var targeted = LodLoginSweepBootstrap.PlanIncomplete(misses);
+        c.Eq(LodLoginSweepPlanMode.RevisitIncomplete, targeted.Mode, "incomplete plan mode");
+        c.Eq(1, targeted.Keys.Count, "incomplete plan dedupes keys");
+        c.True(targeted.ModeLabel.Contains("incomplete"), "incomplete plan label");
     }
 
     static void BackdropHook(Check c)
@@ -151,8 +162,24 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeOverlay.cs"));
         c.True(!overlay.Contains(": GuiDialog"),
             "login overlay coordinator is not a fragile GuiDialog");
+        c.True(overlay.Contains("PrepareImmediate"),
+            "login overlay prepares graphics immediately on show");
         c.True(overlay.Contains("LodLoginBakeInputGuard"),
             "login overlay uses deferred input guard");
+
+        string screen = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeScreenRenderer.cs"));
+        c.True(screen.Contains("OpaqueCover"),
+            "screen renderer paints opaque base every frame");
+        c.True(screen.Contains("EnsureWhiteSolid"),
+            "screen renderer uses real white texture for solids");
+        c.True(screen.Contains("RenderOrder => 2.0"),
+            "screen renderer draws above other ortho layers");
+
+        string renderer = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodTerrainRenderer.cs"));
+        c.True(renderer.Contains("LoginBakeOverlayActive"),
+            "terrain renderer skips draw while login overlay active");
 
         string guard = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeInputGuard.cs"));
@@ -172,6 +199,16 @@ public static class LoginSweepChecks
             "login bake does not use /tp");
         c.True(bake.Contains("LodLoginBakeInputLock.Apply"),
             "login bake blocks input via safe action list");
+        c.True(bake.Contains("PlanSweepQueue"),
+            "login bake plans targeted incomplete queue");
+        c.True(bake.Contains("PlanIncomplete"),
+            "login bake uses incomplete-only plan when audit has misses");
+        c.True(bake.Contains("LoginBakeOverlayActive"),
+            "login bake suppresses LOD draws behind overlay");
+        c.True(bake.Contains("TeleportSettle"),
+            "login bake settles after each teleport");
+        c.True(bake.Contains("BakeSettle"),
+            "login bake settles after each bake");
         c.True(bake.Contains("LodLoginBakePlayerMove.ApplyQuiet"),
             "login bake uses quiet client entity moves");
         c.True(bake.Contains("LodLoginBakePlayerMove.ApplyQuietFrom"),

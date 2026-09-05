@@ -21,7 +21,10 @@ public sealed class LodLoginBake
 {
     public enum Phase { WaitingForWorld, Sweeping, Auditing, Draining, Stabilizing, Done }
 
-    enum StopPhase { Teleport, WaitChunks, Capture, Bake, Done }
+    enum StopPhase { Teleport, TeleportSettle, WaitChunks, Capture, Bake, BakeSettle, Done }
+
+    const int TeleportSettleTicks = 5;
+    const int BakeSettleTicks = 8;
 
     const int StabilizeWindowFrames = 90;
     const int StabilizeWindowsRequired = 4;
@@ -136,6 +139,10 @@ public sealed class LodLoginBake
     {
         pending.Clear();
         completedKeys.Clear();
+
+        overlay.Show();
+        renderer.LoginBakeOverlayActive = true;
+
         LodLoginSweepResume? resume = LodLoginSweepResume.TryLoad(capi);
         if (resume != null && resume.IsEligible(capi.World))
         {
@@ -152,12 +159,7 @@ public sealed class LodLoginBake
                     "[DistantVistas] Saved login sweep expired (season/day limit) — planning a fresh sweep.");
             }
 
-            LodLoginSweepPlan plan = LodLoginSweepBootstrap.Plan(pipeline.World, capi.World);
-            sweepMode = plan.Mode;
-            sweepModeLabel = plan.ModeLabel;
-            foreach (long key in plan.Keys)
-                pending.Enqueue(key);
-            total = pending.Count;
+            PlanSweepQueue();
         }
 
         sweepTiming.Begin();
@@ -174,7 +176,6 @@ public sealed class LodLoginBake
         stabilizeWindow.Clear();
         windowMedians.Clear();
 
-        overlay.Show();
         pipeline.DeferLegacyHeal = true;
         audioMute.EnsureMuted();
         timeFreeze.EnsureFrozen();
@@ -204,6 +205,47 @@ public sealed class LodLoginBake
             BeginAuditing();
             return;
         }
+    }
+
+    void PlanSweepQueue()
+    {
+        LodWorld world = pipeline.World;
+        int visitedCount = LodLoginSweep.VisitedL0Keys(world).Count();
+        List<LodLoginBakeAudit.Miss> misses = LodLoginBakeAudit.FindMisses(
+            world, pipeline, capi.World.Blocks, plantTintFallback, untintedOf);
+
+        if (misses.Count > 0)
+        {
+            LodLoginSweepPlan plan = LodLoginSweepBootstrap.PlanIncomplete(misses);
+            sweepMode = plan.Mode;
+            sweepModeLabel = plan.ModeLabel;
+            foreach (long key in plan.Keys)
+                pending.Enqueue(key);
+            total = pending.Count;
+            capi.Logger.Notification(
+                "[DistantVistas] Login visit sweep: {0} ({1} visited in cache).",
+                sweepModeLabel, visitedCount);
+            return;
+        }
+
+        if (visitedCount > 0)
+        {
+            List<long> visited = LodLoginSweep.VisitedL0Keys(world).ToList();
+            visited.Sort();
+            sweepMode = LodLoginSweepPlanMode.RevisitVisited;
+            sweepModeLabel = "Refreshing visited land (season)";
+            foreach (long key in visited)
+                pending.Enqueue(key);
+            total = visited.Count;
+            return;
+        }
+
+        LodLoginSweepPlan bootstrap = LodLoginSweepBootstrap.Plan(world, capi.World);
+        sweepMode = bootstrap.Mode;
+        sweepModeLabel = bootstrap.ModeLabel;
+        foreach (long key in bootstrap.Keys)
+            pending.Enqueue(key);
+        total = pending.Count;
     }
 
     public void Tick(float dt)
@@ -272,6 +314,15 @@ public sealed class LodLoginBake
         switch (stopPhase)
         {
             case StopPhase.Teleport:
+                stopPhase = StopPhase.TeleportSettle;
+                stopTicks = 0;
+                break;
+
+            case StopPhase.TeleportSettle:
+                stopTicks++;
+                overlay.UpdateProgress(Progress,
+                    StatusWithEta($"{VisitPrefix()}settling after move… ({stopTicks}/{TeleportSettleTicks})"));
+                if (stopTicks < TeleportSettleTicks) return;
                 stopPhase = StopPhase.WaitChunks;
                 stopTicks = 0;
                 break;
@@ -309,6 +360,15 @@ public sealed class LodLoginBake
                 completedKeys.Add(key);
                 SaveResumeSnapshot();
                 sweepTiming.NoteFinished(finished);
+                stopPhase = StopPhase.BakeSettle;
+                stopTicks = 0;
+                overlay.UpdateProgress(Progress,
+                    StatusWithEta($"{VisitPrefix()}{Pct(finished, total)} — settling…"));
+                break;
+
+            case StopPhase.BakeSettle:
+                stopTicks++;
+                if (stopTicks < BakeSettleTicks) return;
                 stopPhase = StopPhase.Done;
                 currentKey = null;
                 overlay.UpdateProgress(Progress,
@@ -513,6 +573,7 @@ public sealed class LodLoginBake
         released = true;
         phase = Phase.Done;
         pipeline.DeferLegacyHeal = false;
+        renderer.LoginBakeOverlayActive = false;
 
         if (success)
         {

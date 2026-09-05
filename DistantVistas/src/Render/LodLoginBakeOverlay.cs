@@ -29,6 +29,7 @@ public sealed class LodLoginBakeOverlay : IDisposable
     public void Show()
     {
         screen.Active = true;
+        screen.PrepareImmediate();
         screen.SetProgress(0f, "Starting…");
         inputGuard.RequestShow();
     }

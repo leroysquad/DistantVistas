@@ -8,8 +8,11 @@ namespace DistantVistas;
 
 public enum LodLoginSweepPlanMode
 {
-    /// <summary>Canvas already has visited L0 keys — sweep all of them.</summary>
+    /// <summary>Canvas already has visited L0 keys — sweep all of them (season refresh).</summary>
     RevisitVisited,
+
+    /// <summary>Only L0 keys that failed the miss audit — not the whole visited canvas.</summary>
+    RevisitIncomplete,
 
     /// <summary>Empty canvas with a large ocean near spawn — ocean body + coastline.</summary>
     BootstrapCoastGuard,
@@ -71,6 +74,26 @@ public static class LodLoginSweepBootstrap
         }
 
         return PlanEmptyCanvas(clientWorld);
+    }
+
+    /// <summary>
+    /// Target only keys that still need capture/bake — never the full visited canvas when
+    /// a handful of regions are incomplete.
+    /// </summary>
+    public static LodLoginSweepPlan PlanIncomplete(IReadOnlyList<LodLoginBakeAudit.Miss> misses)
+    {
+        var keys = new List<long>(misses.Count);
+        var seen = new HashSet<long>();
+        foreach (LodLoginBakeAudit.Miss miss in misses)
+        {
+            if (!seen.Add(miss.Key)) continue;
+            keys.Add(miss.Key);
+        }
+        keys.Sort();
+        string label = keys.Count == 1
+            ? "Repairing 1 incomplete region"
+            : $"Repairing {keys.Count} incomplete regions";
+        return new LodLoginSweepPlan(LodLoginSweepPlanMode.RevisitIncomplete, keys, label);
     }
 
     public static IEnumerable<long> PlanKeys(
