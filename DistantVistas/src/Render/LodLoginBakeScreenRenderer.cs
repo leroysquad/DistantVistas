@@ -6,16 +6,17 @@ using Vintagestory.API.MathTools;
 namespace DistantVistas;
 
 /// <summary>
-/// Full-viewport ortho overlay that paints every frame above the 3D world. GuiDialog alone
-/// is unreliable for hiding teleports; this cannot be skipped by the GUI composer.
+/// Login visit-sweep overlay (layout locked):
+/// 1. Full-screen landscape backdrop
+/// 2. Centered arched solid-gold title graphic above the panel
+/// 3. Loading panel with progress % and status below
 /// </summary>
 public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
 {
-    /// <summary>Landscape backdrop stretched to the viewport (solid dark fill when missing).</summary>
     public static readonly AssetLocation BackdropAsset =
         new("distantvistas", "textures/gui/login-backdrop.png");
 
-    /// <summary>Rainbow-arched "Distant Vistas" title above the loading panel.</summary>
+    /// <summary>Arched title: rainbow shape, single solid gold — not multicolor lettering.</summary>
     public static readonly AssetLocation TitleAsset =
         new("distantvistas", "textures/gui/login-title-rainbow.png");
 
@@ -31,15 +32,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     static readonly float[] BarTrack = { 0.12f, 0.14f, 0.18f, 1f };
     static readonly float[] BarFill = { 0.28f, 0.55f, 0.82f, 1f };
     static readonly float[] PanelFill = { 0.10f, 0.12f, 0.16f, 0.92f };
-    static readonly double[][] Rainbow =
-    {
-        new[] { 1.00, 0.22, 0.22, 1.0 },
-        new[] { 1.00, 0.52, 0.12, 1.0 },
-        new[] { 1.00, 0.88, 0.18, 1.0 },
-        new[] { 0.22, 0.86, 0.38, 1.0 },
-        new[] { 0.28, 0.58, 1.00, 1.0 },
-        new[] { 0.62, 0.28, 0.95, 1.0 },
-    };
+    static readonly double[] Gold = { 0.95, 0.84, 0.48, 1.0 };
 
     readonly ICoreClientAPI capi;
     readonly LoadedTexture backdrop;
@@ -132,10 +125,10 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         if (titleH > 0)
         {
             float titleX = (w - titleW) * 0.5f;
-            if (!titleMissing && titleImage.TextureId > 0)
-                rapi.Render2DTexture(titleImage.TextureId, titleX, blockTop, titleW, titleH, 204);
-            else
-                rapi.Render2DTexture(titleFallbackTex.TextureId, titleX, blockTop, titleW, titleH, 204);
+            int titleTexId = !titleMissing && titleImage.TextureId > 0
+                ? titleImage.TextureId
+                : titleFallbackTex.TextureId;
+            rapi.Render2DTexture(titleTexId, titleX, blockTop, titleW, titleH, 204);
         }
 
         tint.Set(PanelFill[0], PanelFill[1], PanelFill[2], PanelFill[3]);
@@ -153,9 +146,8 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
             DrawSolid(panelX + pad, barY, barW * fraction, barH, 207, tint);
         }
 
-        float textX = panelX + pad;
         DrawText(percentTex, panelX + PanelW - pad - percentTex.Width, panelY + 14f, 208);
-        DrawText(statusTex, textX, panelY + 84f, 209);
+        DrawText(statusTex, panelX + pad, panelY + 84f, 209);
     }
 
     void DrawBackdrop(float w, float h)
@@ -163,7 +155,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         if (!backdropMissing && backdrop.TextureId > 0)
         {
             capi.Render.Render2DTexture(backdrop.TextureId, 0, 0, w, h, 200);
-            tint.Set(0.04f, 0.05f, 0.08f, 0.45f);
+            tint.Set(0.04f, 0.05f, 0.08f, 0.35f);
             DrawSolid(0, 0, w, h, 199, tint);
             return;
         }
@@ -204,15 +196,13 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         backdropMissing = !TryLoadTexture(capi, BackdropAsset, ref backdrop);
         titleMissing = !TryLoadTexture(capi, TitleAsset, ref titleImage);
         if (titleMissing)
-            BuildArchedRainbowTitle();
+            BuildArchedGoldTitleFallback();
         gfxReady = true;
         RebuildText();
     }
 
-    /// <summary>
-    /// Fallback when <see cref="TitleAsset"/> is absent: rainbow-colored glyphs on a rainbow arc.
-    /// </summary>
-    void BuildArchedRainbowTitle()
+    /// <summary>Dev fallback only — shipped builds should package <see cref="TitleAsset"/>.</summary>
+    void BuildArchedGoldTitleFallback()
     {
         titleFallbackTex.Dispose();
 
@@ -228,16 +218,11 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         double cx = ArchedTitleW * 0.5;
         double cy = ArchedTitleH * 0.82;
         double radius = ArchedTitleW * 0.40;
-        int colorIdx = 0;
 
         for (int i = 0; i < TitleText.Length; i++)
         {
             char c = TitleText[i];
-            if (c == ' ')
-            {
-                colorIdx++;
-                continue;
-            }
+            if (c == ' ') continue;
 
             double t = i / (TitleText.Length - 1.0);
             double angle = Math.PI * (1.0 - t);
@@ -251,19 +236,17 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
             ctx.Translate(x, y);
             ctx.Rotate(rot);
 
-            double[] shade = Rainbow[colorIdx % Rainbow.Length];
-            ctx.SetSourceRGBA(0, 0, 0, 0.55);
+            ctx.SetSourceRGBA(0, 0, 0, 0.5);
             ctx.MoveTo(-extents.XBearing - extents.Width * 0.5 + 1.5, -extents.YBearing + extents.Height * 0.5 + 1.5);
             ctx.TextPath(glyph);
             ctx.Fill();
 
-            ctx.SetSourceRGBA(shade[0], shade[1], shade[2], shade[3]);
+            ctx.SetSourceRGBA(Gold[0], Gold[1], Gold[2], Gold[3]);
             ctx.MoveTo(-extents.XBearing - extents.Width * 0.5, -extents.YBearing + extents.Height * 0.5);
             ctx.TextPath(glyph);
             ctx.Fill();
 
             ctx.Restore();
-            colorIdx++;
         }
 
         int texId = capi.Gui.LoadCairoTexture(surface, true);

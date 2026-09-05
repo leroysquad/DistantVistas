@@ -19,6 +19,7 @@ public static class StaticAssetChecks
         NoCameraLockedNearDiscard(c);
         FarseerOverlay(c);
         NoFakeOptionalDependencies(c);
+        LoginOverlayAssets(c);
     }
 
     /// <summary>
@@ -269,5 +270,18 @@ public static class StaticAssetChecks
             "modinfo does not lie about optionaldependencies (VS has no such field)");
         c.False(json.Contains("\"farseer\":"),
             "modinfo does not require Farseer (companion only)");
+    }
+
+    /// <summary>
+    /// Login visit-sweep overlay ships both GUI textures in the mod zip.
+    /// </summary>
+    static void LoginOverlayAssets(Check c)
+    {
+        string gui = Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "assets", "distantvistas", "textures", "gui");
+        c.True(File.Exists(Path.Combine(gui, "login-backdrop.png")),
+            "login backdrop is packaged at assets/distantvistas/textures/gui/login-backdrop.png");
+        c.True(File.Exists(Path.Combine(gui, "login-title-rainbow.png")),
+            "login title is packaged at assets/distantvistas/textures/gui/login-title-rainbow.png");
     }
 }
