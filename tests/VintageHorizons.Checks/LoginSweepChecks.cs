@@ -15,6 +15,7 @@ public static class LoginSweepChecks
         TimeFreezeKey(c);
         TeardownHook(c);
         AuditMisses(c);
+        VisitPriority(c);
         OverlayGuard(c);
         QuietTeleports(c);
         SeasonSampleExport(c);
@@ -246,6 +247,41 @@ public static class LoginSweepChecks
         c.Eq(LodLoginBakeAudit.MissReason.EmptyCapture,
             LodLoginBakeAudit.Classify(world, null!, key, blocks, null, untinted),
             "zero captured columns is a miss");
+
+        long thinKey = LodWorld.SectionKey(0, 3, 4);
+        world.InstallStoredKey(0, 3, 4, applyToParent: false, provisional: false);
+        var thin = new LodSection();
+        thin.CapturedColumns = LodSection.GridSize * LodSection.GridSize / 2;
+        world.Sections[thinKey] = thin;
+        c.Eq(LodLoginBakeAudit.MissReason.ThinCapture,
+            LodLoginBakeAudit.Classify(world, null!, thinKey, blocks, null, untinted),
+            "partial capture is a miss");
+
+        long missing = LodWorld.SectionKey(0, 5, 6);
+        c.Eq(LodLoginBakeAudit.MissReason.MissingSection,
+            LodLoginBakeAudit.Classify(world, null!, missing, blocks, null, untinted),
+            "missing section is a miss");
+        c.False(LodLoginBakeAudit.IsVisitComplete(world, null!, missing, blocks, null, untinted),
+            "missing section needs visit");
+    }
+
+    static void VisitPriority(Check c)
+    {
+        string bootstrap = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepBootstrap.cs"));
+        c.True(bootstrap.Contains("FilterNeedsVisit"),
+            "bootstrap filters already-baked L0 cells");
+        c.True(bootstrap.Contains("LogSkipComplete"),
+            "bootstrap logs skipped baked cells");
+        c.True(bootstrap.Contains("PartitionVisitKeys"),
+            "revisit partitions incomplete vs complete keys");
+
+        string audit = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeAudit.cs"));
+        c.True(audit.Contains("IsVisitComplete"),
+            "audit exposes visit-complete check");
+        c.True(audit.Contains("ThinCapture"),
+            "audit treats thin capture as incomplete");
     }
 
     static void OverlayGuard(Check c)
@@ -541,6 +577,8 @@ public static class LoginSweepChecks
             "bootstrap full-visits land and coastline ocean");
         c.True(bootstrap.Contains("PickOceanSampleCells"),
             "bootstrap picks representative open-ocean samples");
+        c.True(bootstrap.Contains("FilterNeedsVisit"),
+            "bootstrap skips cells already baked in cache");
         c.True(bootstrap.Contains("OpenOceanMaxSamples"),
             "bootstrap caps ocean sample visits");
         c.True(bootstrap.Contains("open-ocean L0 cells"),

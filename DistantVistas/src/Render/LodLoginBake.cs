@@ -368,8 +368,7 @@ public sealed class LodLoginBake
         // vistas beyond it as sky (0.8.26).
         if (LodLoginSweepComplete.TryLoad(capi) == null)
         {
-            ApplyBootstrapPlan(LodLoginSweepBootstrap.PlanBootstrap(capi.World, capi), visitedCount,
-                "first sweep → bootstrap");
+            ApplyBootstrapPlan(PlanBootstrap(), visitedCount, "first sweep → bootstrap");
             return;
         }
 
@@ -395,7 +394,7 @@ public sealed class LodLoginBake
         if (visitedCount > 0)
         {
             LodLoginSweepPlan plan = LodLoginSweepBootstrap.PlanRevisitVisited(
-                world, capi.World, capi);
+                world, capi.World, pipeline, capi.World.Blocks, plantTintFallback, untintedOf, capi);
             sweepMode = plan.Mode;
             sweepModeLabel = plan.ModeLabel;
             oceanSampleKeys.Clear();
@@ -406,9 +405,12 @@ public sealed class LodLoginBake
             return;
         }
 
-        ApplyBootstrapPlan(LodLoginSweepBootstrap.PlanBootstrap(capi.World, capi), visitedCount,
-            "empty cache fallback");
+        ApplyBootstrapPlan(PlanBootstrap(), visitedCount, "empty cache fallback");
     }
+
+    LodLoginSweepPlan PlanBootstrap() =>
+        LodLoginSweepBootstrap.PlanBootstrap(
+            pipeline.World, capi.World, pipeline, capi.World.Blocks, plantTintFallback, untintedOf, capi);
 
     void ApplyBootstrapPlan(LodLoginSweepPlan plan, int visitedCount, string reason)
     {
@@ -632,7 +634,7 @@ public sealed class LodLoginBake
             and not LodLoginSweepPlanMode.BootstrapRadius)
             return;
 
-        LodLoginSweepPlan plan = LodLoginSweepBootstrap.PlanBootstrap(capi.World, capi);
+        LodLoginSweepPlan plan = PlanBootstrap();
         oceanSampleKeys.Clear();
         oceanSampleKeys.AddRange(plan.OceanSampleKeys);
         openOceanFillKeys.Clear();

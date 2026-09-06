@@ -91,69 +91,120 @@ public static class LodLoginSweepBootstrap
     public static LodLoginSweepPlan Plan(
         LodWorld world,
         IClientWorldAccessor clientWorld,
+        LodPipeline pipeline,
+        IList<Block> blocks,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
         ICoreClientAPI? capi = null) =>
-        Plan(world, clientWorld, capi, RevisitMaxVisitStops);
+        Plan(world, clientWorld, pipeline, blocks, plantTintFallback, untintedOf, capi, RevisitMaxVisitStops);
 
     /// <summary>
     /// Plans a season revisit for an existing visited canvas, applying the visit-stop budget.
-    /// Call only when a prior successful complete marker exists for this world.
+    /// Incomplete keys are visited first; remaining budget may season-refresh complete cells.
     /// </summary>
     public static LodLoginSweepPlan PlanRevisitVisited(
         LodWorld world,
         IClientWorldAccessor clientWorld,
+        LodPipeline pipeline,
+        IList<Block> blocks,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
         ICoreClientAPI? capi = null) =>
-        Plan(world, clientWorld, capi, RevisitMaxVisitStops);
+        Plan(world, clientWorld, pipeline, blocks, plantTintFallback, untintedOf, capi, RevisitMaxVisitStops);
 
     /// <summary>
     /// First-sweep / empty-canvas plan: coast-guard or ~6 km spawn-radius disk, spatially
-    /// subsampled to <see cref="BootstrapMaxVisitStops"/>. Use whenever no successful
-    /// per-world complete marker exists — even if VisitedL0Keys is already non-empty.
+    /// subsampled to <see cref="BootstrapMaxVisitStops"/>. Skips L0 cells already fully
+    /// baked in the per-world cache; ocean sample/stamp rules unchanged.
     /// </summary>
     public static LodLoginSweepPlan PlanBootstrap(
+        LodWorld world,
         IClientWorldAccessor clientWorld,
+        LodPipeline pipeline,
+        IList<Block> blocks,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
         ICoreClientAPI? capi = null) =>
-        PlanEmptyCanvas(clientWorld, capi);
+        PlanEmptyCanvas(world, clientWorld, pipeline, blocks, plantTintFallback, untintedOf, capi);
 
     static LodLoginSweepPlan Plan(
         LodWorld world,
         IClientWorldAccessor clientWorld,
+        LodPipeline pipeline,
+        IList<Block> blocks,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
         ICoreClientAPI? capi,
         int maxVisitStops)
     {
         // No successful complete for this world → bootstrap the spawn disk so vistas expand.
         // Do not season-refresh a tiny walked set (PlanRevisitKeys) on first login.
         if (capi != null && LodLoginSweepComplete.TryLoad(capi) == null)
-            return PlanEmptyCanvas(clientWorld, capi);
+            return PlanEmptyCanvas(world, clientWorld, pipeline, blocks, plantTintFallback, untintedOf, capi);
 
         List<long> visited = LodLoginSweep.VisitedL0Keys(world).ToList();
         if (visited.Count > 0)
-            return PlanRevisitKeys(world, clientWorld, capi, visited, maxVisitStops);
+            return PlanRevisitKeys(world, clientWorld, pipeline, blocks, plantTintFallback, untintedOf,
+                capi, visited, maxVisitStops);
 
-        return PlanEmptyCanvas(clientWorld, capi);
+        return PlanEmptyCanvas(world, clientWorld, pipeline, blocks, plantTintFallback, untintedOf, capi);
     }
 
     internal static LodLoginSweepPlan PlanRevisitKeys(
         LodWorld world,
         IClientWorldAccessor clientWorld,
+        LodPipeline pipeline,
+        IList<Block> blocks,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
         ICoreClientAPI? capi,
         List<long> visited,
         int maxVisitStops)
     {
         visited.Sort();
-        int planned = visited.Count;
+        int visitedTotal = visited.Count;
         EntityPos pos = clientWorld.Player.Entity.Pos;
         int footprint = LodSection.SectionBlocks;
         int centerSx = (int)Math.Floor(pos.X / footprint);
         int centerSz = (int)Math.Floor(pos.Z / footprint);
 
-        if (planned > maxVisitStops)
+        LodLoginBakeAudit.PartitionVisitKeys(
+            visited, world, pipeline, blocks, plantTintFallback, untintedOf,
+            out List<long> needsVisit, out List<long> complete);
+
+        int gapCount = needsVisit.Count;
+        if (complete.Count > 0)
+            LogSkipComplete(capi, complete.Count, visitedTotal, "Revisit");
+
+        List<long> planned = new List<long>(needsVisit);
+        bool seasonRefresh = false;
+        if (planned.Count < maxVisitStops && complete.Count > 0)
         {
-            visited = BudgetVisitStops(visited, centerSx, centerSz, maxVisitStops);
-            LogBudget(capi, planned, visited.Count, "Revisit");
+            int refreshSlots = maxVisitStops - planned.Count;
+            List<long> refresh = BudgetVisitStops(complete, centerSx, centerSz, refreshSlots);
+            if (refresh.Count > 0)
+            {
+                planned.AddRange(refresh);
+                seasonRefresh = true;
+            }
         }
 
-        string label = LabelForBudgetedRevisit(planned, visited.Count);
-        return new LodLoginSweepPlan(LodLoginSweepPlanMode.RevisitVisited, visited, label);
+        if (planned.Count > maxVisitStops)
+        {
+            if (needsVisit.Count >= maxVisitStops)
+                planned = BudgetVisitStops(needsVisit, centerSx, centerSz, maxVisitStops);
+            else
+            {
+                planned = new List<long>(needsVisit);
+                int left = maxVisitStops - planned.Count;
+                if (left > 0)
+                    planned.AddRange(BudgetVisitStops(complete, centerSx, centerSz, left));
+            }
+            LogBudget(capi, visitedTotal, planned.Count, "Revisit");
+        }
+
+        string label = LabelForBudgetedRevisit(visitedTotal, planned.Count, gapCount, seasonRefresh);
+        return new LodLoginSweepPlan(LodLoginSweepPlanMode.RevisitVisited, planned, label);
     }
 
     /// <summary>
@@ -178,13 +229,24 @@ public static class LodLoginSweepBootstrap
 
     public static IEnumerable<long> PlanKeys(
         LodWorld world,
-        IClientWorldAccessor clientWorld) =>
-        Plan(world, clientWorld).Keys;
+        IClientWorldAccessor clientWorld,
+        LodPipeline pipeline,
+        IList<Block> blocks,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf) =>
+        Plan(world, clientWorld, pipeline, blocks, plantTintFallback, untintedOf).Keys;
 
     public static int BootstrapCellRadius(int footprint = LodSection.SectionBlocks) =>
         (int)Math.Ceiling(EmptyCanvasBootstrapRadiusBlocks / (double)footprint);
 
-    static LodLoginSweepPlan PlanEmptyCanvas(IClientWorldAccessor world, ICoreClientAPI? capi)
+    static LodLoginSweepPlan PlanEmptyCanvas(
+        LodWorld lodWorld,
+        IClientWorldAccessor world,
+        LodPipeline pipeline,
+        IList<Block> blocks,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
+        ICoreClientAPI? capi)
     {
         EntityPos pos = world.Player.Entity.Pos;
         int footprint = LodSection.SectionBlocks;
@@ -208,18 +270,25 @@ public static class LodLoginSweepBootstrap
         if (IsCoastGuardDisk(kinds, centerSx, centerSz, footprint))
         {
             return PlanBootstrapDisk(
+                lodWorld, pipeline, blocks, plantTintFallback, untintedOf,
                 kinds, centerSx, centerSz, capi,
                 LodLoginSweepPlanMode.BootstrapCoastGuard,
                 "Bootstrap (coast guard)");
         }
 
         return PlanBootstrapDisk(
+            lodWorld, pipeline, blocks, plantTintFallback, untintedOf,
             kinds, centerSx, centerSz, capi,
             LodLoginSweepPlanMode.BootstrapRadius,
             "Bootstrap (new world)");
     }
 
     static LodLoginSweepPlan PlanBootstrapDisk(
+        LodWorld world,
+        LodPipeline pipeline,
+        IList<Block> blocks,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
         Dictionary<long, CellKind> kinds,
         int centerSx,
         int centerSz,
@@ -227,12 +296,19 @@ public static class LodLoginSweepBootstrap
         LodLoginSweepPlanMode mode,
         string labelBase)
     {
-        List<long> landVisit = SelectLandVisitCells(kinds);
+        List<long> landAll = SelectLandVisitCells(kinds);
+        List<long> landVisit = LodLoginBakeAudit.FilterNeedsVisit(
+            landAll, world, pipeline, blocks, plantTintFallback, untintedOf);
+        if (landAll.Count > landVisit.Count)
+            LogSkipComplete(capi, landAll.Count - landVisit.Count, landAll.Count, "Bootstrap land");
+
         List<long> openOcean = SelectOpenOceanCells(kinds);
-        List<long> oceanSamples = PickOceanSampleCells(openOcean, centerSx, centerSz);
+        List<long> openOceanNeeding = LodLoginBakeAudit.FilterNeedsVisit(
+            openOcean, world, pipeline, blocks, plantTintFallback, untintedOf);
+        List<long> oceanSamples = PickOceanSampleCells(openOceanNeeding, centerSx, centerSz);
         var sampleSet = new HashSet<long>(oceanSamples);
-        var openOceanFill = new List<long>(openOcean.Count);
-        foreach (long key in openOcean)
+        var openOceanFill = new List<long>(openOceanNeeding.Count);
+        foreach (long key in openOceanNeeding)
         {
             if (!sampleSet.Contains(key))
                 openOceanFill.Add(key);
@@ -248,7 +324,7 @@ public static class LodLoginSweepBootstrap
                 visitKeys.Add(key);
         }
 
-        LogOceanPlan(capi, openOcean.Count, oceanSamples.Count, openOceanFill.Count, landBudgeted.Count);
+        LogOceanPlan(capi, openOceanNeeding.Count, oceanSamples.Count, openOceanFill.Count, landBudgeted.Count);
         LogBudget(capi, landVisit.Count, landBudgeted.Count);
         visitKeys.Sort();
 
@@ -390,11 +466,25 @@ public static class LodLoginSweepBootstrap
             ? $"{baseLabel} ({budgeted} of {planned})"
             : baseLabel;
 
-    static string LabelForBudgetedRevisit(int planned, int budgeted)
+    static string LabelForBudgetedRevisit(int visitedTotal, int planned, int gapCount, bool seasonRefresh)
     {
+        if (gapCount > 0 && planned <= gapCount)
+            return gapCount == 1
+                ? "Filling 1 incomplete region"
+                : $"Filling gaps ({planned} of {gapCount} incomplete)";
+        if (seasonRefresh && gapCount > 0)
+            return $"Gaps + season refresh ({planned} stops)";
         string baseLabel = "Refreshing visited land (season)";
-        if (budgeted >= planned) return baseLabel;
-        return $"{baseLabel} ({budgeted} of {planned})";
+        if (planned >= visitedTotal) return baseLabel;
+        return $"{baseLabel} ({planned} of {visitedTotal})";
+    }
+
+    static void LogSkipComplete(ICoreClientAPI? capi, int skipped, int total, string kind)
+    {
+        if (skipped <= 0 || capi == null) return;
+        capi.Logger.Notification(
+            "[DistantVistas] {0}: skipping {1} of {2} L0 cells already baked in cache.",
+            kind, skipped, total);
     }
 
     internal static void LogBudget(ICoreClientAPI? capi, int planned, int budgeted, string kind = "Bootstrap")

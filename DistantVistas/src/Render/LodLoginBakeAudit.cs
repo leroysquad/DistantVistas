@@ -16,6 +16,7 @@ public static class LodLoginBakeAudit
         LoadFailed,
         MissingSection,
         EmptyCapture,
+        ThinCapture,
         CapturePending,
         ProvisionalCapture,
         BakeIncomplete,
@@ -57,6 +58,10 @@ public static class LodLoginBakeAudit
         if (section!.CapturedColumns == 0)
             return MissReason.EmptyCapture;
 
+        int fullCols = LodSection.GridSize * LodSection.GridSize;
+        if (section.CapturedColumns < fullCols)
+            return MissReason.ThinCapture;
+
         if (!pipeline.IsL0SectionCaptureIdle(l0Key))
             return MissReason.CapturePending;
 
@@ -67,6 +72,59 @@ public static class LodLoginBakeAudit
             return MissReason.BakeIncomplete;
 
         return MissReason.None;
+    }
+
+    /// <summary>True when an L0 key already has a full capture and season bake — no visit needed.</summary>
+    public static bool IsVisitComplete(
+        LodWorld world,
+        LodPipeline pipeline,
+        long l0Key,
+        IList<Block> blocks,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf) =>
+        Classify(world, pipeline, l0Key, blocks, plantTintFallback, untintedOf) == MissReason.None;
+
+    /// <summary>Keys that still need a login visit (missing, thin, or bake gaps).</summary>
+    public static List<long> FilterNeedsVisit(
+        IEnumerable<long> keys,
+        LodWorld world,
+        LodPipeline pipeline,
+        IList<Block> blocks,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf)
+    {
+        var needs = new List<long>();
+        foreach (long key in keys)
+        {
+            if (!IsVisitComplete(world, pipeline, key, blocks, plantTintFallback, untintedOf))
+                needs.Add(key);
+        }
+        return needs;
+    }
+
+    /// <summary>
+    /// Split keys into incomplete vs already-good. Spend revisit budget on gaps first,
+    /// then optional season refresh on complete cells.
+    /// </summary>
+    public static void PartitionVisitKeys(
+        IEnumerable<long> keys,
+        LodWorld world,
+        LodPipeline pipeline,
+        IList<Block> blocks,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
+        out List<long> needsVisit,
+        out List<long> complete)
+    {
+        needsVisit = new List<long>();
+        complete = new List<long>();
+        foreach (long key in keys)
+        {
+            if (IsVisitComplete(world, pipeline, key, blocks, plantTintFallback, untintedOf))
+                complete.Add(key);
+            else
+                needsVisit.Add(key);
+        }
     }
 
     static bool TryGetSection(LodWorld world, long key, out LodSection? section)
@@ -105,6 +163,7 @@ public static class LodLoginBakeAudit
         MissReason.LoadFailed => "load failed",
         MissReason.MissingSection => "no section",
         MissReason.EmptyCapture => "no capture",
+        MissReason.ThinCapture => "thin capture",
         MissReason.CapturePending => "capture pending",
         MissReason.ProvisionalCapture => "provisional capture",
         MissReason.BakeIncomplete => "bake incomplete",
