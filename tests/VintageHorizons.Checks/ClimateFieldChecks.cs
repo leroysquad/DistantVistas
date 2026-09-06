@@ -61,9 +61,9 @@ public static class ClimateFieldChecks
             keep.LowR, keep.LowG, keep.LowB,
             Mountain.LowR, Mountain.LowG, Mountain.LowB,
             out float lR, out float lG, out float lB);
-        c.Near(gR / 0.62f, lR / 0.48f, 0.0001, "grass and leaf share the same red climate ratio");
-        c.Near(gG / 0.58f, lG / 0.70f, 0.0001, "grass and leaf share the same green climate ratio");
-        c.Near(gB / 0.28f, lB / 0.16f, 0.0001, "grass and leaf share the same blue climate ratio");
+        c.Near(gR / 0.62f, lR / 0.48f, 0.0001, "grass and leaf share the same luminance climate scale");
+        c.Near(gG / 0.58f, lG / 0.70f, 0.0001, "grass and leaf share the same luminance climate scale (green)");
+        c.Near(gB / 0.28f, lB / 0.16f, 0.0001, "grass and leaf share the same luminance climate scale (blue)");
     }
 
     static void WalkDoesNotRecolorFar(Check c)

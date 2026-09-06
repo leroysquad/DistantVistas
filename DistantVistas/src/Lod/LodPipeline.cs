@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
+using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
@@ -49,7 +50,7 @@ public class LodPipeline
     const int CaptureAppliesPerTick = 1;
     const int CaptureAppliesPerTickBusy = 8;
     const double CaptureApplyBudgetMs = 4.0;
-    const int CaptureBusyThreshold = 4;
+    internal const int CaptureBusyThreshold = 4;
 
     const int PropagationsPerTick = 4;
     const int CatchUpPropagationsPerTick = 48;
@@ -98,6 +99,13 @@ public class LodPipeline
 
     /// <summary>Upgrade legacy live-tint palette rows after load (join refresh).</summary>
     public System.Func<LodSection, long, int>? HealLegacyPalette;
+
+    /// <summary>Explore-time exact bake while chunks are still loaded (client only).</summary>
+    public LodExploreBake ExploreBake { get; } = new();
+
+    public Block? ExplorePlantTintFallback { get; set; }
+
+    public System.Func<Block, (int Color, LodUntintedShare Share)>? ExploreUntintedOf { get; set; }
 
     /// <summary>
     /// While the login visit sweep runs, skip approximate legacy heal — the sweep
@@ -510,13 +518,26 @@ public class LodPipeline
 
         InstallLoadedSections();
         ScheduleCaptures();
-        ApplyCaptureResults();
+        int captureBacklog = ApplyCaptureResults();
+        DrainExploreBake(captureBacklog);
         int propagationBudget = World.MipDirty.Count > CatchUpPropagationThreshold
             ? CatchUpPropagationsPerTick
             : PropagationsPerTick;
         World.ProcessPropagation(propagationBudget);
         SaveSomeDirtySections(SectionSavesPerTick);
         tickCounter++;
+    }
+
+    void DrainExploreBake(int captureBacklog)
+    {
+        if (api.Side != EnumAppSide.Client || ExploreUntintedOf == null) return;
+        var capi = (ICoreClientAPI)api;
+        ExploreBake.Drain(
+            capi,
+            this,
+            ExplorePlantTintFallback,
+            ExploreUntintedOf,
+            captureBacklog);
     }
 
     /// <summary>
@@ -582,6 +603,13 @@ public class LodPipeline
                 World.RenderDirty.Add(key);
             }
         }
+
+        if (!DeferLegacyHeal
+            && LodWorld.KeyLevel(key) == 0
+            && LodExploreBake.SectionHasLiveTint(section))
+        {
+            ExploreBake.Queue(key, section, false);
+        }
     }
 
     void AfterSectionLoaded(long key, LodSection section)
@@ -642,7 +670,7 @@ public class LodPipeline
 
     readonly System.Diagnostics.Stopwatch applyClock = new();
 
-    void ApplyCaptureResults()
+    int ApplyCaptureResults()
     {
         // Idle: one a tick, as always. Backed up: several, until the time budget is
         // spent. The clock is checked between applies, so the floor of one stands even
@@ -661,15 +689,18 @@ public class LodPipeline
             deferredCaptures.RemoveAt(i);
             budget--;
             applied++;
-            if (applyClock.Elapsed.TotalMilliseconds > CaptureApplyBudgetMs) return;
+            if (applyClock.Elapsed.TotalMilliseconds > CaptureApplyBudgetMs)
+                return CaptureBacklog();
         }
 
         while (budget-- > 0)
         {
             // Checked before the dequeue, so an over-budget result stays in the worker's
             // queue in order rather than being pulled out and parked ahead of older ones.
-            if (applied > 0 && applyClock.Elapsed.TotalMilliseconds > CaptureApplyBudgetMs) return;
-            if (!Worker.CaptureResults.TryDequeue(out CaptureResult? result)) return;
+            if (applied > 0 && applyClock.Elapsed.TotalMilliseconds > CaptureApplyBudgetMs)
+                return CaptureBacklog();
+            if (!Worker.CaptureResults.TryDequeue(out CaptureResult? result))
+                return CaptureBacklog();
             applied++;
 
             // An evicted section has to come back from disk before capture may merge into
@@ -699,7 +730,11 @@ public class LodPipeline
 
             ApplyOneCaptureResult(result);
         }
+
+        return CaptureBacklog();
     }
+
+    int CaptureBacklog() => Worker.CaptureResults.Count + deferredCaptures.Count;
 
     void ApplyOneCaptureResult(CaptureResult result)
     {
@@ -768,6 +803,7 @@ public class LodPipeline
         {
             World.ClassifySparseL0(result.SectionKey, section);
             World.MarkChanged(result.SectionKey);
+            ExploreBake.Queue(result.SectionKey, section, DeferLegacyHeal);
         }
     }
 

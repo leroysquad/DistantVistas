@@ -218,6 +218,8 @@ public class DistantVistasModSystem : ModSystem
         // this needs the texture atlas and topsoil textures; a server stores 0 on purpose.
         pipeline.RepairUncoloredPalette = RefreshStoredPalette;
         pipeline.HealLegacyPalette = HealLegacySection;
+        pipeline.ExplorePlantTintFallback = tints.PlantTintFallback;
+        pipeline.ExploreUntintedOf = UntintedForRebake;
         renderer = new LodTerrainRenderer(capi, pipeline.World, pipeline.Worker, tints)
         {
             AutoUnpause = Environment.GetEnvironmentVariable("VINTAGEHORIZONS_AUTOUNPAUSE") == "1",
@@ -446,6 +448,7 @@ public class DistantVistasModSystem : ModSystem
         int sweepCz = (int)Math.Floor(pos.Z / chunkSize);
         int sweepRadius = Math.Max(4, (int)Math.Ceiling(renderer.LiveViewDistance / chunkSize) + 2);
         pipeline.SweepLoadedColumns(sweepCx, sweepCz, sweepRadius);
+        QueueExploreBakeNearPlayer();
         // Cold RAM section spill only under mesh pressure — never distance-alone.
         if (renderer.MeshPressureActive && pipeline.MaybeEvictAround(pos.X, pos.Z))
         {
@@ -1407,6 +1410,27 @@ public class DistantVistasModSystem : ModSystem
         if (TryTopSoilColor(block, out int composite, out LodUntintedShare share))
             return (composite, share);
         return (StableColorOf(block), LodUntintedShare.None);
+    }
+
+    /// <summary>Re-queue live-tint L0 under the player so walk-back areas bake while chunks load.</summary>
+    void QueueExploreBakeNearPlayer()
+    {
+        if (loginBake?.Active == true || !pipeline.Active) return;
+
+        EntityPos pos = capi.World.Player.Entity.Pos;
+        int footprint = LodSection.SectionBlocks;
+        int sx = (int)Math.Floor(pos.X / footprint);
+        int sz = (int)Math.Floor(pos.Z / footprint);
+        for (int dz = -1; dz <= 1; dz++)
+        {
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                if (sx + dx < 0 || sz + dz < 0) continue;
+                long key = LodWorld.SectionKey(0, sx + dx, sz + dz);
+                if (!pipeline.World.Sections.TryGetValue(key, out LodSection? section)) continue;
+                pipeline.ExploreBake.Queue(key, section, pipeline.DeferLegacyHeal);
+            }
+        }
     }
 
     void OnLeaveWorld()

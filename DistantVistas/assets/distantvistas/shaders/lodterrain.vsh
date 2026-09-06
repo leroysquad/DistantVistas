@@ -108,9 +108,9 @@ void main()
         if (tintLum > 0.78) tint *= 0.78 / max(tintLum, 0.001);
     }
 
-    // Spatial climate: shift every vegetation slot by local/keep plant tint so
-    // grass, leaves, and bushes on one hill share that XZ sample. Dirt-share
-    // dilution stays in the slot table. Slot 0 is rock/snow; band 1 is water.
+    // Spatial climate: shift vegetation tint toward local plant colour. Per-channel
+    // local/keep on Dilute(share, climate_keep) skews grass lavender when biomes
+    // differ (0.8.36). Luminance scale preserves topsoil hue; explore FlagBaked is exact.
     float tu = clamp(localXZ.x / max(1.0, sectionSize), 0.0, 1.0);
     float tv = clamp(localXZ.y / max(1.0, sectionSize), 0.0, 1.0);
     vec4 cLow = mix(mix(climateLow00, climateLow10, tu), mix(climateLow01, climateLow11, tu), tv);
@@ -119,8 +119,10 @@ void main()
     vec4 keepCl = mix(keepClimateLow, keepClimateHigh, tintBlend);
     if (slot > 0 && band != 1) {
         vec3 keepRgb = max(keepCl.rgb, vec3(0.04));
-        vec3 ratio = clamp(localCl.rgb / keepRgb, vec3(0.25), vec3(4.0));
-        tint *= ratio;
+        float keepLum = dot(keepRgb, vec3(0.299, 0.587, 0.114));
+        float localLum = dot(localCl.rgb, vec3(0.299, 0.587, 0.114));
+        float scale = clamp(localLum / max(keepLum, 0.04), 0.5, 2.0);
+        tint *= scale;
     }
 
     // Live season mix. Vanilla chunk shaders do mix(climate, seasonColor, seasonWeight)
