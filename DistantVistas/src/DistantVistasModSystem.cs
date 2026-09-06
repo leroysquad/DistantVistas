@@ -756,14 +756,8 @@ public class DistantVistasModSystem : ModSystem
         return true;
     }
 
-    bool IsCaptureColumnMapLoaded(int x, int z)
-    {
-        var ba = capi.World.BlockAccessor;
-        int chunkSize = GlobalConstants.ChunkSize;
-        return LodCoveragePolicy.AllMapChunksLoaded(
-            x, x + 1, z, z + 1, chunkSize,
-            (cx, cz) => ba.GetMapChunk(cx, cz) != null);
-    }
+    bool IsCaptureColumnMapLoaded(int x, int z) =>
+        LodSeasonBake.IsColumnMapLoaded(capi.World.BlockAccessor, x, z);
 
     /// <summary>
     /// One colour per block id so neighbouring sections agree. GetColorWithoutTint on

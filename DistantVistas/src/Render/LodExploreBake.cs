@@ -67,26 +67,25 @@ public sealed class LodExploreBake
             if (!SectionHasLiveTint(section))
                 continue;
 
-            if (!CanBakeSectionNow(capi.World, key))
-            {
-                // Chunks unloaded before drain — retry when player returns.
-                if (queued.Add(key))
-                    pending.Enqueue(key);
-                continue;
-            }
-
             int changed = LodSeasonBake.BakeSectionFromVisit(
                 capi, section, key, plantTintFallback, untintedOf);
-            if (changed <= 0)
-                continue;
 
-            pipeline.World.MarkChanged(key);
-            pipeline.World.RenderDirty.Add(key);
-            pipeline.InvalidateGpuMesh?.Invoke(key);
-            pipeline.DrainLoginPersistence(1);
-            baked++;
-            SectionsBaked++;
-            budget--;
+            if (changed > 0)
+            {
+                pipeline.World.MarkChanged(key);
+                pipeline.World.RenderDirty.Add(key);
+                pipeline.InvalidateGpuMesh?.Invoke(key);
+                pipeline.DrainLoginPersistence(1);
+                baked++;
+                SectionsBaked++;
+                budget--;
+            }
+
+            if (SectionHasLiveTint(section) && !CanBakeSectionNow(capi.World, key))
+            {
+                if (queued.Add(key))
+                    pending.Enqueue(key);
+            }
         }
 
         return baked;

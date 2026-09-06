@@ -39,12 +39,21 @@ public static class ExploreBakeChecks
 
         string explore = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodExploreBake.cs"));
+        string season = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSeasonBake.cs"));
         c.True(explore.Contains("BakeSectionFromVisit"),
             "explore bake uses exact GetColor visit bake");
         c.True(explore.Contains("SectionHasLiveTint"),
             "explore bake skips already-baked sections");
-        c.True(explore.Contains("CanBakeSectionNow"),
-            "explore bake waits for map chunks before GetColor");
+        c.True(season.Contains("IsColumnMapLoaded"),
+            "visit bake is per-column when map chunk is resident");
+        c.False(ContainsBetween(pipeline, "void FinalizeL0DiscoverBake", "int RegisterPaletteEntry", "CanBakeSectionNow"),
+            "discover finalize visit-bakes per column, not all-or-nothing section gate");
+
+        string mesher = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Lod", "LodMesher.cs"));
+        c.True(mesher.Contains("Thin band 2 still multiplies live tint"),
+            "mesher documents visit-baked canopy must use band 3");
 
         string mod = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "DistantVistasModSystem.cs"));

@@ -224,6 +224,9 @@ public static class MesherChecks
         c.Eq((byte)(LodTintRegistry.MaxSlots * 3),
             AlphaOf(Column(LodPaletteEntry.FlagBaked, tintSlot: 5)),
             "baked opaque land uses band 3 with identity tint");
+        c.Eq((byte)(LodTintRegistry.MaxSlots * 3),
+            AlphaOf(Column(LodPaletteEntry.FlagBaked | LodPaletteEntry.FlagThin, tintSlot: 5)),
+            "visit-baked thin cover uses band 3 so canopy RGB is not live-tinted");
     }
 
     static void WaterIsASeparatePass(Check c)

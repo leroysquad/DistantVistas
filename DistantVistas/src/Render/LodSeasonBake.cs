@@ -82,6 +82,15 @@ public static class LodSeasonBake
         return new SnowVote(eligible, snowy);
     }
 
+    /// <summary>Map chunk present for a single column — visit bake is per-column, not all-or-nothing.</summary>
+    public static bool IsColumnMapLoaded(IBlockAccessor blockAccessor, int x, int z)
+    {
+        int chunkSize = GlobalConstants.ChunkSize;
+        return LodCoveragePolicy.AllMapChunksLoaded(
+            x, x + 1, z, z + 1, chunkSize,
+            (cx, cz) => blockAccessor.GetMapChunk(cx, cz) != null);
+    }
+
     /// <summary>
     /// Vanilla's fully tinted face colour at a world position — the ground truth during
     /// the visit sweep when chunks are loaded.
@@ -290,6 +299,8 @@ public static class LodSeasonBake
                 untinted, untinted, LodBlockPolicy.IsClimateUntinted(block));
 
             if (!CanBake(block, untinted, plantTintFallback)) continue;
+
+            if (!IsColumnMapLoaded(world.BlockAccessor, x, z)) continue;
 
             int baked = SampleVanillaColor(capi, block, x, y, z);
             if (baked == 0)

@@ -837,13 +837,9 @@ public class LodPipeline
 
         var capi = (ICoreClientAPI)api;
         bool hadLiveTint = LodExploreBake.SectionHasLiveTint(section);
-        int changed = 0;
 
-        if (LodExploreBake.CanBakeSectionNow(capi.World, sectionKey))
-        {
-            changed = LodSeasonBake.BakeSectionFromVisit(
-                capi, section, sectionKey, ExplorePlantTintFallback, ExploreUntintedOf);
-        }
+        int changed = LodSeasonBake.BakeSectionFromVisit(
+            capi, section, sectionKey, ExplorePlantTintFallback, ExploreUntintedOf);
 
         World.RenderDirty.Add(sectionKey);
         InvalidateGpuMesh?.Invoke(sectionKey);

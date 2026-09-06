@@ -42,9 +42,12 @@ public static class LodMesher
         bool water = (paletteFlags & LodPaletteEntry.FlagWater) != 0;
         bool thin = (paletteFlags & LodPaletteEntry.FlagThin) != 0;
         if ((paletteFlags & LodPaletteEntry.FlagBaked) != 0)
-            return water ? (byte)(WaterBase + LodTintRegistry.SlotNone)
-                : thin ? (byte)(ThinBase + LodTintRegistry.SlotNone)
-                : BakedBase;
+        {
+            // Visit-baked RGB is final (band 3). Thin band 2 still multiplies live tint
+            // in the shader and painted lavender canopies after leave (0.8.36).
+            if (water) return (byte)(WaterBase + LodTintRegistry.SlotNone);
+            return BakedBase;
+        }
 
         byte slot = tintSlot < LodTintRegistry.MaxSlots ? tintSlot : (byte)LodTintRegistry.SlotNone;
         // Skip live tint for stored colours that are already brown earth, or
