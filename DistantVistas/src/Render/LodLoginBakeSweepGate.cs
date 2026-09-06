@@ -63,9 +63,6 @@ public static class LodLoginBakeSweepGate
 
     public static void MarkHandoverDeferred() => HandoverDeferred = true;
 
-        paintAttempts = 0;
-    }
-
     /// <summary>
     /// Complete deferred handover and switch to RunningGame without clearing
     /// <see cref="SweepActive"/> — required so RenderToDefaultFramebuffer presents

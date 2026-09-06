@@ -132,6 +132,8 @@ public static class LoginSweepChecks
             "harmony paints splash from OnNewFrame Postfix safety path");
         c.True(harmony.Contains("PaintSplashBeforeRunningFramebuffer"),
             "harmony paints splash before running-game framebuffer present");
+        c.True(harmony.Contains("static void Postfix() => InvokePaintSplashCover(\"running-game-present\")"),
+            "running-game framebuffer paint is a Postfix after default-FB blit");
         c.True(harmony.Contains("PaintSplashCover"),
             "harmony exposes splash paint hook for framebuffer prefix");
         c.True(!harmony.Contains("SkipRunningGameRenderToDefaultFramebuffer"),
@@ -318,6 +320,9 @@ public static class LoginSweepChecks
         c.True(hold.Contains("AfterFinalComposition"),
             "vanilla hold paints ortho and after-final passes");
 
+        c.True(hold.Contains("EnumRenderStage.Done"),
+            "vanilla hold paints ortho, after-final, and done passes");
+
         string splash = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeSplashOverlay.cs"));
         c.True(splash.Contains("stockOnly: false"),
@@ -343,6 +348,14 @@ public static class LoginSweepChecks
             "splash renderer restores perspective after OrthoMode (no stack leak)");
         c.True(screen.Contains("TryRestorePerspective"),
             "splash renderer pairs OrthoMode enter/restore helpers");
+        c.True(screen.Contains("PaintPresentPath"),
+            "splash renderer exposes present-path paint entry");
+        c.True(screen.Contains("EnumRenderStage.Done"),
+            "splash renderer paints on render-stage-done");
+        c.True(screen.Contains("GLDisableDepthTest"),
+            "splash renderer disables depth test on present path");
+        c.True(screen.Contains("ResolvePaintFrameBuffer"),
+            "splash renderer resolves primary framebuffer when current is null");
         c.True(screen.Contains("PaintSweepFrame"),
             "splash renderer exposes guaranteed paint entry point");
         c.True(screen.Contains("TryHardOpaqueCover"),
@@ -385,6 +398,8 @@ public static class LoginSweepChecks
             "mod wires render pulse from vanilla hold");
         c.True(mod.Contains("OnRenderPulse"),
             "mod connects vanilla hold render pulse");
+        c.True(mod.Contains("EnumRenderStage.Done"),
+            "mod registers splash on render-stage-done");
         c.True(mod.Contains("PaintSplashCover"),
             "mod wires splash paint before running-game framebuffer");
         c.True(mod.Contains("PaintSweepFrame"),

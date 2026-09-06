@@ -78,7 +78,7 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
 
     public void SetOverlayAlpha(float alpha) { }
 
-    /// <summary>Present-path splash paint — Harmony calls this after RunningGame framebuffer blit.</summary>
+    /// <summary>Present-path splash paint — Harmony Prefix on RunningGame/LoadingGame framebuffer.</summary>
     public void PaintSweepFrame() => splashOverlay.PaintSweepFrame();
 
     public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
@@ -86,7 +86,8 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
         if (!active && !LodLoginBakeSweepGate.SweepActive) return;
 
         bool drawPass = stage == EnumRenderStage.Ortho
-            || stage == EnumRenderStage.AfterFinalComposition;
+            || stage == EnumRenderStage.AfterFinalComposition
+            || stage == EnumRenderStage.Done;
         if (!drawPass) return;
 
         if (LodLoginBakeSweepGate.SweepActive && !splashOverlay.HasRendered)
@@ -228,5 +229,6 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
         splashOverlay.Dispose();
         capi.Event.UnregisterRenderer(this, EnumRenderStage.Ortho);
         capi.Event.UnregisterRenderer(this, EnumRenderStage.AfterFinalComposition);
+        capi.Event.UnregisterRenderer(this, EnumRenderStage.Done);
     }
 }

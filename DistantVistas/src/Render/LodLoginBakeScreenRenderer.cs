@@ -97,6 +97,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
                 ConsecutiveOpaqueFrames = 0;
                 HasEverPaintedOpaque = false;
                 loggedFirstPaint = false;
+                loggedPaintSkip = false;
                 PrepareImmediate();
             }
             else
@@ -126,11 +127,18 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     {
         EnsureGraphicsLoaded();
         RebuildText();
+        _ = ResolveQuadMesh();
     }
 
     public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
     {
         if (!active || overlayAlpha <= 0f) return;
+
+        if (stage == EnumRenderStage.Done)
+        {
+            PaintPresentPath(countHealth: true, path: "render-stage-done");
+            return;
+        }
 
         bool orthoPass = stage == EnumRenderStage.Ortho;
         bool safetyPass = stage == EnumRenderStage.AfterFinalComposition;
@@ -141,22 +149,29 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         PaintFrame(
             orthoPass,
             countHealth: orthoPass || stockOnly,
-            manageOrthoPair: safetyPass);
+            manageOrthoPair: safetyPass,
+            disableDepthTest: safetyPass);
     }
 
     /// <summary>
-    /// Legacy out-of-stage paint (OrthoMode + PerspectiveMode pair). Prefer
-    /// <see cref="OnRenderFrame"/> on Ortho / AfterFinalComposition so the framebuffer
-    /// presents. Kept for diagnostics; login sweep no longer calls this from OnNewFrame
-    /// (that path painted without presenting → permanent black).
+    /// Paint on the default framebuffer present path (Harmony Prefix / EnumRenderStage.Done).
+    /// Uses explicit MeshRef quads and disables depth test — internal GUI quads only work
+    /// inside <see cref="EnumRenderStage.Ortho"/> (0.8.33 playtest: orthoPass=true failed at 2560×1369).
     /// </summary>
-    public void PaintSweepFrame()
-    {
-        if (!active || overlayAlpha <= 0f) return;
-        PaintFrame(orthoPass: true, countHealth: true, manageOrthoPair: true);
-    }
+    public void PaintPresentPath(bool countHealth = true, string? path = null) =>
+        PaintFrame(orthoPass: false, countHealth: countHealth, manageOrthoPair: true, disableDepthTest: true, path);
 
-    void PaintFrame(bool orthoPass, bool countHealth, bool manageOrthoPair)
+    /// <summary>
+    /// Harmony present hook — delegates to <see cref="PaintPresentPath"/>.
+    /// </summary>
+    public void PaintSweepFrame() => PaintPresentPath(countHealth: true, path: "harmony-present");
+
+    void PaintFrame(
+        bool orthoPass,
+        bool countHealth,
+        bool manageOrthoPair,
+        bool disableDepthTest,
+        string? path = null)
     {
         EnsureGraphicsLoaded();
 
@@ -176,19 +191,44 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         }
 
         // ClientMain.OrthoMode pushes projection (and modelview); PerspectiveMode pops both.
-        // Painting from OnNewFrame Prefix is outside the normal Ortho stage, so without a
-        // matching restore every sweep frame leaks stack entries until shadow Push overflows.
+        // Present-path paints run outside EnumRenderStage.Ortho — pair enter/restore every frame.
         bool orthoEntered = false;
+        bool depthDisabled = false;
         if (manageOrthoPair)
             orthoEntered = TryEnterOrthoMode(rapi, w, h);
         try
         {
-            bool drewOpaque = DrawFullFrame(w, h, orthoPass, countHealth);
+            if (disableDepthTest)
+            {
+                try
+                {
+                    rapi.GLDisableDepthTest();
+                    depthDisabled = true;
+                }
+                catch
+                {
+                    // Best-effort — quad may still succeed with ortho projection.
+                }
+            }
+
+            bool drewOpaque = DrawFullFrame(w, h, orthoPass, countHealth, path);
             if (!drewOpaque && countHealth)
                 ConsecutiveOpaqueFrames = 0;
         }
         finally
         {
+            if (depthDisabled)
+            {
+                try
+                {
+                    rapi.GLEnableDepthTest();
+                }
+                catch
+                {
+                    // Never leave paint path throwing.
+                }
+            }
+
             if (orthoEntered)
                 TryRestorePerspective(rapi);
         }
@@ -220,17 +260,13 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         }
     }
 
-    bool DrawFullFrame(float w, float h, bool orthoPass, bool countHealth)
+    bool DrawFullFrame(float w, float h, bool orthoPass, bool countHealth, string? path = null)
     {
-        bool drewOpaque = DrawOpaqueCover(w, h, orthoPass);
+        bool drewOpaque = DrawOpaqueCover(w, h, orthoPass, path);
         if (!drewOpaque)
         {
-            if (countHealth && !loggedPaintSkip)
-            {
-                loggedPaintSkip = true;
-                capi.Logger.Warning(
-                    "[DistantVistas] Login splash: opaque cover draw failed ({0}x{1}).", w, h);
-            }
+            if (countHealth)
+                LogPaintSkip(countHealth, path, $"opaque cover draw failed ({w}x{h})");
             return false;
         }
 
@@ -348,33 +384,31 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         capi.Gui.TextTexture.GenOrUpdateTextTexture("Loading…", headingFont, ref heading);
     }
 
-    bool DrawOpaqueCover(float w, float h, bool orthoPass)
+    bool DrawOpaqueCover(float w, float h, bool orthoPass, string? path = null)
     {
-        if (TryHardOpaqueCover(w, h))
+        if (TryHardOpaqueCover(w, h, orthoPass, path))
             return true;
 
         tint.Set(OpaqueCover[0], OpaqueCover[1], OpaqueCover[2], OpaqueCover[3] * overlayAlpha);
         return TryDrawSolidColor(0, 0, w, h, 198, tint, orthoPass);
     }
 
-    /// <summary>Framebuffer clear first, then explicit full-screen white quad tint — never skip.</summary>
-    bool TryHardOpaqueCover(float w, float h)
+    /// <summary>Framebuffer clear when bound, then explicit MeshRef quad (present path).</summary>
+    bool TryHardOpaqueCover(float w, float h, bool orthoPass, string? path)
     {
         IRenderAPI rapi = capi.Render;
         float alpha = OpaqueCover[3] * overlayAlpha;
         if (alpha <= 0.001f) return false;
 
+        bool cleared = false;
         try
         {
-            FrameBufferRef fb = rapi.CurrentFrameBuffer;
+            FrameBufferRef? fb = ResolvePaintFrameBuffer(rapi);
             if (fb != null)
             {
-                float[] clear =
-                {
-                    OpaqueCover[0], OpaqueCover[1], OpaqueCover[2], alpha
-                };
+                float[] clear = { OpaqueCover[0], OpaqueCover[1], OpaqueCover[2], alpha };
                 rapi.ClearFrameBuffer(fb, clear, clearDepthBuffer: true, clearColorBuffers: true);
-                return true;
+                cleared = true;
             }
         }
         catch
@@ -383,13 +417,51 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         }
 
         tint.Set(OpaqueCover[0], OpaqueCover[1], OpaqueCover[2], alpha);
+
+        // Present path: baked solid + explicit MeshRef quad (internal tint quad needs Ortho stage).
+        int bakedId = SolidColorTextureId(tint);
+        if (bakedId > 0 && TryDrawWithExplicitQuad(bakedId, 0, 0, w, h, 197))
+            return true;
+
         int whiteId = EnsureWhiteTexture();
-        if (whiteId <= 0) return false;
+        if (whiteId <= 0)
+        {
+            if (!cleared)
+                LogPaintSkip(true, path, "white texture unavailable and framebuffer clear skipped");
+            return cleared;
+        }
 
         if (TryDrawWithExplicitQuad(whiteId, 0, 0, w, h, 197))
             return true;
 
-        return TryDrawWithInternalQuad(whiteId, 0, 0, w, h, 197, tint);
+        if (orthoPass && TryDrawWithInternalQuad(whiteId, 0, 0, w, h, 197, tint))
+            return true;
+
+        if (!cleared)
+            LogPaintSkip(true, path,
+                $"explicit quad failed (white={whiteId}, baked={bakedId}, orthoPass={orthoPass}, fb clear={cleared})");
+
+        return cleared;
+    }
+
+    static FrameBufferRef? ResolvePaintFrameBuffer(IRenderAPI rapi)
+    {
+        FrameBufferRef? fb = rapi.CurrentFrameBuffer;
+        if (fb != null) return fb;
+
+        var buffers = rapi.FrameBuffers;
+        int primary = (int)EnumFrameBuffer.Primary;
+        if (primary >= 0 && primary < buffers.Count)
+            return buffers[primary];
+
+        return null;
+    }
+
+    void LogPaintSkip(bool countHealth, string? path, string detail)
+    {
+        if (!countHealth) return;
+        string via = string.IsNullOrWhiteSpace(path) ? "" : $" [{path}]";
+        capi.Logger.Warning("[DistantVistas] Login splash: {0}{1}.", detail, via);
     }
 
     void DrawBackdrop(float w, float h, bool orthoPass)
@@ -441,6 +513,10 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
 
         int bakedId = SolidColorTextureId(color);
         if (bakedId > 0 && TryDrawWithExplicitQuad(bakedId, x, y, width, height, z))
+            return true;
+
+        int whiteId = EnsureWhiteTexture();
+        if (whiteId > 0 && TryDrawWithExplicitQuad(whiteId, x, y, width, height, z))
             return true;
 
         if (!orthoPass) return false;

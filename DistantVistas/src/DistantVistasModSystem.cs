@@ -238,6 +238,8 @@ public class DistantVistasModSystem : ModSystem
         capi.Event.RegisterRenderer(loginVanillaLoading, EnumRenderStage.Ortho, "distantvistas-login-vanilla");
         capi.Event.RegisterRenderer(loginVanillaLoading, EnumRenderStage.AfterFinalComposition,
             "distantvistas-login-vanilla-final");
+        capi.Event.RegisterRenderer(loginVanillaLoading, EnumRenderStage.Done,
+            "distantvistas-login-vanilla-done");
         loginBakePulse = new LodLoginBakePulse();
         loginVanillaLoading.OnRenderPulse = dt => loginBakePulse.Pulse(dt);
         LodLoginBakeHarmony.PaintSplashCover = () => loginVanillaLoading.PaintSweepFrame();

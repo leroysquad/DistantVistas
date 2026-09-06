@@ -8,8 +8,8 @@ namespace DistantVistas;
 /// <summary>
 /// Defers world-load handover only while the login visit sweep is actively running.
 /// Splash paints on every present path: RunningGame and LoadingGame
-/// <see cref="GuiScreenRunningGame.RenderToDefaultFramebuffer"/> Postfixes, plus
-/// ScreenManager.OnNewFrame Postfix when earlier stages were skipped.
+/// <see cref="GuiScreenRunningGame.RenderToDefaultFramebuffer"/> Prefixes, plus
+/// ScreenManager.OnNewFrame Postfix and <see cref="EnumRenderStage.Done"/> when earlier stages were skipped.
 /// </summary>
 public static class LodLoginBakeHarmony
 {
@@ -81,10 +81,13 @@ public static class LodLoginBakeHarmony
     [HarmonyPatch(typeof(GuiScreenLoadingGame), "RenderToDefaultFramebuffer")]
     sealed class SkipLoadingGameRenderDuringSweep
     {
-        static bool Prefix() => !SkipLoadingGameDraw();
-
-        /// <summary>When vanilla loader draw is skipped, still paint the DV splash on present.</summary>
-        static void Postfix() => InvokePaintSplashCover("loading-game-present");
+        /// <summary>Skip vanilla loader draw during sweep but paint DV splash on present first.</summary>
+        static bool Prefix()
+        {
+            if (!SkipLoadingGameDraw()) return true;
+            InvokePaintSplashCover("loading-game-present");
+            return false;
+        }
     }
 
     [HarmonyPatch(typeof(GuiScreenRunningGame), "handOverRenderingToRunningGame")]
@@ -129,9 +132,9 @@ public static class LodLoginBakeHarmony
     }
 
     /// <summary>
-    /// Registered Ortho/AfterFinal IRenderers do not reliably run while handover is
+    /// Registered Ortho/AfterFinal/Done IRenderers do not reliably run while handover is
     /// deferred — paint the splash on the RunningGame framebuffer present path instead.
-    /// Postfix so world/post passes finish first; splash clears and covers on top.
+    /// Postfix after the default-FB blit so the opaque cover sits on top.
     /// </summary>
     [HarmonyPatch(typeof(GuiScreenRunningGame), "RenderToDefaultFramebuffer")]
     sealed class PaintSplashBeforeRunningFramebuffer
