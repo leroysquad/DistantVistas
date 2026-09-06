@@ -114,7 +114,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         fraction = Math.Clamp(progress, 0f, 1f);
         status = detail ?? "";
         percentLabel = $"{(int)Math.Round(fraction * 100)}%";
-        if (LodLoginBakeSweepGate.TextureAtlasesReady)
+        if (LodLoginBakeSweepGate.SplashGlAllowed)
             RebuildText();
     }
 
@@ -125,7 +125,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     /// <summary>Preload splash textures once atlas GPU compose is safe (not from LevelFinalize).</summary>
     public void PrepareImmediate()
     {
-        if (!LodLoginBakeSweepGate.TextureAtlasesReady) return;
+        if (!LodLoginBakeSweepGate.SplashGlAllowed) return;
         EnsureGraphicsLoaded();
         RebuildText();
         _ = ResolveQuadMesh();
@@ -174,7 +174,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         bool disableDepthTest,
         string? path = null)
     {
-        if (!LodLoginBakeSweepGate.TextureAtlasesReady)
+        if (!LodLoginBakeSweepGate.SplashGlAllowed)
         {
             if (countHealth) ConsecutiveOpaqueFrames = 0;
             return;
@@ -296,7 +296,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
                 {
                     loggedFirstPaint = true;
                     capi.Logger.Notification(
-                        "[DistantVistas] Login splash: first opaque frame painted (hard clear + cover).");
+                        "[DistantVistas] Login splash: first opaque frame painted (full-screen cover).");
                 }
             }
         }
@@ -409,28 +409,11 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         return TryDrawSolidColor(0, 0, w, h, 198, tint, orthoPass);
     }
 
-    /// <summary>Framebuffer clear when bound, then explicit MeshRef quad (present path).</summary>
+    /// <summary>Framebuffer clear removed — ClearFrameBuffer on Primary during char-create / handover left draw buffers invalid (GL_INVALID_OPERATION at SwapBuffers). Full-screen quads only.</summary>
     bool TryHardOpaqueCover(float w, float h, bool orthoPass, string? path)
     {
-        IRenderAPI rapi = capi.Render;
         float alpha = OpaqueCover[3] * overlayAlpha;
         if (alpha <= 0.001f) return false;
-
-        bool cleared = false;
-        try
-        {
-            FrameBufferRef? fb = ResolvePaintFrameBuffer(rapi);
-            if (fb != null)
-            {
-                float[] clear = { OpaqueCover[0], OpaqueCover[1], OpaqueCover[2], alpha };
-                rapi.ClearFrameBuffer(fb, clear, clearDepthBuffer: true, clearColorBuffers: true);
-                cleared = true;
-            }
-        }
-        catch
-        {
-            // Fall through to quad tint.
-        }
 
         tint.Set(OpaqueCover[0], OpaqueCover[1], OpaqueCover[2], alpha);
 
@@ -442,9 +425,8 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         int whiteId = EnsureWhiteTexture();
         if (whiteId <= 0)
         {
-            if (!cleared)
-                LogPaintSkip(true, path, "white texture unavailable and framebuffer clear skipped");
-            return cleared;
+            LogPaintSkip(true, path, "white texture unavailable for opaque cover");
+            return false;
         }
 
         if (TryDrawFullScreenQuad(whiteId, w, h, 197, orthoPass, tint))
@@ -453,24 +435,10 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         if (orthoPass && TryDrawWithInternalQuad(whiteId, 0, 0, w, h, 197, tint))
             return true;
 
-        if (!cleared)
-            LogPaintSkip(true, path,
-                $"explicit quad failed (white={whiteId}, baked={bakedId}, orthoPass={orthoPass}, fb clear={cleared})");
+        LogPaintSkip(true, path,
+            $"explicit quad failed (white={whiteId}, baked={bakedId}, orthoPass={orthoPass})");
 
-        return cleared;
-    }
-
-    static FrameBufferRef? ResolvePaintFrameBuffer(IRenderAPI rapi)
-    {
-        FrameBufferRef? fb = rapi.CurrentFrameBuffer;
-        if (fb != null) return fb;
-
-        var buffers = rapi.FrameBuffers;
-        int primary = (int)EnumFrameBuffer.Primary;
-        if (primary >= 0 && primary < buffers.Count)
-            return buffers[primary];
-
-        return null;
+        return false;
     }
 
     void LogPaintSkip(bool countHealth, string? path, string detail)

@@ -124,6 +124,10 @@ public static class LoginSweepChecks
             "harmony skips running-game primary render during sweep");
         c.True(harmony.Contains("OnNewFrame"),
             "harmony pulses sweep before ScreenManager screen draw");
+        c.True(harmony.Contains("SplashGlAllowed"),
+            "harmony gates splash GL on atlas ready + sweep armed + no character UI");
+        c.True(harmony.Contains("CharacterUiBlocksSplash"),
+            "sweep gate blocks splash during character/class selection");
         c.True(harmony.Contains("TextureAtlasesReady"),
             "harmony gates splash GL until texture atlases finish GPU compose");
         c.True(harmony.Contains("FinaliseTextureAtlas_StageC"),
@@ -151,8 +155,10 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeScreenRenderer.cs"));
         c.True(screen.Contains("stockOnly"),
             "screen renderer supports stock-only dev fallback via stockOnly flag");
-        c.True(screen.Contains("TextureAtlasesReady"),
-            "screen renderer defers splash GL until texture atlases are ready");
+        c.True(screen.Contains("SplashGlAllowed"),
+            "screen renderer defers splash GL until SplashGlAllowed");
+        c.True(!screen.Contains("ClearFrameBuffer"),
+            "splash opaque cover does not clear framebuffer (SwapBuffers safety)");
         c.True(!screen.Contains("PrepareImmediate()") || screen.Contains("TextureAtlasesReady"),
             "screen renderer does not preload GL from Active setter");
     }
@@ -373,6 +379,8 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodTerrainRenderer.cs"));
         c.True(renderer.Contains("LoginBakeOverlayActive"),
             "terrain renderer skips draw while login overlay active");
+        c.True(renderer.Contains("LoginBakeBlocked"),
+            "terrain renderer skips GL while character UI defers login sweep");
 
         string guard = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeInputGuard.cs"));
@@ -414,6 +422,8 @@ public static class LoginSweepChecks
             "mod exposes splash paint on vanilla hold");
         c.True(mod.Contains("LodLoginBakeHarmony.RenderPulse"),
             "mod wires ScreenManager.OnNewFrame pulse");
+        c.True(mod.Contains("LoginBakeBlocked"),
+            "mod blocks terrain GL while login sweep waits on character UI");
         c.True(!mod.Contains("renderer.ApplyZFar();\n        pipeline.Open"),
             "level finalize does not call ApplyZFar before matrices/atlas are safe");
     }

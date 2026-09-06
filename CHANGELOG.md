@@ -1,3 +1,6 @@
+## 0.8.38
+- **CRITICAL: GL_INVALID_OPERATION at SwapBuffers during character creation (0.8.37 playtest).** After TrueScale atlas compose succeeded, join crashed with `The required buffer is missing` while sweep was deferred for char/class UI. Root cause: terrain renderer still ran `ApplyZFar`/mesh GL during deferral, and splash `ClearFrameBuffer` on Primary could leave draw buffers invalid before present. Fix: `LoginBakeBlocked` skips terrain GL until sweep arms; `SplashGlAllowed` gates splash on `!CharacterUiBlocksSplash`; removed framebuffer clear from opaque cover (full-screen quads only). TextureAtlasesReady gate retained.
+
 ## 0.8.37
 - **CRITICAL: join crash with TrueScale HD (access violation in GL.BindTexture during atlas compose).** Login splash created/bound textures from `LevelFinalize`, Harmony `OnNewFrame` Postfix, and LoadingGame present while vanilla `ComposeTextureAtlasses_StageB` still ran `BindTexture` on worker threads → hard AV (`0xc0000005`). Fix: gate **all** splash GL until three `FinaliseTextureAtlas_StageC` passes complete (block/item/entity); keep vanilla loader visible until safe; defer `EnsureRunningGameRenderPath` and remove `PrepareImmediate` from LevelFinalize; drop `ApplyZFar` from LevelFinalize (0.8.9 regression). Purple explore FlagBaked bake + parent invalidate retained.
 

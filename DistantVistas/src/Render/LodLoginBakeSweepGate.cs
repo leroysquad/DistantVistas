@@ -49,6 +49,17 @@ public static class LodLoginBakeSweepGate
         TextureAtlasesReady = false;
     }
 
+    /// <summary>Character/class selection is open — splash GL must stay off.</summary>
+    public static bool CharacterUiBlocksSplash { get; set; }
+
+    /// <summary>All conditions for splash texture create/bind/draw on the main thread.</summary>
+    public static bool SplashGlAllowed =>
+        SweepActive && TextureAtlasesReady && !CharacterUiBlocksSplash;
+
+    public static void BlockSplashForCharacterUi() => CharacterUiBlocksSplash = true;
+
+    public static void UnblockSplashForCharacterUi() => CharacterUiBlocksSplash = false;
+
     /// <summary>
     /// Legacy flag: when true, Harmony skips RunningGame RenderToPrimary/post passes.
     /// Login sweep no longer arms this (0.8.25+) — world flash is blocked via

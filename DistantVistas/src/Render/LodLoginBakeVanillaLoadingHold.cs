@@ -84,14 +84,14 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
     public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
     {
         if (!active && !LodLoginBakeSweepGate.SweepActive) return;
+        if (LodLoginBakeSweepGate.CharacterUiBlocksSplash) return;
 
         bool drawPass = stage == EnumRenderStage.Ortho
             || stage == EnumRenderStage.AfterFinalComposition
             || stage == EnumRenderStage.Done;
         if (!drawPass) return;
 
-        if (LodLoginBakeSweepGate.SweepActive
-            && LodLoginBakeSweepGate.TextureAtlasesReady
+        if (LodLoginBakeSweepGate.SplashGlAllowed
             && !splashOverlay.HasRendered)
             LodLoginBakeSweepGate.EnsureRunningGameRenderPath(capi);
 
@@ -188,7 +188,7 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
             splashOverlay.Show();
             ApplyLoadingText();
 
-            if (LodLoginBakeSweepGate.SweepActive && LodLoginBakeSweepGate.TextureAtlasesReady)
+            if (LodLoginBakeSweepGate.SplashGlAllowed)
                 LodLoginBakeSweepGate.EnsureRunningGameRenderPath(capi);
 
             if (!loggedResolve)

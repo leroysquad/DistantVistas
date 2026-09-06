@@ -29,8 +29,7 @@ public static class LodLoginBakeHarmony
 
     internal static void InvokePaintSplashCover(string path)
     {
-        if (!LodLoginBakeSweepGate.SweepActive) return;
-        if (!LodLoginBakeSweepGate.TextureAtlasesReady) return;
+        if (!LodLoginBakeSweepGate.SplashGlAllowed) return;
         paintAttempts++;
         try
         {
@@ -91,7 +90,7 @@ public static class LodLoginBakeHarmony
             if (!SkipLoadingGameDraw()) return true;
             // Keep vanilla loader visible until atlas GPU compose finishes — painting earlier
             // races ComposeTextureAtlasses_StageB worker BindTexture (TrueScale HD crash).
-            if (!LodLoginBakeSweepGate.TextureAtlasesReady) return true;
+            if (!LodLoginBakeSweepGate.SplashGlAllowed) return true;
             InvokePaintSplashCover("loading-game-present");
             return false;
         }

@@ -1122,6 +1122,8 @@ public class DistantVistasModSystem : ModSystem
         if (loginSweepDeferred) return;
 
         loginSweepDeferred = true;
+        renderer.LoginBakeBlocked = true;
+        LodLoginBakeSweepGate.BlockSplashForCharacterUi();
         // Must allow handover immediately or Loading… never reaches RunningGame / char UI
         // (Harmony blocks handover while IsLoginSweepEnabled), and the defer tick never sees
         // dialogs close because the world never leaves the loader.
@@ -1155,6 +1157,8 @@ public class DistantVistasModSystem : ModSystem
     void CancelLoginSweepDefer()
     {
         loginSweepDeferred = false;
+        renderer.LoginBakeBlocked = false;
+        LodLoginBakeSweepGate.UnblockSplashForCharacterUi();
         if (loginSweepDeferListenerId == null) return;
 
         capi.Event.UnregisterGameTickListener(loginSweepDeferListenerId.Value);
@@ -1489,6 +1493,8 @@ public class DistantVistasModSystem : ModSystem
         renderer.LoginBakeComplete = false;
         pipeline.ExploreBake.Clear();
         renderer.LoginBakeOverlayActive = false;
+        renderer.LoginBakeBlocked = false;
+        LodLoginBakeSweepGate.UnblockSplashForCharacterUi();
         assist?.Reset();
         // Belongs to the world being left: the next one is a different savegame with a
         // different sibling cache, and holding this open would keep a file handle on a

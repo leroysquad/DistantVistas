@@ -208,6 +208,8 @@ public sealed class LodLoginBake
         renderer.LoginBakeOverlayActive = true;
         LodLoginBakeHarmony.ResetPaintDiagnostics();
         LodLoginBakeSweepGate.Arm();
+        LodLoginBakeSweepGate.UnblockSplashForCharacterUi();
+        renderer.LoginBakeBlocked = false;
 
         LodLoginSweepResume? resume = LodLoginSweepResume.TryLoad(capi);
         if (resume != null && resume.IsEligible(capi.World))

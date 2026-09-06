@@ -170,6 +170,9 @@ public class LodTerrainRenderer : IRenderer
     /// <summary>Login visit sweep overlay is up — skip LOD draws so teleports cannot flash sky/terrain through.</summary>
     public bool LoginBakeOverlayActive { get; set; }
 
+    /// <summary>Login sweep deferred for character UI — skip terrain GL until sweep arms.</summary>
+    public bool LoginBakeBlocked { get; set; }
+
     // Climate tints: sampled on a lattice one slot per frame so the field mean
     // is not one hashed row. Season is NOT in this table - that is a live
     // shader clock (seasonRel / seasonTints) uploaded every draw, same idea as
@@ -2488,7 +2491,7 @@ public class LodTerrainRenderer : IRenderer
 
     public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
     {
-        if (LoginBakeOverlayActive) return;
+        if (LoginBakeOverlayActive || LoginBakeBlocked) return;
 
         if (frameCounter == 0)
         {
