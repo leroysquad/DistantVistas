@@ -89,6 +89,8 @@ public sealed class LodLoginBake
     bool loggedWarmupComplete;
     bool worldHideApplied;
     bool escWasDown;
+    readonly List<long> oceanSampleKeys = new();
+    readonly List<long> openOceanFillKeys = new();
 
     public Phase CurrentPhase => phase;
     public bool Active => phase != Phase.Done;
@@ -366,15 +368,8 @@ public sealed class LodLoginBake
         // vistas beyond it as sky (0.8.26).
         if (LodLoginSweepComplete.TryLoad(capi) == null)
         {
-            LodLoginSweepPlan bootstrap = LodLoginSweepBootstrap.PlanBootstrap(capi.World, capi);
-            sweepMode = bootstrap.Mode;
-            sweepModeLabel = bootstrap.ModeLabel;
-            foreach (long key in bootstrap.Keys)
-                pending.Enqueue(key);
-            total = pending.Count;
-            capi.Logger.Notification(
-                "[DistantVistas] Login visit sweep: {0} ({1} visited in cache; first sweep → bootstrap).",
-                sweepModeLabel, visitedCount);
+            ApplyBootstrapPlan(LodLoginSweepBootstrap.PlanBootstrap(capi.World, capi), visitedCount,
+                "first sweep → bootstrap");
             return;
         }
 
@@ -386,6 +381,8 @@ public sealed class LodLoginBake
             LodLoginSweepPlan plan = LodLoginSweepBootstrap.PlanIncomplete(misses);
             sweepMode = plan.Mode;
             sweepModeLabel = plan.ModeLabel;
+            oceanSampleKeys.Clear();
+            openOceanFillKeys.Clear();
             foreach (long key in plan.Keys)
                 pending.Enqueue(key);
             total = pending.Count;
@@ -401,18 +398,33 @@ public sealed class LodLoginBake
                 world, capi.World, capi);
             sweepMode = plan.Mode;
             sweepModeLabel = plan.ModeLabel;
+            oceanSampleKeys.Clear();
+            openOceanFillKeys.Clear();
             foreach (long key in plan.Keys)
                 pending.Enqueue(key);
             total = pending.Count;
             return;
         }
 
-        LodLoginSweepPlan fallback = LodLoginSweepBootstrap.PlanBootstrap(capi.World, capi);
-        sweepMode = fallback.Mode;
-        sweepModeLabel = fallback.ModeLabel;
-        foreach (long key in fallback.Keys)
+        ApplyBootstrapPlan(LodLoginSweepBootstrap.PlanBootstrap(capi.World, capi), visitedCount,
+            "empty cache fallback");
+    }
+
+    void ApplyBootstrapPlan(LodLoginSweepPlan plan, int visitedCount, string reason)
+    {
+        sweepMode = plan.Mode;
+        sweepModeLabel = plan.ModeLabel;
+        oceanSampleKeys.Clear();
+        oceanSampleKeys.AddRange(plan.OceanSampleKeys);
+        openOceanFillKeys.Clear();
+        openOceanFillKeys.AddRange(plan.OpenOceanFillKeys);
+        pending.Clear();
+        foreach (long key in plan.Keys)
             pending.Enqueue(key);
         total = pending.Count;
+        capi.Logger.Notification(
+            "[DistantVistas] Login visit sweep: {0} ({1} visited in cache; {2}).",
+            sweepModeLabel, visitedCount, reason);
     }
 
     public void Tick(float dt)
@@ -592,10 +604,39 @@ public sealed class LodLoginBake
     void BeginAuditing()
     {
         RestorePlayerPose();
+        StampOpenOceanFromSamples();
         phase = Phase.Auditing;
         auditTicks = 0;
         currentKey = null;
         UpdateProgress(Progress, StatusWithEta("Checking visited regions for gaps…"), force: true);
+    }
+
+    void StampOpenOceanFromSamples()
+    {
+        EnsureOceanFillPlan();
+        if (openOceanFillKeys.Count == 0) return;
+
+        int stamped = LodLoginSweepOceanFill.StampOpenOcean(
+            capi, pipeline, openOceanFillKeys, oceanSampleKeys, completedKeys);
+        if (stamped <= 0) return;
+
+        capi.Logger.Notification(
+            "[DistantVistas] Bootstrap ocean: stamped {0} open-water L0 cell(s) from sample visit(s).",
+            stamped);
+    }
+
+    void EnsureOceanFillPlan()
+    {
+        if (openOceanFillKeys.Count > 0) return;
+        if (sweepMode is not LodLoginSweepPlanMode.BootstrapCoastGuard
+            and not LodLoginSweepPlanMode.BootstrapRadius)
+            return;
+
+        LodLoginSweepPlan plan = LodLoginSweepBootstrap.PlanBootstrap(capi.World, capi);
+        oceanSampleKeys.Clear();
+        oceanSampleKeys.AddRange(plan.OceanSampleKeys);
+        openOceanFillKeys.Clear();
+        openOceanFillKeys.AddRange(plan.OpenOceanFillKeys);
     }
 
     void TickAuditing()

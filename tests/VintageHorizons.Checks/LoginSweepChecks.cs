@@ -72,10 +72,10 @@ public static class LoginSweepChecks
         c.Eq(1, targeted.Keys.Count, "incomplete plan dedupes keys");
         c.True(targeted.ModeLabel.Contains("incomplete"), "incomplete plan label");
 
-        c.Eq(100, LodLoginSweepBootstrap.RevisitMaxVisitStops,
-            "revisit cap targets ~4 min at 2.5s/stop");
-        c.Eq(100, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
-            "bootstrap cap matches revisit (~4 min at 2.5s/stop)");
+        c.Eq(75, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "revisit cap targets ~5 min at 4s/stop");
+        c.Eq(75, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "bootstrap land cap matches revisit (~5 min at 4s/stop)");
         c.True(LodLoginSweepBootstrap.RevisitMaxVisitStops >= LodLoginSweepBootstrap.BootstrapMaxVisitStops,
             "revisit budget is at least bootstrap budget");
     }
@@ -524,10 +524,10 @@ public static class LoginSweepChecks
             "empty-canvas bootstrap probe radius default");
         c.Eq(94, LodLoginSweepBootstrap.BootstrapCellRadius(),
             "6000 blocks is ~94 L0 cells radius at 64-block footprint");
-        c.Eq(100, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
-            "bootstrap visit cap targets ~4 min at 2.5s/stop");
-        c.Eq(100, LodLoginSweepBootstrap.RevisitMaxVisitStops,
-            "revisit visit cap targets ~4 min at 2.5s/stop");
+        c.Eq(75, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "bootstrap visit cap targets ~5 min at 4s/stop");
+        c.Eq(75, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "revisit visit cap targets ~5 min at 4s/stop");
         c.Eq(48, LodLoginSweep.MaxChunkWaitTicks, "chunk wait capped ~2.4s at 50ms pulse");
         c.Eq(28, LodLoginSweep.MaxCaptureWaitTicks, "capture wait capped ~1.4s at 50ms pulse");
 
@@ -537,10 +537,14 @@ public static class LoginSweepChecks
             "bootstrap applies hard visit stop budget");
         c.True(bootstrap.Contains("BudgetBootstrapVisitStops"),
             "bootstrap uses inner-weighted distance-band subsample");
-        c.True(bootstrap.Contains("SelectVisitWorthyCells"),
-            "bootstrap skips open ocean body tiles");
+        c.True(bootstrap.Contains("SelectLandVisitCells"),
+            "bootstrap full-visits land and coastline ocean");
+        c.True(bootstrap.Contains("PickOceanSampleCells"),
+            "bootstrap picks representative open-ocean samples");
+        c.True(bootstrap.Contains("OpenOceanMaxSamples"),
+            "bootstrap caps ocean sample visits");
         c.True(bootstrap.Contains("open-ocean L0 cells"),
-            "bootstrap logs ocean skip count");
+            "bootstrap logs ocean sample/stamp plan");
         c.True(bootstrap.Contains("PlanRevisitKeys"),
             "revisit applies spatial subsample budget");
         c.True(bootstrap.Contains("BootstrapCoastGuard"),
@@ -552,6 +556,10 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
         c.True(bake.Contains("PlanBootstrap"),
             "login bake plans first sweep with bootstrap spawn disk");
+        c.True(bake.Contains("StampOpenOceanFromSamples"),
+            "login bake stamps open ocean from samples after visit pass");
+        c.True(bake.Contains("LodLoginSweepOceanFill.StampOpenOcean"),
+            "login bake calls ocean stamp fill helper");
         c.True(bake.Contains("PlanRevisitVisited"),
             "login bake uses budgeted revisit plan after complete exists");
         c.True(bake.Contains("TryLoad(capi) == null"),

@@ -21,11 +21,11 @@ public sealed class LodLoginSweepTiming
     /// </summary>
     public const double BootstrapTargetMaxSec = TargetMaxSec;
 
-    /// <summary>Typical per-stop estimate before measured samples (~2.5s with tightened waits + batch bake).</summary>
-    public const double InitialSecPerStop = 2.5;
+    /// <summary>Typical per-stop estimate before measured samples (~4s with batch bake at 2048 view).</summary>
+    public const double InitialSecPerStop = 4.0;
 
     public const int MinVisitStops = 24;
-    /// <summary>Revisit ceiling — yields 60–100 stops depending on measured sec/stop.</summary>
+    /// <summary>Revisit ceiling — yields ~75 stops at <see cref="InitialSecPerStop"/> / 300s.</summary>
     public const int MaxVisitStops = 100;
 
     readonly Stopwatch clock = new();
@@ -70,7 +70,7 @@ public sealed class LodLoginSweepTiming
 
     /// <summary>
     /// Max visit stops for a sweep given a wall-clock budget and measured/estimated stop rate.
-    /// At <see cref="InitialSecPerStop"/> and <see cref="TargetMaxSec"/>, yields 100 stops (~4 min).
+    /// At <see cref="InitialSecPerStop"/> and <see cref="TargetMaxSec"/>, yields 75 stops (~5 min).
     /// </summary>
     public static int VisitStopBudget(double secPerStop, double targetMaxSec) =>
         (int)Math.Clamp(

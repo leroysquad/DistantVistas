@@ -29,12 +29,23 @@ public readonly struct LodLoginSweepPlan
     public LodLoginSweepPlanMode Mode { get; }
     public IReadOnlyList<long> Keys { get; }
     public string ModeLabel { get; }
+    /// <summary>Open-ocean cells visited for a real sample bake (not counted in land budget).</summary>
+    public IReadOnlyList<long> OceanSampleKeys { get; }
+    /// <summary>Open-ocean cells stamped from samples after the visit pass (no teleport).</summary>
+    public IReadOnlyList<long> OpenOceanFillKeys { get; }
 
-    public LodLoginSweepPlan(LodLoginSweepPlanMode mode, IReadOnlyList<long> keys, string modeLabel)
+    public LodLoginSweepPlan(
+        LodLoginSweepPlanMode mode,
+        IReadOnlyList<long> keys,
+        string modeLabel,
+        IReadOnlyList<long>? oceanSampleKeys = null,
+        IReadOnlyList<long>? openOceanFillKeys = null)
     {
         Mode = mode;
         Keys = keys;
         ModeLabel = modeLabel;
+        OceanSampleKeys = oceanSampleKeys ?? Array.Empty<long>();
+        OpenOceanFillKeys = openOceanFillKeys ?? Array.Empty<long>();
     }
 }
 
@@ -71,6 +82,9 @@ public static class LodLoginSweepBootstrap
 
     /// <summary>Rain height within this delta of sea level counts as ocean surface.</summary>
     public const int OceanSeaDelta = 6;
+
+    /// <summary>Representative open-ocean sample visits (full bake) spread across the body.</summary>
+    public const int OpenOceanMaxSamples = 6;
 
     enum CellKind { Unknown, Ocean, Land }
 
@@ -191,30 +205,89 @@ public static class LodLoginSweepBootstrap
             kinds[key] = ClassifyCell(world, sx, sz, footprint, sea);
         }
 
-        if (TryPlanCoastGuard(kinds, centerSx, centerSz, footprint, out List<long> coastKeys, out int openOceanSkipped))
+        if (IsCoastGuardDisk(kinds, centerSx, centerSz, footprint))
         {
-            LogOceanSkip(capi, openOceanSkipped);
-            int plannedWorthy = coastKeys.Count;
-            coastKeys = BudgetBootstrapVisitStops(coastKeys, centerSx, centerSz, BootstrapMaxVisitStops);
-            LogBudget(capi, plannedWorthy, coastKeys.Count);
-            coastKeys.Sort();
-            return new LodLoginSweepPlan(
+            return PlanBootstrapDisk(
+                kinds, centerSx, centerSz, capi,
                 LodLoginSweepPlanMode.BootstrapCoastGuard,
-                coastKeys,
-                LabelForBudgetedBootstrap("Bootstrap (coast guard)", plannedWorthy, coastKeys.Count));
+                "Bootstrap (coast guard)");
         }
 
-        List<long> worthyKeys = SelectVisitWorthyCells(kinds);
-        int openOcean = kinds.Count - worthyKeys.Count;
-        LogOceanSkip(capi, openOcean);
-        int plannedWorthy = worthyKeys.Count;
-        worthyKeys = BudgetBootstrapVisitStops(worthyKeys, centerSx, centerSz, BootstrapMaxVisitStops);
-        LogBudget(capi, plannedWorthy, worthyKeys.Count);
-        worthyKeys.Sort();
-        return new LodLoginSweepPlan(
+        return PlanBootstrapDisk(
+            kinds, centerSx, centerSz, capi,
             LodLoginSweepPlanMode.BootstrapRadius,
-            worthyKeys,
-            LabelForBudgetedBootstrap("Bootstrap (new world)", plannedWorthy, worthyKeys.Count));
+            "Bootstrap (new world)");
+    }
+
+    static LodLoginSweepPlan PlanBootstrapDisk(
+        Dictionary<long, CellKind> kinds,
+        int centerSx,
+        int centerSz,
+        ICoreClientAPI? capi,
+        LodLoginSweepPlanMode mode,
+        string labelBase)
+    {
+        List<long> landVisit = SelectLandVisitCells(kinds);
+        List<long> openOcean = SelectOpenOceanCells(kinds);
+        List<long> oceanSamples = PickOceanSampleCells(openOcean, centerSx, centerSz);
+        var sampleSet = new HashSet<long>(oceanSamples);
+        var openOceanFill = new List<long>(openOcean.Count);
+        foreach (long key in openOcean)
+        {
+            if (!sampleSet.Contains(key))
+                openOceanFill.Add(key);
+        }
+
+        List<long> landBudgeted = BudgetBootstrapVisitStops(
+            landVisit, centerSx, centerSz, BootstrapMaxVisitStops);
+
+        var visitKeys = new List<long>(landBudgeted);
+        foreach (long key in oceanSamples)
+        {
+            if (!visitKeys.Contains(key))
+                visitKeys.Add(key);
+        }
+
+        LogOceanPlan(capi, openOcean.Count, oceanSamples.Count, openOceanFill.Count, landBudgeted.Count);
+        LogBudget(capi, landVisit.Count, landBudgeted.Count);
+        visitKeys.Sort();
+
+        return new LodLoginSweepPlan(
+            mode,
+            visitKeys,
+            LabelForBudgetedBootstrap(labelBase, landVisit.Count, landBudgeted.Count),
+            oceanSamples,
+            openOceanFill);
+    }
+
+    static bool IsCoastGuardDisk(
+        Dictionary<long, CellKind> kinds,
+        int centerSx,
+        int centerSz,
+        int footprint)
+    {
+        int oceanCount = 0;
+        int minSx = int.MaxValue, maxSx = int.MinValue;
+        int minSz = int.MaxValue, maxSz = int.MinValue;
+
+        foreach ((long key, CellKind kind) in kinds)
+        {
+            if (kind != CellKind.Ocean) continue;
+            oceanCount++;
+            int sx = LodWorld.KeySx(key);
+            int sz = LodWorld.KeySz(key);
+            minSx = Math.Min(minSx, sx);
+            maxSx = Math.Max(maxSx, sx);
+            minSz = Math.Min(minSz, sz);
+            maxSz = Math.Max(maxSz, sz);
+        }
+
+        if (oceanCount < LargeOceanMinCells) return false;
+
+        int spanBlocks = Math.Max(maxSx - minSx, maxSz - minSz) * footprint;
+        long spawnKey = LodWorld.SectionKey(0, centerSx, centerSz);
+        bool spawnInOcean = kinds.TryGetValue(spawnKey, out CellKind spawnKind) && spawnKind == CellKind.Ocean;
+        return spawnInOcean || spanBlocks >= LargeOceanMinSpanBlocks;
     }
 
     internal static List<long> BudgetVisitStops(
@@ -335,19 +408,21 @@ public static class LodLoginSweepBootstrap
             kind, budgeted, planned, LodLoginSweepTiming.FormatDuration(targetSec));
     }
 
-    static void LogOceanSkip(ICoreClientAPI? capi, int skipped)
+    static void LogOceanPlan(
+        ICoreClientAPI? capi,
+        int openOceanTotal,
+        int sampleVisits,
+        int stampFill,
+        int landVisitStops)
     {
-        if (skipped <= 0 || capi == null) return;
+        if (openOceanTotal <= 0 || capi == null) return;
         capi.Logger.Notification(
-            "[DistantVistas] Bootstrap: skipping {0} open-ocean L0 cells (visit land + coastline only).",
-            skipped);
+            "[DistantVistas] Bootstrap ocean: {0} open-water L0 cells — {1} sample visit(s), {2} stamp fill; {3} land/coast visit stops.",
+            openOceanTotal, sampleVisits, stampFill, landVisitStops);
     }
 
-    /// <summary>
-    /// Land, unclassified, and coastline ocean only — skip open-ocean body tiles that do
-    /// not border land (identical water does not change vistas).
-    /// </summary>
-    internal static List<long> SelectVisitWorthyCells(Dictionary<long, CellKind> kinds)
+    /// <summary>Land, unclassified, and coastline ocean — full visit+bake stops.</summary>
+    internal static List<long> SelectLandVisitCells(Dictionary<long, CellKind> kinds)
     {
         var worthy = new List<long>(kinds.Count);
         foreach ((long key, CellKind kind) in kinds)
@@ -366,6 +441,32 @@ public static class LodLoginSweepBootstrap
         return worthy;
     }
 
+    /// <summary>Open-ocean body tiles (no land neighbour) — sample visit + stamp fill only.</summary>
+    internal static List<long> SelectOpenOceanCells(Dictionary<long, CellKind> kinds)
+    {
+        var open = new List<long>();
+        foreach ((long key, CellKind kind) in kinds)
+        {
+            if (kind == CellKind.Ocean && !TouchesLand(key, kinds))
+                open.Add(key);
+        }
+        return open;
+    }
+
+    internal static List<long> PickOceanSampleCells(
+        List<long> openOcean,
+        int centerSx,
+        int centerSz)
+    {
+        if (openOcean.Count == 0) return new List<long>();
+        int max = Math.Min(OpenOceanMaxSamples, openOcean.Count);
+        if (openOcean.Count <= max) return openOcean;
+        return BudgetVisitStops(openOcean, centerSx, centerSz, max);
+    }
+
+    internal static List<long> SelectVisitWorthyCells(Dictionary<long, CellKind> kinds) =>
+        SelectLandVisitCells(kinds);
+
     static bool TouchesLand(long oceanKey, Dictionary<long, CellKind> kinds)
     {
         int sx = LodWorld.KeySx(oceanKey);
@@ -382,44 +483,6 @@ public static class LodLoginSweepBootstrap
             }
         }
         return false;
-    }
-
-    static bool TryPlanCoastGuard(
-        Dictionary<long, CellKind> kinds,
-        int centerSx,
-        int centerSz,
-        int footprint,
-        out List<long> keys,
-        out int openOceanSkipped)
-    {
-        keys = new List<long>();
-        openOceanSkipped = 0;
-        var ocean = new List<(int Sx, int Sz, long Key)>();
-        int minSx = int.MaxValue, maxSx = int.MinValue;
-        int minSz = int.MaxValue, maxSz = int.MinValue;
-
-        foreach ((long key, CellKind kind) in kinds)
-        {
-            if (kind != CellKind.Ocean) continue;
-            int sx = LodWorld.KeySx(key);
-            int sz = LodWorld.KeySz(key);
-            ocean.Add((sx, sz, key));
-            minSx = Math.Min(minSx, sx);
-            maxSx = Math.Max(maxSx, sx);
-            minSz = Math.Min(minSz, sz);
-            maxSz = Math.Max(maxSz, sz);
-        }
-
-        if (ocean.Count < LargeOceanMinCells) return false;
-
-        int spanBlocks = Math.Max(maxSx - minSx, maxSz - minSz) * footprint;
-        long spawnKey = LodWorld.SectionKey(0, centerSx, centerSz);
-        bool spawnInOcean = kinds.TryGetValue(spawnKey, out CellKind spawnKind) && spawnKind == CellKind.Ocean;
-        if (!spawnInOcean && spanBlocks < LargeOceanMinSpanBlocks) return false;
-
-        keys = SelectVisitWorthyCells(kinds);
-        openOceanSkipped = kinds.Count - keys.Count;
-        return keys.Count > 0;
     }
 
     static CellKind ClassifyCell(IClientWorldAccessor world, int sx, int sz, int footprint, int sea)
