@@ -479,6 +479,10 @@ public static class LoginSweepChecks
             "in-window complete marker skips full re-canvas even with leftovers");
         c.True(gate.Contains("no successful sweep recorded yet"),
             "gate runs when completion marker is missing");
+        int idxNoComplete = gate.IndexOf("no successful sweep recorded yet for this world", StringComparison.Ordinal);
+        int idxMiss = gate.IndexOf("still incomplete", StringComparison.Ordinal);
+        c.True(idxNoComplete >= 0 && idxMiss >= 0 && idxNoComplete < idxMiss,
+            "gate prefers no-complete bootstrap over miss-repair on first sweep");
         c.True(gate.Contains("outside 30-day window"),
             "gate runs when completion window expired");
         c.True(gate.Contains("VisitedKeyCount >= visited"),
@@ -536,10 +540,14 @@ public static class LoginSweepChecks
 
         string bake = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
-        c.True(bake.Contains("LodLoginSweepBootstrap.Plan("),
-            "login bake plans sweep with bootstrap vs revisit mode");
+        c.True(bake.Contains("PlanBootstrap"),
+            "login bake plans first sweep with bootstrap spawn disk");
         c.True(bake.Contains("PlanRevisitVisited"),
-            "login bake uses budgeted revisit plan");
+            "login bake uses budgeted revisit plan after complete exists");
+        c.True(bake.Contains("TryLoad(capi) == null"),
+            "login bake bootstraps when no per-world complete marker");
+        c.True(bootstrap.Contains("PlanBootstrap"),
+            "bootstrap exposes PlanBootstrap for first-sweep path");
         c.True(bake.Contains("sweepModeLabel"),
             "login bake progress distinguishes bootstrap vs revisit");
         c.True(bake.Contains("StatusWithEta"),

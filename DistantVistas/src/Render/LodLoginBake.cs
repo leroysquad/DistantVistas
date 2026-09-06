@@ -346,6 +346,25 @@ public sealed class LodLoginBake
     {
         LodWorld world = pipeline.World;
         int visitedCount = LodLoginSweep.VisitedL0Keys(world).Count();
+
+        // First successful sweep for this world: always bootstrap the ~6 km spawn disk
+        // (coast guard / radius), even if the player already walked some land. Revisit/
+        // refresh of VisitedL0Keys would only re-cover the tiny walked frontier and leave
+        // vistas beyond it as sky (0.8.26).
+        if (LodLoginSweepComplete.TryLoad(capi) == null)
+        {
+            LodLoginSweepPlan bootstrap = LodLoginSweepBootstrap.PlanBootstrap(capi.World, capi);
+            sweepMode = bootstrap.Mode;
+            sweepModeLabel = bootstrap.ModeLabel;
+            foreach (long key in bootstrap.Keys)
+                pending.Enqueue(key);
+            total = pending.Count;
+            capi.Logger.Notification(
+                "[DistantVistas] Login visit sweep: {0} ({1} visited in cache; first sweep → bootstrap).",
+                sweepModeLabel, visitedCount);
+            return;
+        }
+
         List<LodLoginBakeAudit.Miss> misses = LodLoginBakeAudit.FindMisses(
             world, pipeline, capi.World.Blocks, plantTintFallback, untintedOf);
 
@@ -375,10 +394,10 @@ public sealed class LodLoginBake
             return;
         }
 
-        LodLoginSweepPlan bootstrap = LodLoginSweepBootstrap.Plan(world, capi.World, capi);
-        sweepMode = bootstrap.Mode;
-        sweepModeLabel = bootstrap.ModeLabel;
-        foreach (long key in bootstrap.Keys)
+        LodLoginSweepPlan fallback = LodLoginSweepBootstrap.PlanBootstrap(capi.World, capi);
+        sweepMode = fallback.Mode;
+        sweepModeLabel = fallback.ModeLabel;
+        foreach (long key in fallback.Keys)
             pending.Enqueue(key);
         total = pending.Count;
     }

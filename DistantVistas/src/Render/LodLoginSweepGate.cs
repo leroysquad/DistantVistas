@@ -1,4 +1,4 @@
-using Vintagestory.API.Client;
+﻿using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 
 namespace DistantVistas;
@@ -32,14 +32,19 @@ public static class LodLoginSweepGate
         if (visited == 0)
             return new Result(true, "empty canvas needs bootstrap sweep");
 
+        LodLoginSweepComplete? complete = LodLoginSweepComplete.TryLoad(capi);
+
+        // First successful sweep for this world must expand land (bootstrap), not season-
+        // refresh a tiny walked set — decide run before miss-repair / revisit paths.
+        if (complete == null
+            || string.IsNullOrEmpty(complete.WorldId)
+            || !string.Equals(complete.WorldId, worldId, StringComparison.Ordinal))
+            return new Result(true, "no successful sweep recorded yet for this world");
+
         // Prefer skip when a successful sweep is still in-window and the canvas did not grow —
         // even if FindMisses reports leftovers. User intent: do not re-canvas the same world
         // within the 30 in-game-day window. Never skip across worlds (0.8.24).
-        LodLoginSweepComplete? complete = LodLoginSweepComplete.TryLoad(capi);
-        if (complete != null
-            && !string.IsNullOrEmpty(complete.WorldId)
-            && string.Equals(complete.WorldId, worldId, StringComparison.Ordinal)
-            && complete.VisitedKeyCount >= visited
+        if (complete.VisitedKeyCount >= visited
             && LodLoginSweepWindow.IsWithin(capi.World, complete.Season, complete.SavedTotalDays))
         {
             return new Result(false,
@@ -50,11 +55,6 @@ public static class LodLoginSweepGate
             world, pipeline, blocks, plantTintFallback, untintedOf);
         if (misses.Count > 0)
             return new Result(true, $"{misses.Count} visited region(s) still incomplete");
-
-        if (complete == null
-            || string.IsNullOrEmpty(complete.WorldId)
-            || !string.Equals(complete.WorldId, worldId, StringComparison.Ordinal))
-            return new Result(true, "no successful sweep recorded yet for this world");
 
         if (complete.VisitedKeyCount < visited)
             return new Result(true, "visited canvas grew since last successful sweep");

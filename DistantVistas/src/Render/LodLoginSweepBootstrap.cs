@@ -39,9 +39,10 @@ public readonly struct LodLoginSweepPlan
 }
 
 /// <summary>
-/// Plans which L0 cells the login visit sweep should touch. Existing visited canvases
-/// are spatially subsampled to a wall-clock budget; an empty cache bootstraps a
-/// coast-guard ocean sweep or a large radius around spawn.
+/// Plans which L0 cells the login visit sweep should touch. With no per-world complete
+/// marker, always bootstraps a coast-guard ocean sweep or ~6 km radius around spawn
+/// (even if some land was already walked). After a successful complete, existing visited
+/// canvases are spatially subsampled to a wall-clock revisit budget.
 /// </summary>
 public static class LodLoginSweepBootstrap
 {
@@ -80,6 +81,7 @@ public static class LodLoginSweepBootstrap
 
     /// <summary>
     /// Plans a season revisit for an existing visited canvas, applying the visit-stop budget.
+    /// Call only when a prior successful complete marker exists for this world.
     /// </summary>
     public static LodLoginSweepPlan PlanRevisitVisited(
         LodWorld world,
@@ -87,12 +89,27 @@ public static class LodLoginSweepBootstrap
         ICoreClientAPI? capi = null) =>
         Plan(world, clientWorld, capi, RevisitMaxVisitStops);
 
+    /// <summary>
+    /// First-sweep / empty-canvas plan: coast-guard or ~6 km spawn-radius disk, spatially
+    /// subsampled to <see cref="BootstrapMaxVisitStops"/>. Use whenever no successful
+    /// per-world complete marker exists — even if VisitedL0Keys is already non-empty.
+    /// </summary>
+    public static LodLoginSweepPlan PlanBootstrap(
+        IClientWorldAccessor clientWorld,
+        ICoreClientAPI? capi = null) =>
+        PlanEmptyCanvas(clientWorld, capi);
+
     static LodLoginSweepPlan Plan(
         LodWorld world,
         IClientWorldAccessor clientWorld,
         ICoreClientAPI? capi,
         int maxVisitStops)
     {
+        // No successful complete for this world → bootstrap the spawn disk so vistas expand.
+        // Do not season-refresh a tiny walked set (PlanRevisitKeys) on first login.
+        if (capi != null && LodLoginSweepComplete.TryLoad(capi) == null)
+            return PlanEmptyCanvas(clientWorld, capi);
+
         List<long> visited = LodLoginSweep.VisitedL0Keys(world).ToList();
         if (visited.Count > 0)
             return PlanRevisitKeys(world, clientWorld, capi, visited, maxVisitStops);
