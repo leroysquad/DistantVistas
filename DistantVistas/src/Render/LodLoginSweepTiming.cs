@@ -4,8 +4,8 @@ namespace DistantVistas;
 
 /// <summary>
 /// Measures per-stop timing during the login visit sweep and formats ETA strings.
-/// Target window: ~3–5 minutes wall-clock for season revisit on large canvases;
-/// empty-canvas bootstrap uses a shorter <see cref="BootstrapTargetMaxSec"/> budget.
+/// Target window: ~3–5 minutes wall-clock for season revisit and first-join bootstrap
+/// on large canvases.
 /// </summary>
 public sealed class LodLoginSweepTiming
 {
@@ -15,8 +15,11 @@ public sealed class LodLoginSweepTiming
     /// <summary>Hard upper bound of the revisit sweep target window (5 minutes).</summary>
     public const double TargetMaxSec = 300.0;
 
-    /// <summary>Shorter budget for empty-canvas bootstrap (~2.5 min at typical stop rate).</summary>
-    public const double BootstrapTargetMaxSec = 150.0;
+    /// <summary>
+    /// First-join bootstrap uses the same ~3–5 minute window as revisit (was 150s / ~38 stops
+    /// at 4s/stop — too sparse across the ~6 km probe disk).
+    /// </summary>
+    public const double BootstrapTargetMaxSec = TargetMaxSec;
 
     /// <summary>Typical per-stop estimate before measured samples (reduced waits vs 0.8.15).</summary>
     public const double InitialSecPerStop = 4.0;

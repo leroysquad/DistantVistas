@@ -50,7 +50,8 @@ public static class LodLoginSweepBootstrap
     public const int EmptyCanvasBootstrapRadiusBlocks = 6000;
 
     /// <summary>
-    /// Hard cap on bootstrap visit stops (~2.5 min at <see cref="LodLoginSweepTiming.InitialSecPerStop"/>).
+    /// Hard cap on bootstrap visit stops (~5 min at <see cref="LodLoginSweepTiming.InitialSecPerStop"/>).
+    /// Spatial subsample uses <see cref="BudgetBootstrapVisitStops"/> (inner-weighted bands).
     /// </summary>
     public static int BootstrapMaxVisitStops =>
         LodLoginSweepTiming.BootstrapCellBudget(LodLoginSweepTiming.InitialSecPerStop);
@@ -193,7 +194,7 @@ public static class LodLoginSweepBootstrap
         if (TryPlanCoastGuard(kinds, centerSx, centerSz, footprint, out List<long> coastKeys))
         {
             int planned = coastKeys.Count;
-            coastKeys = BudgetVisitStops(coastKeys, centerSx, centerSz, BootstrapMaxVisitStops);
+            coastKeys = BudgetBootstrapVisitStops(coastKeys, centerSx, centerSz, BootstrapMaxVisitStops);
             LogBudget(capi, planned, coastKeys.Count);
             coastKeys.Sort();
             return new LodLoginSweepPlan(
@@ -209,7 +210,7 @@ public static class LodLoginSweepBootstrap
             radiusKeys.Add(LodWorld.SectionKey(0, sx, sz));
         }
         int plannedRadius = radiusKeys.Count;
-        radiusKeys = BudgetVisitStops(radiusKeys, centerSx, centerSz, BootstrapMaxVisitStops);
+        radiusKeys = BudgetBootstrapVisitStops(radiusKeys, centerSx, centerSz, BootstrapMaxVisitStops);
         LogBudget(capi, plannedRadius, radiusKeys.Count);
         radiusKeys.Sort();
         return new LodLoginSweepPlan(
@@ -242,6 +243,68 @@ public static class LodLoginSweepBootstrap
             sampled.Add(keys[idx]);
         }
         return sampled;
+    }
+
+    /// <summary>
+    /// First-join bootstrap subsample across the ~6 km probe disk. Linear distance picks
+    /// (see <see cref="BudgetVisitStops"/>) left ~1 stop per long outer arc — 38 stops
+    /// across 27k cells felt like a sparse sprinkle. Inner-weighted distance bands put more
+    /// teleports near spawn and along each ring while still visiting the disk edge.
+    /// </summary>
+    internal static List<long> BudgetBootstrapVisitStops(
+        List<long> keys,
+        int centerSx,
+        int centerSz,
+        int max)
+    {
+        if (keys.Count <= max) return keys;
+
+        keys.Sort((a, b) =>
+        {
+            long da = DistSq(a, centerSx, centerSz);
+            long db = DistSq(b, centerSx, centerSz);
+            return da.CompareTo(db);
+        });
+
+        int bands = Math.Clamp(max / 5, 10, 18);
+        var result = new List<long>(max);
+        var used = new HashSet<long>();
+        int weightSum = bands * (bands + 1) / 2;
+
+        for (int b = 0; b < bands && result.Count < max; b++)
+        {
+            int start = (int)((long)b * keys.Count / bands);
+            int end = (int)((long)(b + 1) * keys.Count / bands);
+            if (end <= start) end = Math.Min(start + 1, keys.Count);
+            int span = end - start;
+            if (span <= 0) continue;
+
+            int weight = bands - b;
+            int picks = Math.Max(1, (int)Math.Round(max * weight / (double)weightSum));
+            picks = Math.Min(picks, max - result.Count);
+            picks = Math.Min(picks, span);
+
+            for (int p = 0; p < picks; p++)
+            {
+                int idx = span == 1
+                    ? start
+                    : start + (int)((long)p * (span - 1) / Math.Max(1, picks - 1));
+                long key = keys[idx];
+                if (used.Add(key))
+                    result.Add(key);
+            }
+        }
+
+        for (int i = 0; result.Count < max && i < keys.Count; i++)
+        {
+            int idx = max == 1
+                ? 0
+                : (int)((long)i * (keys.Count - 1) / (max - 1));
+            if (used.Add(keys[idx]))
+                result.Add(keys[idx]);
+        }
+
+        return result;
     }
 
     static long DistSq(long key, int centerSx, int centerSz)

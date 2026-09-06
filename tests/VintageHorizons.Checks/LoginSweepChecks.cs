@@ -74,8 +74,10 @@ public static class LoginSweepChecks
 
         c.Eq(75, LodLoginSweepBootstrap.RevisitMaxVisitStops,
             "revisit cap targets ~5 min at 4s/stop");
-        c.True(LodLoginSweepBootstrap.RevisitMaxVisitStops > LodLoginSweepBootstrap.BootstrapMaxVisitStops,
-            "revisit budget exceeds bootstrap budget");
+        c.Eq(75, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "bootstrap cap matches revisit (~5 min at 4s/stop)");
+        c.True(LodLoginSweepBootstrap.RevisitMaxVisitStops >= LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "revisit budget is at least bootstrap budget");
     }
 
     static void BackdropHook(Check c)
@@ -515,13 +517,13 @@ public static class LoginSweepChecks
     {
         c.Eq(180.0, LodLoginSweepTiming.TargetMinSec, "sweep target min seconds");
         c.Eq(300.0, LodLoginSweepTiming.TargetMaxSec, "sweep target max seconds");
-        c.Eq(150.0, LodLoginSweepTiming.BootstrapTargetMaxSec, "bootstrap target max seconds");
+        c.Eq(300.0, LodLoginSweepTiming.BootstrapTargetMaxSec, "bootstrap target max seconds");
         c.Eq(6000, LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks,
             "empty-canvas bootstrap probe radius default");
         c.Eq(94, LodLoginSweepBootstrap.BootstrapCellRadius(),
             "6000 blocks is ~94 L0 cells radius at 64-block footprint");
-        c.Eq(38, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
-            "bootstrap visit cap targets ~2.5 min at 4s/stop");
+        c.Eq(75, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "bootstrap visit cap targets ~5 min at 4s/stop");
         c.Eq(75, LodLoginSweepBootstrap.RevisitMaxVisitStops,
             "revisit visit cap targets ~5 min at 4s/stop");
         c.Eq(80, LodLoginSweep.MaxChunkWaitTicks, "chunk wait capped ~4s at 50ms pulse");
@@ -531,6 +533,8 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepBootstrap.cs"));
         c.True(bootstrap.Contains("BudgetVisitStops"),
             "bootstrap applies hard visit stop budget");
+        c.True(bootstrap.Contains("BudgetBootstrapVisitStops"),
+            "bootstrap uses inner-weighted distance-band subsample");
         c.True(bootstrap.Contains("PlanRevisitKeys"),
             "revisit applies spatial subsample budget");
         c.True(bootstrap.Contains("BootstrapCoastGuard"),
