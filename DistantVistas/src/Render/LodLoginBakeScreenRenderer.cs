@@ -209,6 +209,15 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
                 {
                     // Best-effort — quad may still succeed with ortho projection.
                 }
+
+                try
+                {
+                    rapi.GlToggleBlend(true);
+                }
+                catch
+                {
+                    // Opaque splash still works without blend.
+                }
             }
 
             bool drewOpaque = DrawFullFrame(w, h, orthoPass, countHealth, path);
@@ -420,7 +429,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
 
         // Present path: baked solid + explicit MeshRef quad (internal tint quad needs Ortho stage).
         int bakedId = SolidColorTextureId(tint);
-        if (bakedId > 0 && TryDrawWithExplicitQuad(bakedId, 0, 0, w, h, 197))
+        if (bakedId > 0 && TryDrawFullScreenQuad(bakedId, w, h, 197, orthoPass, tint))
             return true;
 
         int whiteId = EnsureWhiteTexture();
@@ -431,7 +440,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
             return cleared;
         }
 
-        if (TryDrawWithExplicitQuad(whiteId, 0, 0, w, h, 197))
+        if (TryDrawFullScreenQuad(whiteId, w, h, 197, orthoPass, tint))
             return true;
 
         if (orthoPass && TryDrawWithInternalQuad(whiteId, 0, 0, w, h, 197, tint))
@@ -466,12 +475,16 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
 
     void DrawBackdrop(float w, float h, bool orthoPass)
     {
-        if (!backdropMissing && backdrop.TextureId > 0
-            && TryDrawTexture(backdrop.TextureId, 0, 0, w, h, 200, orthoPass))
+        if (!backdropMissing && backdrop.TextureId > 0 && backdrop.Width > 0 && backdrop.Height > 0)
         {
-            tint.Set(0.04f, 0.05f, 0.08f, 0.45f * overlayAlpha);
-            DrawSolid(0, 0, w, h, 199, tint, orthoPass);
-            return;
+            var fit = LodLoginSplashLayout.CoverFit(w, h, backdrop.Width, backdrop.Height);
+            if (fit.Width > 0 && fit.Height > 0
+                && TryDrawTexture(backdrop.TextureId, fit.X, fit.Y, fit.Width, fit.Height, 200, orthoPass))
+            {
+                tint.Set(0.04f, 0.05f, 0.08f, 0.45f * overlayAlpha);
+                DrawSolid(0, 0, w, h, 199, tint, orthoPass);
+                return;
+            }
         }
 
         tint.Set(DarkFill[0], DarkFill[1], DarkFill[2], DarkFill[3] * overlayAlpha);
@@ -512,11 +525,11 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         }
 
         int bakedId = SolidColorTextureId(color);
-        if (bakedId > 0 && TryDrawWithExplicitQuad(bakedId, x, y, width, height, z))
+        if (bakedId > 0 && TryDrawSolidQuad(bakedId, x, y, width, height, z, orthoPass, color))
             return true;
 
         int whiteId = EnsureWhiteTexture();
-        if (whiteId > 0 && TryDrawWithExplicitQuad(whiteId, x, y, width, height, z))
+        if (whiteId > 0 && TryDrawSolidQuad(whiteId, x, y, width, height, z, orthoPass, color))
             return true;
 
         if (!orthoPass) return false;
@@ -543,6 +556,43 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Solid or full-frame fill. Tries one quad first, then tiles large rects (ultrawide / 4K).
+    /// Internal tinted quads work after <see cref="TryEnterOrthoMode"/> even on present path.
+    /// </summary>
+    bool TryDrawFullScreenQuad(
+        int textureId, float w, float h, float z, bool orthoPass, Vec4f? tintColor = null) =>
+        TryDrawSolidQuad(textureId, 0, 0, w, h, z, orthoPass, tintColor);
+
+    bool TryDrawSolidQuad(
+        int textureId, float x, float y, float w, float h, float z, bool orthoPass, Vec4f? tintColor = null)
+    {
+        if (textureId <= 0 || w <= 0 || h <= 0) return false;
+
+        if (TryDrawWithExplicitQuad(textureId, x, y, w, h, z))
+            return true;
+
+        if (TryDrawWithInternalQuad(textureId, x, y, w, h, z, tintColor))
+            return true;
+
+        float tile = LodLoginSplashLayout.OpaqueTileSize;
+        if (w <= tile * 1.5f && h <= tile * 1.5f)
+            return false;
+
+        for (float ty = 0; ty < h; ty += tile)
+        {
+            float th = Math.Min(tile, h - ty);
+            for (float tx = 0; tx < w; tx += tile)
+            {
+                float tw = Math.Min(tile, w - tx);
+                if (!TryDrawWithExplicitQuad(textureId, x + tx, y + ty, tw, th, z))
+                    return false;
+            }
+        }
+
+        return true;
     }
 
     bool TryDrawWithExplicitQuad(int textureId, float x, float y, float width, float height, float z)

@@ -1444,6 +1444,7 @@ public class DistantVistasModSystem : ModSystem
         else
             LodLoginBakeSweepGate.Release();
         renderer.LoginBakeComplete = false;
+        pipeline.ExploreBake.Clear();
         renderer.LoginBakeOverlayActive = false;
         assist?.Reset();
         // Belongs to the world being left: the next one is a different savegame with a
