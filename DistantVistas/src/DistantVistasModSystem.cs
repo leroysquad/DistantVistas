@@ -681,12 +681,11 @@ public class DistantVistasModSystem : ModSystem
             capi, section, sectionKey, tints.PlantTintFallback, UntintedForRebake);
 
     /// <summary>
-    /// Client palette registration for newly captured blocks. When the map chunk is
-    /// resident we sample vanilla <c>GetColor</c> and store FlagBaked + SlotNone so
-    /// far LOD matches near green after the player leaves — spring snow-row climate
-    /// samples cannot lavenderize valley grass via live tint. Provisional peeks and
-    /// the login sweep keep the live-tint path until real terrain is confirmed.
-    /// A server has no atlas and cannot answer this at all (DESIGN.md §10.4).
+    /// Client palette registration for newly captured blocks. Explore/discover with
+    /// resident map chunks uses the same live <c>GetColor</c> visit bake as login
+    /// sweep (<see cref="LodSeasonBake.BakeSectionFromVisit"/>) — FlagBaked + SlotNone
+    /// so far LOD keeps the current season's paint after leave. Provisional peeks and
+    /// the login sweep defer to their own paths. Server has no atlas (DESIGN.md §10.4).
     /// </summary>
     (int Color, byte TintSlot, bool Baked) DescribePalette(int blockId, int blockX, int blockY, int blockZ)
     {
@@ -723,22 +722,23 @@ public class DistantVistasModSystem : ModSystem
     }
 
     /// <summary>
-    /// Exact tint lock at capture time when chunks are loaded — same GetColor path as
-    /// <see cref="LodSeasonBake.BakeSectionFromVisit"/>, without waiting for explore drain.
-    /// Spring (May): snow-row climate samples must not live-tint valley grass lavender;
-    /// prefer GetColor, else <see cref="LodSeasonBake.BakePaletteColor"/> (snow guards).
+    /// Per-column live visit bake at capture registration — same <c>GetColor</c> as
+    /// <see cref="LodSeasonBake.SampleVanillaColor"/> / login sweep. Only when the map
+    /// chunk is resident; otherwise leave live tint for <see cref="LodExploreBake"/> to
+    /// visit-bake when chunks load. No <c>BakePaletteColor</c> shader repro on discover:
+    /// that path is legacy disk heal only, not a substitute for seasonal live paint.
     /// </summary>
     bool TryDiscoverBake(Block block, int x, int y, int z, int untintedColor, out int bakedColor)
     {
         bakedColor = 0;
         if (loginBake?.Active == true) return false;
         if (pipeline.CurrentCaptureProvisional) return false;
+        if (!IsCaptureColumnMapLoaded(x, z)) return false;
 
         bool isSnowCap = LodPaletteRepair.IsSnowOrIceAlbedo(untintedColor)
             || LodSeasonBake.ColumnSurfaceIsSnowy(block);
         if (isSnowCap)
         {
-            if (!IsCaptureColumnMapLoaded(x, z)) return false;
             bakedColor = LodSeasonBake.SampleVanillaColor(capi, block, x, y, z);
             if (bakedColor == 0) bakedColor = untintedColor;
             bakedColor = LodPaletteRepair.KeepCapturedColor(
@@ -748,18 +748,7 @@ public class DistantVistasModSystem : ModSystem
 
         if (!LodSeasonBake.CanBake(block, untintedColor, tints.PlantTintFallback)) return false;
 
-        if (IsCaptureColumnMapLoaded(x, z))
-            bakedColor = LodSeasonBake.SampleVanillaColor(capi, block, x, y, z);
-
-        if (bakedColor == 0)
-        {
-            (int composite, LodUntintedShare share) = UntintedForRebake(block);
-            composite = LodPaletteRepair.KeepCapturedColor(
-                composite, untintedColor, LodBlockPolicy.IsClimateUntinted(block));
-            bakedColor = LodSeasonBake.BakePaletteColor(
-                capi, capi.World, block, composite, x, y, z, share, tints.PlantTintFallback);
-        }
-
+        bakedColor = LodSeasonBake.SampleVanillaColor(capi, block, x, y, z);
         if (bakedColor == 0 || LodPaletteRepair.NeedsColor(bakedColor)) return false;
 
         bakedColor = LodPaletteRepair.KeepCapturedColor(

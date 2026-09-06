@@ -824,11 +824,10 @@ public class LodPipeline
     }
 
     /// <summary>
-    /// Lock L0 to band-3 baked RGB on the capture tick so the DV mesh is already green
-    /// before vanilla covers it and stays green after leave (hard swap, not a fade).
-    /// GetColor when chunks are resident; <see cref="LodSeasonBake.UpgradeLegacyEntries"/>
-    /// for any live-tint rows left; remesh + mip burst so coarse parents do not keep
-    /// lavender live-tint plates.
+    /// Same live visit bake as login sweep: <see cref="LodSeasonBake.BakeSectionFromVisit"/>
+    /// when map chunks are resident, so the DV mesh carries current-season FlagBaked paint
+    /// before vanilla covers it and after leave. Explore drain retries when chunks were not
+    /// ready on apply. Remesh + mip burst; no shader-repro substitute on discover.
     /// </summary>
     void FinalizeL0DiscoverBake(long sectionKey, LodSection section, bool provisional)
     {
@@ -842,12 +841,9 @@ public class LodPipeline
 
         if (LodExploreBake.CanBakeSectionNow(capi.World, sectionKey))
         {
-            changed += LodSeasonBake.BakeSectionFromVisit(
+            changed = LodSeasonBake.BakeSectionFromVisit(
                 capi, section, sectionKey, ExplorePlantTintFallback, ExploreUntintedOf);
         }
-
-        changed += LodSeasonBake.UpgradeLegacyEntries(
-            capi, section, sectionKey, ExplorePlantTintFallback, ExploreUntintedOf);
 
         World.RenderDirty.Add(sectionKey);
         InvalidateGpuMesh?.Invoke(sectionKey);

@@ -4,10 +4,10 @@ using Vintagestory.API.Common;
 namespace DistantVistas;
 
 /// <summary>
-/// Budgeted explore-time bake: after capture while chunks are still loaded, lock each
-/// column top to vanilla <c>GetColor</c> (<see cref="LodPaletteEntry.FlagBaked"/>)
-/// so far LOD matches near green when the player leaves. Queued from capture apply;
-/// drained on the game tick like <see cref="LodPipeline.ApplyCaptureResults"/>.
+/// Budgeted explore-time <strong>live visit bake</strong> — same
+/// <see cref="LodSeasonBake.BakeSectionFromVisit"/> / <c>GetColor</c> path as login sweep,
+/// not shader-repro or live-tint sheets. Queued when capture apply could not visit-bake
+/// (chunks not yet resident); drained 1–2 L0 sections/tick while chunks load.
 /// </summary>
 public sealed class LodExploreBake
 {

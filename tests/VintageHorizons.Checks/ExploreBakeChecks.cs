@@ -29,9 +29,11 @@ public static class ExploreBakeChecks
         c.True(pipeline.Contains("CurrentCaptureProvisional"),
             "pipeline exposes provisional flag for palette registration");
         c.True(pipeline.Contains("FinalizeL0DiscoverBake"),
-            "capture apply finalizes L0 bake before first mesh upload");
-        c.True(pipeline.Contains("UpgradeLegacyEntries"),
-            "capture apply upgrades any remaining live-tint palette rows");
+            "capture apply finalizes L0 live visit bake before first mesh upload");
+        c.True(pipeline.Contains("BakeSectionFromVisit"),
+            "discover finalize uses same visit bake as login sweep");
+        c.False(ContainsBetween(pipeline, "void FinalizeL0DiscoverBake", "int RegisterPaletteEntry", "UpgradeLegacyEntries"),
+            "discover finalize does not substitute shader-repro for live GetColor");
         c.True(pipeline.Contains("InvalidateGpuMesh"),
             "capture apply drops stale GPU mesh so DV paint remeshes band 3");
 
@@ -52,8 +54,10 @@ public static class ExploreBakeChecks
             "mod wires plant tint fallback for explore bake");
         c.True(mod.Contains("TryDiscoverBake"),
             "mod bakes palette at capture when map chunk is loaded");
-        c.True(mod.Contains("BakePaletteColor"),
-            "discover bake falls back to snow-guarded tint repro when GetColor misses");
+        c.True(mod.Contains("SampleVanillaColor"),
+            "discover bake uses live GetColor like login visit sweep");
+        c.False(ContainsBetween(mod, "bool TryDiscoverBake", "bool IsCaptureColumnMapLoaded", "BakePaletteColor"),
+            "discover bake does not use shader-repro BakePaletteColor");
         c.True(mod.Contains("ColumnSurfaceIsSnowy"),
             "real snow caps bake GetColor instead of spring live-tint");
         c.False(mod.Contains("cx >= 0 && cz >= 0"),
@@ -62,6 +66,15 @@ public static class ExploreBakeChecks
             "discover bake returns FlagBaked palette row");
         c.False(mod.Contains("Baked=false ALWAYS"),
             "DescribePalette no longer always returns live-tint path");
+    }
+
+    static bool ContainsBetween(string text, string start, string end, string needle)
+    {
+        int i0 = text.IndexOf(start, StringComparison.Ordinal);
+        if (i0 < 0) return false;
+        int i1 = text.IndexOf(end, i0 + start.Length, StringComparison.Ordinal);
+        if (i1 < 0) return text[i0..].Contains(needle, StringComparison.Ordinal);
+        return text[i0..i1].Contains(needle, StringComparison.Ordinal);
     }
 
     static void SpringSnowAcceptance(Check c)
