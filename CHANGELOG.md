@@ -1,3 +1,6 @@
+## 0.8.38
+- **Lavender far LOD on discover (root cause).** `DescribePalette` no longer always returns `Baked=false` for climate topsoil/plants: when the map chunk is resident, capture samples vanilla `GetColor` and stores `FlagBaked` + `SlotNone` immediately. Non-provisional L0 capture with loaded chunks also runs `BakeSectionFromVisit` on apply (remesh, mip, persist). Provisional peeks and login sweep unchanged. 0.8.37 splash + 0.8.35 sweep + explore drain retained as safety nets.
+
 ## 0.8.37
 - **Login splash resolution-independent (2560×1369 / ultrawide).** Backdrop art stays 1920×1080; draw uses `LodLoginSplashLayout.CoverFit` (scale-to-cover, centered — no 16:9 assumption). Opaque cover hardened for any framebuffer size: present-path blend + depth-off, internal tinted quad after `OrthoMode`, and **512px tiled quads** when a single full-screen explicit quad fails. 0.8.36 lavender LOD explore-bake + luminance climate retained. Optional follow-up (not in this build): DV-owned grasscoverage overlays if HD TrueScale pack soil/overlay size mismatch affects capture — primary leave→purple fix remains tint/bake.
 

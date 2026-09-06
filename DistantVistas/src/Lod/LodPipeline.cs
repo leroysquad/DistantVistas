@@ -103,6 +103,9 @@ public class LodPipeline
     /// <summary>Explore-time exact bake while chunks are still loaded (client only).</summary>
     public LodExploreBake ExploreBake { get; } = new();
 
+    /// <summary>True while <see cref="ApplyOneCaptureResult"/> is registering a peek capture.</summary>
+    public bool CurrentCaptureProvisional { get; private set; }
+
     public Block? ExplorePlantTintFallback { get; set; }
 
     public System.Func<Block, (int Color, LodUntintedShare Share)>? ExploreUntintedOf { get; set; }
@@ -739,7 +742,19 @@ public class LodPipeline
     void ApplyOneCaptureResult(CaptureResult result)
     {
         LodSection section = World.GetOrCreateSection(result.SectionKey);
+        CurrentCaptureProvisional = result.Provisional;
+        try
+        {
+            ApplyOneCaptureResultCore(result, section);
+        }
+        finally
+        {
+            CurrentCaptureProvisional = false;
+        }
+    }
 
+    void ApplyOneCaptureResultCore(CaptureResult result, LodSection section)
+    {
         ulong[]?[] batch = result.RunsByColumn;
 
         for (int col = 0; col < batch.Length; col++)
@@ -804,7 +819,31 @@ public class LodPipeline
             World.ClassifySparseL0(result.SectionKey, section);
             World.MarkChanged(result.SectionKey);
             ExploreBake.Queue(result.SectionKey, section, DeferLegacyHeal);
+            TryBakeCapturedSection(result.SectionKey, section, result.Provisional);
         }
+    }
+
+    /// <summary>
+    /// Non-provisional L0 with resident map chunks: full visit bake (remesh, mip, persist)
+    /// on the same tick as capture when cheap — explore drain covers the rest.
+    /// </summary>
+    void TryBakeCapturedSection(long sectionKey, LodSection section, bool provisional)
+    {
+        if (provisional || DeferLegacyHeal) return;
+        if (LodWorld.KeyLevel(sectionKey) != 0) return;
+        if (api.Side != EnumAppSide.Client || ExploreUntintedOf == null) return;
+
+        var capi = (ICoreClientAPI)api;
+        if (!LodExploreBake.CanBakeSectionNow(capi.World, sectionKey)) return;
+
+        int changed = LodSeasonBake.BakeSectionFromVisit(
+            capi, section, sectionKey, ExplorePlantTintFallback, ExploreUntintedOf);
+        if (changed <= 0) return;
+
+        World.MarkChanged(sectionKey);
+        World.RenderDirty.Add(sectionKey);
+        InvalidateGpuMesh?.Invoke(sectionKey);
+        DrainLoginPersistence(1);
     }
 
     /// <summary>

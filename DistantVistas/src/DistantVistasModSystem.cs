@@ -681,8 +681,10 @@ public class DistantVistasModSystem : ModSystem
             capi, section, sectionKey, tints.PlantTintFallback, UntintedForRebake);
 
     /// <summary>
-    /// Client palette registration for newly captured blocks: stable untinted atlas mean
-    /// plus a live tint slot. Login bake handles visited cache separately on join.
+    /// Client palette registration for newly captured blocks. When the map chunk is
+    /// resident we sample vanilla <c>GetColor</c> and store FlagBaked + SlotNone so
+    /// far LOD matches near green after the player leaves. Provisional peeks and the
+    /// login sweep keep the live-tint path until real terrain is confirmed.
     /// A server has no atlas and cannot answer this at all (DESIGN.md §10.4).
     /// </summary>
     (int Color, byte TintSlot, bool Baked) DescribePalette(int blockId, int blockX, int blockY, int blockZ)
@@ -709,11 +711,43 @@ public class DistantVistasModSystem : ModSystem
 
         color = LodPaletteRepair.KeepCapturedColor(
             color, terrainFallbackColor, LodBlockPolicy.IsClimateUntinted(block));
+
+        if (TryDiscoverBake(block, blockX, blockY, blockZ, color, out int bakedColor))
+            return (bakedColor, (byte)LodTintRegistry.SlotNone, true);
+
         byte slot = LodPaletteRepair.IsRockLikeAlbedo(color) || LodPaletteRepair.IsSnowOrIceAlbedo(color)
             ? (byte)LodTintRegistry.SlotNone
             : (byte)TintSlotOf(block);
-        // Newly discovered land keeps the live shader path until the next relog bake.
         return (color, slot, false);
+    }
+
+    /// <summary>
+    /// Exact tint lock at capture time when chunks are loaded — same GetColor path as
+    /// <see cref="LodSeasonBake.BakeSectionFromVisit"/>, without waiting for explore drain.
+    /// </summary>
+    bool TryDiscoverBake(Block block, int x, int y, int z, int untintedColor, out int bakedColor)
+    {
+        bakedColor = 0;
+        if (loginBake?.Active == true) return false;
+        if (pipeline.CurrentCaptureProvisional) return false;
+        if (!IsCaptureColumnMapLoaded(x, z)) return false;
+        if (!LodSeasonBake.CanBake(block, untintedColor, tints.PlantTintFallback)) return false;
+
+        bakedColor = LodSeasonBake.SampleVanillaColor(capi, block, x, y, z);
+        if (bakedColor == 0) return false;
+
+        bakedColor = LodPaletteRepair.KeepCapturedColor(
+            bakedColor, untintedColor, LodBlockPolicy.IsClimateUntinted(block));
+        return true;
+    }
+
+    bool IsCaptureColumnMapLoaded(int x, int z)
+    {
+        var ba = capi.World.BlockAccessor;
+        int chunkSize = GlobalConstants.ChunkSize;
+        return LodCoveragePolicy.AllMapChunksLoaded(
+            x, x + 1, z, z + 1, chunkSize,
+            (cx, cz) => cx >= 0 && cz >= 0 && ba.GetMapChunk(cx, cz) != null);
     }
 
     /// <summary>

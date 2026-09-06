@@ -26,6 +26,10 @@ public static class ExploreBakeChecks
             "pipeline drains explore bake on game tick");
         c.True(pipeline.Contains("ExploreUntintedOf"),
             "pipeline wires explore untinted resolver from mod system");
+        c.True(pipeline.Contains("CurrentCaptureProvisional"),
+            "pipeline exposes provisional flag for palette registration");
+        c.True(pipeline.Contains("TryBakeCapturedSection"),
+            "capture apply runs visit bake when L0 chunks are resident");
 
         string explore = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodExploreBake.cs"));
@@ -42,6 +46,12 @@ public static class ExploreBakeChecks
             "mod re-queues live-tint L0 near player on walk-back");
         c.True(mod.Contains("ExplorePlantTintFallback"),
             "mod wires plant tint fallback for explore bake");
+        c.True(mod.Contains("TryDiscoverBake"),
+            "mod bakes palette at capture when map chunk is loaded");
+        c.True(mod.Contains("return (bakedColor, (byte)LodTintRegistry.SlotNone, true)"),
+            "discover bake returns FlagBaked palette row");
+        c.False(mod.Contains("Baked=false ALWAYS"),
+            "DescribePalette no longer always returns live-tint path");
     }
 
     static void ShaderSafetyNet(Check c)
