@@ -724,6 +724,8 @@ public class DistantVistasModSystem : ModSystem
     /// <summary>
     /// Exact tint lock at capture time when chunks are loaded — same GetColor path as
     /// <see cref="LodSeasonBake.BakeSectionFromVisit"/>, without waiting for explore drain.
+    /// Spring (May): snow-row climate samples must not live-tint valley grass lavender;
+    /// prefer GetColor, else <see cref="LodSeasonBake.BakePaletteColor"/> (snow guards).
     /// </summary>
     bool TryDiscoverBake(Block block, int x, int y, int z, int untintedColor, out int bakedColor)
     {
@@ -731,10 +733,31 @@ public class DistantVistasModSystem : ModSystem
         if (loginBake?.Active == true) return false;
         if (pipeline.CurrentCaptureProvisional) return false;
         if (!IsCaptureColumnMapLoaded(x, z)) return false;
+
+        bool isSnowCap = LodPaletteRepair.IsSnowOrIceAlbedo(untintedColor)
+            || LodSeasonBake.ColumnSurfaceIsSnowy(block);
+        if (isSnowCap)
+        {
+            bakedColor = LodSeasonBake.SampleVanillaColor(capi, block, x, y, z);
+            if (bakedColor == 0) bakedColor = untintedColor;
+            bakedColor = LodPaletteRepair.KeepCapturedColor(
+                bakedColor, untintedColor, LodBlockPolicy.IsClimateUntinted(block));
+            return bakedColor != 0 && !LodPaletteRepair.NeedsColor(bakedColor);
+        }
+
         if (!LodSeasonBake.CanBake(block, untintedColor, tints.PlantTintFallback)) return false;
 
         bakedColor = LodSeasonBake.SampleVanillaColor(capi, block, x, y, z);
-        if (bakedColor == 0) return false;
+        if (bakedColor == 0)
+        {
+            (int composite, LodUntintedShare share) = UntintedForRebake(block);
+            composite = LodPaletteRepair.KeepCapturedColor(
+                composite, untintedColor, LodBlockPolicy.IsClimateUntinted(block));
+            bakedColor = LodSeasonBake.BakePaletteColor(
+                capi, capi.World, block, composite, x, y, z, share, tints.PlantTintFallback);
+        }
+
+        if (bakedColor == 0 || LodPaletteRepair.NeedsColor(bakedColor)) return false;
 
         bakedColor = LodPaletteRepair.KeepCapturedColor(
             bakedColor, untintedColor, LodBlockPolicy.IsClimateUntinted(block));

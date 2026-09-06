@@ -6,8 +6,8 @@ public static class ExploreBakeChecks
     {
         Budget(c);
         PipelineHook(c);
+        SpringSnowAcceptance(c);
         ShaderSafetyNet(c);
-        PerChannelLavenderGuard(c);
     }
 
     static void Budget(Check c)
@@ -48,34 +48,52 @@ public static class ExploreBakeChecks
             "mod wires plant tint fallback for explore bake");
         c.True(mod.Contains("TryDiscoverBake"),
             "mod bakes palette at capture when map chunk is loaded");
+        c.True(mod.Contains("BakePaletteColor"),
+            "discover bake falls back to snow-guarded tint repro when GetColor misses");
+        c.True(mod.Contains("ColumnSurfaceIsSnowy"),
+            "real snow caps bake GetColor instead of spring live-tint");
         c.True(mod.Contains("return (bakedColor, (byte)LodTintRegistry.SlotNone, true)"),
             "discover bake returns FlagBaked palette row");
         c.False(mod.Contains("Baked=false ALWAYS"),
             "DescribePalette no longer always returns live-tint path");
     }
 
+    static void SpringSnowAcceptance(Check c)
+    {
+        // May/spring: snow-row high sample is low-chroma bright — must not lavenderize valley grass.
+        float hr = 0.96f, hg = 0.97f, hb = 0.98f;
+        float lr = 0.48f, lg = 0.61f, lb = 0.05f;
+        c.True(LodTintRegistry.IsSnowLikeTint(hr, hg, hb),
+            "spring snow-band climate row is recognised as snow-like");
+        var low = new float[LodTintRegistry.MaxSlots * 4];
+        var high = new float[LodTintRegistry.MaxSlots * 4];
+        low[4] = lr; low[5] = lg; low[6] = lb; low[7] = 1f;
+        high[4] = hr; high[5] = hg; high[6] = hb; high[7] = 1f;
+        LodTintRegistry.ProtectHighTintFromSnow(low, high, slot: 1);
+        c.Near(lr, high[4], 0.0001, "valley green replaces snow-row high (no lavender sheet)");
+        // Live-tint safety net: per-channel climate ratio skews greener than luminance scale.
+        float sr = 0.50f, sg = 0.70f, sb = 0.20f;
+        float kr = 0.50f, kg = 0.80f, kb = 0.20f;
+        float localR = 0.62f, localG = 0.52f, localB = 0.18f;
+        float oldR = sr * LodClimateField.SafeRatio(localR, kr);
+        float oldG = sg * LodClimateField.SafeRatio(localG, kg);
+        LodClimateField.ApplyLocalClimate(
+            sr, sg, sb, kr, kg, kb, localR, localG, localB, out float nR, out float nG, out float _);
+        c.True(nG / nR > oldG / oldR,
+            "luminance climate shift beats per-channel ratio for spring lavender guard");
+    }
+
     static void ShaderSafetyNet(Check c)
     {
         string vsh = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "assets", "distantvistas", "shaders", "lodterrain.vsh"));
+        c.True(vsh.Contains("snow-row high sample must not bleach"),
+            "vertex shader documents snow-row clamp for live-tint grass");
         c.True(vsh.Contains("Luminance scale preserves topsoil hue"),
             "vertex shader documents luminance climate shift");
         c.True(vsh.Contains("localLum / max(keepLum"),
             "vertex shader uses luminance scale not per-channel ratio");
         c.True(!vsh.Contains("localCl.rgb / keepRgb"),
             "vertex shader no longer multiplies per-channel local/keep ratio");
-    }
-
-    static void PerChannelLavenderGuard(Check c)
-    {
-        float sr = 0.50f, sg = 0.70f, sb = 0.20f;
-        float kr = 0.50f, kg = 0.80f, kb = 0.20f;
-        float lr = 0.62f, lg = 0.52f, lb = 0.18f;
-        float oldR = sr * LodClimateField.SafeRatio(lr, kr);
-        float oldG = sg * LodClimateField.SafeRatio(lg, kg);
-        LodClimateField.ApplyLocalClimate(
-            sr, sg, sb, kr, kg, kb, lr, lg, lb, out float nR, out float nG, out float _);
-        c.True(nG / nR > oldG / oldR,
-            "luminance climate shift is greener than per-channel ratio (lavender guard)");
     }
 }
