@@ -124,6 +124,12 @@ public static class LoginSweepChecks
             "harmony skips running-game primary render during sweep");
         c.True(harmony.Contains("OnNewFrame"),
             "harmony pulses sweep before ScreenManager screen draw");
+        c.True(harmony.Contains("TextureAtlasesReady"),
+            "harmony gates splash GL until texture atlases finish GPU compose");
+        c.True(harmony.Contains("FinaliseTextureAtlas_StageC"),
+            "harmony marks atlas StageC complete for splash GL gate");
+        c.True(harmony.Contains("FinaliseTextureAtlas_StageB"),
+            "harmony resets atlas gate when a new compose wave starts");
         c.True(harmony.Contains("SweepActive") && harmony.Contains("InvokePaintSplashCover"),
             "harmony paints splash on present paths while sweep active");
         c.True(harmony.Contains("loading-game-present"),
@@ -145,8 +151,10 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeScreenRenderer.cs"));
         c.True(screen.Contains("stockOnly"),
             "screen renderer supports stock-only dev fallback via stockOnly flag");
-        c.True(screen.Contains("Login visit sweep splash"),
-            "screen renderer is the primary DV splash, not stock-only UX");
+        c.True(screen.Contains("TextureAtlasesReady"),
+            "screen renderer defers splash GL until texture atlases are ready");
+        c.True(!screen.Contains("PrepareImmediate()") || screen.Contains("TextureAtlasesReady"),
+            "screen renderer does not preload GL from Active setter");
     }
 
     static void AudioMuteKeys(Check c)
@@ -406,6 +414,8 @@ public static class LoginSweepChecks
             "mod exposes splash paint on vanilla hold");
         c.True(mod.Contains("LodLoginBakeHarmony.RenderPulse"),
             "mod wires ScreenManager.OnNewFrame pulse");
+        c.True(!mod.Contains("renderer.ApplyZFar();\n        pipeline.Open"),
+            "level finalize does not call ApplyZFar before matrices/atlas are safe");
     }
 
     static void QuietTeleports(Check c)

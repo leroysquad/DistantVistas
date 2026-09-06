@@ -1,3 +1,6 @@
+## 0.8.37
+- **CRITICAL: join crash with TrueScale HD (access violation in GL.BindTexture during atlas compose).** Login splash created/bound textures from `LevelFinalize`, Harmony `OnNewFrame` Postfix, and LoadingGame present while vanilla `ComposeTextureAtlasses_StageB` still ran `BindTexture` on worker threads → hard AV (`0xc0000005`). Fix: gate **all** splash GL until three `FinaliseTextureAtlas_StageC` passes complete (block/item/entity); keep vanilla loader visible until safe; defer `EnsureRunningGameRenderPath` and remove `PrepareImmediate` from LevelFinalize; drop `ApplyZFar` from LevelFinalize (0.8.9 regression). Purple explore FlagBaked bake + parent invalidate retained.
+
 ## 0.8.36
 - **CRITICAL: lavender snap-back + magenta section patches (May/spring, high altitude / map view).** Hard chunky LOD-section rectangles and purple **grain** on map/overhead view = live-tint coarse meshes (shader `valuenoise` on band 0–2) and stale **parent L1+** GPU meshes after L0 visit bake. **Product intent:** login visit bake = live seasonal `GetColor` (30-day window + bootstrap). Explore uses the **same** `BakeSectionFromVisit`. **Fixes:** band 3 for all visit-baked rows; per-column visit bake; `InvalidateMipAncestors` + mip `onParentRemipped` remesh; disk L0 live-tint queues visit bake (not shader repro). Spring snow-row safety on unbaked grass only.
 

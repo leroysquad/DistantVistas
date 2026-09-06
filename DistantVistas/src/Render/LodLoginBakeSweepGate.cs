@@ -26,6 +26,30 @@ public static class LodLoginBakeSweepGate
     public static bool SweepActive { get; set; }
 
     /// <summary>
+    /// Vanilla block/item/entity texture atlases finished GPU compose (StageC).
+    /// Splash must not create or bind textures until this is true — StageB runs
+    /// BindTexture on worker threads and races main-thread splash GL (TrueScale HD).
+    /// </summary>
+    public static bool TextureAtlasesReady { get; private set; }
+
+    static int textureAtlasStageCCount;
+
+    /// <summary>Called from Harmony after each <c>FinaliseTextureAtlas_StageC</c> completes.</summary>
+    public static void NotifyAtlasStageCComplete()
+    {
+        int n = Interlocked.Increment(ref textureAtlasStageCCount);
+        if (n >= 3)
+            TextureAtlasesReady = true;
+    }
+
+    /// <summary>Reset at client start; cleared while atlases recompose during load.</summary>
+    public static void ResetTextureAtlasGate()
+    {
+        textureAtlasStageCCount = 0;
+        TextureAtlasesReady = false;
+    }
+
+    /// <summary>
     /// Legacy flag: when true, Harmony skips RunningGame RenderToPrimary/post passes.
     /// Login sweep no longer arms this (0.8.25+) — world flash is blocked via
     /// <see cref="LodLoginBakeWorldHide"/> while the present pipeline still runs so

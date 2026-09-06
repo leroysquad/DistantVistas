@@ -1200,7 +1200,6 @@ public class DistantVistasModSystem : ModSystem
             unknownTextureColor,
             unknownTextureColor == 0 ? " (zero: exact-match salvage disabled)" : "",
             terrainFallbackColor);
-        renderer.ApplyZFar();
         pipeline.Open("ModData/distantvistas");
         joinClock.Restart();
         nextMilestone = 0;

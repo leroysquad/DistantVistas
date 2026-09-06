@@ -22,7 +22,6 @@ public sealed class LodLoginBakeSplashOverlay : IDisposable
     public void Show()
     {
         splash.Active = true;
-        splash.PrepareImmediate();
         splash.SetProgress(0f, "Loading…");
     }
 

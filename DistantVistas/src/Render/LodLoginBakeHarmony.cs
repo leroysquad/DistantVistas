@@ -10,6 +10,8 @@ namespace DistantVistas;
 /// Splash paints on every present path: RunningGame and LoadingGame
 /// <see cref="GuiScreenRunningGame.RenderToDefaultFramebuffer"/> Prefixes, plus
 /// ScreenManager.OnNewFrame Postfix and <see cref="EnumRenderStage.Done"/> when earlier stages were skipped.
+/// Splash GL is gated until vanilla <c>FinaliseTextureAtlas_StageC</c> completes so HD-pack
+/// StageB worker BindTexture cannot race main-thread splash texture creation.
 /// </summary>
 public static class LodLoginBakeHarmony
 {
@@ -28,6 +30,7 @@ public static class LodLoginBakeHarmony
     internal static void InvokePaintSplashCover(string path)
     {
         if (!LodLoginBakeSweepGate.SweepActive) return;
+        if (!LodLoginBakeSweepGate.TextureAtlasesReady) return;
         paintAttempts++;
         try
         {
@@ -44,6 +47,7 @@ public static class LodLoginBakeHarmony
     public static void Apply(Vintagestory.API.Common.Mod mod)
     {
         if (harmony != null) return;
+        LodLoginBakeSweepGate.ResetTextureAtlasGate();
         harmony = new Harmony(mod.Info.ModID + ".loginbake");
         harmony.PatchAll(typeof(LodLoginBakeHarmony).Assembly);
     }
@@ -85,6 +89,9 @@ public static class LodLoginBakeHarmony
         static bool Prefix()
         {
             if (!SkipLoadingGameDraw()) return true;
+            // Keep vanilla loader visible until atlas GPU compose finishes — painting earlier
+            // races ComposeTextureAtlasses_StageB worker BindTexture (TrueScale HD crash).
+            if (!LodLoginBakeSweepGate.TextureAtlasesReady) return true;
             InvokePaintSplashCover("loading-game-present");
             return false;
         }
@@ -140,5 +147,23 @@ public static class LodLoginBakeHarmony
     sealed class PaintSplashBeforeRunningFramebuffer
     {
         static void Postfix() => InvokePaintSplashCover("running-game-present");
+    }
+
+    /// <summary>Mark atlas GPU compose complete after each block/item/entity StageC pass.</summary>
+    [HarmonyPatch(typeof(ClientSystemStartup), "FinaliseTextureAtlas_StageC")]
+    sealed class MarkTextureAtlasStageCComplete
+    {
+        static void Postfix() => LodLoginBakeSweepGate.NotifyAtlasStageCComplete();
+    }
+
+    /// <summary>Clear the ready flag when a new atlas compose wave starts after a prior load.</summary>
+    [HarmonyPatch(typeof(ClientSystemStartup), "FinaliseTextureAtlas_StageB")]
+    sealed class ResetTextureAtlasGateOnRecompose
+    {
+        static void Prefix()
+        {
+            if (LodLoginBakeSweepGate.TextureAtlasesReady)
+                LodLoginBakeSweepGate.ResetTextureAtlasGate();
+        }
     }
 }

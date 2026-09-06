@@ -98,7 +98,6 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
                 HasEverPaintedOpaque = false;
                 loggedFirstPaint = false;
                 loggedPaintSkip = false;
-                PrepareImmediate();
             }
             else
             {
@@ -115,16 +114,18 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         fraction = Math.Clamp(progress, 0f, 1f);
         status = detail ?? "";
         percentLabel = $"{(int)Math.Round(fraction * 100)}%";
-        RebuildText();
+        if (LodLoginBakeSweepGate.TextureAtlasesReady)
+            RebuildText();
     }
 
     /// <summary>Fade the overlay out on release (1 = opaque, 0 = hidden).</summary>
     public void SetOverlayAlpha(float alpha) =>
         overlayAlpha = Math.Clamp(alpha, 0f, 1f);
 
-    /// <summary>Call as early as LevelFinalize allows so the first painted frame is already opaque.</summary>
+    /// <summary>Preload splash textures once atlas GPU compose is safe (not from LevelFinalize).</summary>
     public void PrepareImmediate()
     {
+        if (!LodLoginBakeSweepGate.TextureAtlasesReady) return;
         EnsureGraphicsLoaded();
         RebuildText();
         _ = ResolveQuadMesh();
@@ -173,6 +174,12 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         bool disableDepthTest,
         string? path = null)
     {
+        if (!LodLoginBakeSweepGate.TextureAtlasesReady)
+        {
+            if (countHealth) ConsecutiveOpaqueFrames = 0;
+            return;
+        }
+
         EnsureGraphicsLoaded();
 
         IRenderAPI rapi = capi.Render;
