@@ -240,6 +240,7 @@ public class DistantVistasModSystem : ModSystem
             "distantvistas-login-vanilla-final");
         loginBakePulse = new LodLoginBakePulse();
         loginVanillaLoading.OnRenderPulse = dt => loginBakePulse.Pulse(dt);
+        LodLoginBakeHarmony.PaintSplashCover = () => loginVanillaLoading.PaintSweepFrame();
         LodLoginBakeHarmony.RenderPulse = dt =>
         {
             loginBakePulse.BeginFrame();

@@ -19,6 +19,7 @@ public sealed class LodLoginBakeHudHide
     readonly ICoreClientAPI capi;
     bool? savedHidden;
     bool applied;
+    bool forcedHide;
 
     public LodLoginBakeHudHide(ICoreClientAPI capi) => this.capi = capi;
 
@@ -31,7 +32,10 @@ public sealed class LodLoginBakeHudHide
         }
 
         if (!capi.HideGuis)
-            TrySetHideGuis(true);
+        {
+            if (TrySetHideGuis(true))
+                forcedHide = true;
+        }
     }
 
     public void Restore()
@@ -41,34 +45,49 @@ public sealed class LodLoginBakeHudHide
         try
         {
             bool wantHidden = savedHidden.Value;
-            if (capi.HideGuis != wantHidden)
-                TrySetHideGuis(wantHidden);
-            if (capi.HideGuis != wantHidden)
+            if (!TryRestoreHideGuis(wantHidden))
             {
-                // Toggle path can race with F4 / other .gui users — retry once.
-                TrySetHideGuis(wantHidden);
-                if (capi.HideGuis != wantHidden)
-                {
-                    capi.Logger.Warning(
-                        "[DistantVistas] Login visit sweep: HUD restore mismatch (HideGuis={0}, wanted={1})",
-                        capi.HideGuis, wantHidden);
-                }
+                capi.Logger.Warning(
+                    "[DistantVistas] Login visit sweep: HUD restore mismatch (HideGuis={0}, wanted={1})",
+                    capi.HideGuis, wantHidden);
             }
         }
         finally
         {
             savedHidden = null;
             applied = false;
+            forcedHide = false;
         }
     }
 
-    void TrySetHideGuis(bool hidden)
+    bool TryRestoreHideGuis(bool wantHidden)
     {
-        if (TrySetHideGuisDirect(capi, hidden)) return;
+        if (capi.HideGuis == wantHidden) return true;
+
+        for (int attempt = 0; attempt < 3; attempt++)
+        {
+            if (TrySetHideGuis(wantHidden) && capi.HideGuis == wantHidden)
+                return true;
+        }
+
+        // If we forced hide during sweep, prefer showing HUD when restore is ambiguous.
+        if (forcedHide && !wantHidden && capi.HideGuis)
+        {
+            TrySetHideGuis(false);
+            if (capi.HideGuis == false) return true;
+        }
+
+        return capi.HideGuis == wantHidden;
+    }
+
+    bool TrySetHideGuis(bool hidden)
+    {
+        if (capi.HideGuis == hidden) return true;
+        if (TrySetHideGuisDirect(capi, hidden)) return capi.HideGuis == hidden;
 
         // Chat-toggle fallback when the engine field is unavailable or renamed.
-        if (capi.HideGuis != hidden)
-            capi.TriggerChatMessage(".gui");
+        capi.TriggerChatMessage(".gui");
+        return capi.HideGuis == hidden;
     }
 
     static bool TrySetHideGuisDirect(ICoreClientAPI capi, bool hidden)

@@ -78,6 +78,9 @@ public sealed class LodLoginBakeVanillaLoadingHold : IRenderer, IDisposable
 
     public void SetOverlayAlpha(float alpha) { }
 
+    /// <summary>Present-path splash paint — Harmony calls this after RunningGame framebuffer blit.</summary>
+    public void PaintSweepFrame() => splashOverlay.PaintSweepFrame();
+
     public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
     {
         if (!active) return;

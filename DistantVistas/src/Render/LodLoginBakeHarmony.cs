@@ -7,9 +7,10 @@ namespace DistantVistas;
 
 /// <summary>
 /// Defers world-load handover while the login visit sweep runs. Sweep ticks advance
-/// from OnNewFrame; splash paints via registered Ortho/AfterFinalComposition IRenderers
-/// on the RunningGame present pipeline (world flash blocked by WorldHide, not by
-/// skipping RenderToPrimary). The DV splash MUST present every frame during the sweep.
+/// from OnNewFrame; splash paints on <see cref="GuiScreenRunningGame.RenderToDefaultFramebuffer"/>
+/// Postfix (present path) and via registered Ortho/AfterFinal IRenderers when they run.
+/// World flash is blocked by <see cref="LodLoginBakeWorldHide"/>, not by skipping
+/// RenderToPrimary. The DV splash MUST present every frame during the sweep.
 /// </summary>
 public static class LodLoginBakeHarmony
 {
@@ -20,6 +21,13 @@ public static class LodLoginBakeHarmony
 
     /// <summary>Advance sweep ticks at the start of each ScreenManager frame, before any screen draw.</summary>
     public static Action<float>? RenderPulse { get; set; }
+
+    /// <summary>
+    /// Paint DV splash on the running-game present path. Invoked from
+    /// <see cref="PaintSplashBeforeRunningFramebuffer"/> when <see cref="LodLoginBakeSweepGate.SweepActive"/>.
+    /// Do not call from OnNewFrame — that path does not present the framebuffer (0.8.25).
+    /// </summary>
+    public static Action? PaintSplashCover { get; set; }
 
     public static void Apply(Vintagestory.API.Common.Mod mod)
     {
@@ -34,6 +42,7 @@ public static class LodLoginBakeHarmony
         harmony = null;
         IsLoginSweepEnabled = null;
         RenderPulse = null;
+        PaintSplashCover = null;
     }
 
     static bool SkipRunningGameRender() => LodLoginBakeSweepGate.SuppressRunningGameRender;
@@ -45,8 +54,7 @@ public static class LodLoginBakeHarmony
     {
         static void Prefix(float dt)
         {
-            // Tick only — do not OrthoMode-paint here. Splash must come from RunningGame
-            // Ortho/AfterFinalComposition IRenderers so the framebuffer actually presents.
+            // Tick only — splash paints on RunningGame RenderToDefaultFramebuffer Postfix.
             RenderPulse?.Invoke(dt);
         }
     }
@@ -93,5 +101,20 @@ public static class LodLoginBakeHarmony
     sealed class SkipRenderAfterBlit
     {
         static bool Prefix() => !SkipRunningGameRender();
+    }
+
+    /// <summary>
+    /// Registered Ortho/AfterFinal IRenderers do not reliably run while handover is
+    /// deferred — paint the splash on the RunningGame framebuffer present path instead.
+    /// Postfix so world/post passes finish first; splash clears and covers on top.
+    /// </summary>
+    [HarmonyPatch(typeof(GuiScreenRunningGame), "RenderToDefaultFramebuffer")]
+    sealed class PaintSplashBeforeRunningFramebuffer
+    {
+        static void Postfix()
+        {
+            if (!LodLoginBakeSweepGate.SweepActive) return;
+            PaintSplashCover?.Invoke();
+        }
     }
 }

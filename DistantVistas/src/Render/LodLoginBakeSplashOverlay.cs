@@ -34,6 +34,8 @@ public sealed class LodLoginBakeSplashOverlay : IDisposable
     public void OnRenderFrame(float deltaTime, EnumRenderStage stage) =>
         splash.OnRenderFrame(deltaTime, stage);
 
+    /// <summary>Guaranteed present-path paint (OrthoMode + PerspectiveMode pair).</summary>
+    public void PaintSweepFrame() => splash.PaintSweepFrame();
 
     public void Dispose() => splash.Dispose();
 }
