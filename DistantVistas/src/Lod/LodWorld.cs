@@ -396,7 +396,7 @@ public class LodWorld
 
     // ---- Mip propagation (child â†’ parent), main thread, budgeted ----
 
-    public void ProcessPropagation(int maxSections)
+    public void ProcessPropagation(int maxSections, Action<long>? onParentRemipped = null)
     {
         if (MipDirty.Count == 0) return;
 
@@ -442,6 +442,7 @@ public class LodWorld
             if (LodMip.DownsampleIntoParent(child, parent, KeySx(childKey) & 1, KeySz(childKey) & 1))
             {
                 MarkChanged(parentKey);
+                onParentRemipped?.Invoke(parentKey);
             }
         }
     }

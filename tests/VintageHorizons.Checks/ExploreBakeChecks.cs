@@ -34,8 +34,15 @@ public static class ExploreBakeChecks
             "discover finalize uses same visit bake as login sweep");
         c.False(ContainsBetween(pipeline, "void FinalizeL0DiscoverBake", "int RegisterPaletteEntry", "UpgradeLegacyEntries"),
             "discover finalize does not substitute shader-repro for live GetColor");
-        c.True(pipeline.Contains("InvalidateGpuMesh"),
-            "capture apply drops stale GPU mesh so DV paint remeshes band 3");
+        c.True(pipeline.Contains("InvalidateMipAncestors"),
+            "visit bake drops stale coarse parent GPU meshes for map view");
+        c.True(pipeline.Contains("ProcessPropagation(propagationBudget, InvalidateGpuMesh)"),
+            "pipeline invalidates parent mesh when mip absorbs visit bake");
+
+        string world = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Lod", "LodWorld.cs"));
+        c.True(world.Contains("onParentRemipped"),
+            "mip propagation callback when parent palette changes");
 
         string explore = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodExploreBake.cs"));
@@ -49,6 +56,9 @@ public static class ExploreBakeChecks
             "visit bake is per-column when map chunk is resident");
         c.False(ContainsBetween(pipeline, "void FinalizeL0DiscoverBake", "int RegisterPaletteEntry", "CanBakeSectionNow"),
             "discover finalize visit-bakes per column, not all-or-nothing section gate");
+        c.True(ContainsBetween(pipeline, "void AfterSectionLoaded(long key, LodSection section, ref int repaired)",
+                "void AfterSectionLoaded(long key, LodSection section)", "ExploreBake.Queue"),
+            "disk load queues visit bake for L0 live-tint sections");
 
         string mesher = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Lod", "LodMesher.cs"));

@@ -526,7 +526,7 @@ public class LodPipeline
         int propagationBudget = World.MipDirty.Count > CatchUpPropagationThreshold
             ? CatchUpPropagationsPerTick
             : PropagationsPerTick;
-        World.ProcessPropagation(propagationBudget);
+        World.ProcessPropagation(propagationBudget, InvalidateGpuMesh);
         SaveSomeDirtySections(SectionSavesPerTick);
         tickCounter++;
     }
@@ -599,19 +599,23 @@ public class LodPipeline
         repaired += RepairUncoloredPalette?.Invoke(section) ?? 0;
         if (!DeferLegacyHeal)
         {
-            int healed = HealLegacyPalette?.Invoke(section, key) ?? 0;
-            if (healed > 0)
+            if (LodWorld.KeyLevel(key) == 0 && LodExploreBake.SectionHasLiveTint(section))
             {
-                repaired += healed;
+                // Prefer live visit bake when chunks load — not UpgradeLegacyEntries repro.
+                ExploreBake.Queue(key, section, false);
                 World.RenderDirty.Add(key);
+                InvalidateGpuMesh?.Invoke(key);
             }
-        }
-
-        if (!DeferLegacyHeal
-            && LodWorld.KeyLevel(key) == 0
-            && LodExploreBake.SectionHasLiveTint(section))
-        {
-            ExploreBake.Queue(key, section, false);
+            else
+            {
+                int healed = HealLegacyPalette?.Invoke(section, key) ?? 0;
+                if (healed > 0)
+                {
+                    repaired += healed;
+                    World.RenderDirty.Add(key);
+                    InvalidateGpuMesh?.Invoke(key);
+                }
+            }
         }
     }
 
@@ -851,7 +855,10 @@ public class LodPipeline
         }
 
         if (changed > 0 || hadLiveTint)
-            World.ProcessPropagation(CatchUpPropagationsPerTick);
+        {
+            World.ProcessPropagation(CatchUpPropagationsPerTick, InvalidateGpuMesh);
+            InvalidateMipAncestors(sectionKey);
+        }
     }
 
     /// <summary>
@@ -895,7 +902,21 @@ public class LodPipeline
         World.SaveDirty.Count > 0 || (storageThread?.Backlog ?? 0) > 0;
 
     /// <summary>Push baked L0 colours into parent mips so far LOD matches near.</summary>
-    public void DrainLoginMip(int budget = 48) => World.ProcessPropagation(budget);
+    public void DrainLoginMip(int budget = 48) =>
+        World.ProcessPropagation(budget, InvalidateGpuMesh);
+
+    /// <summary>Drop stale coarse meshes after L0 visit bake — map view draws parents.</summary>
+    internal void InvalidateMipAncestors(long key)
+    {
+        if (InvalidateGpuMesh == null) return;
+        int level = LodWorld.KeyLevel(key);
+        for (int l = level; l < LodWorld.MaxLevel; l++)
+        {
+            key = LodWorld.ParentKey(key);
+            InvalidateGpuMesh(key);
+            World.RenderDirty.Add(key);
+        }
+    }
 
     /// <summary>Queue dirty sections to the storage thread after visit sweep.</summary>
     public void DrainLoginPersistence(int budget = 16) => SaveSomeDirtySections(budget);

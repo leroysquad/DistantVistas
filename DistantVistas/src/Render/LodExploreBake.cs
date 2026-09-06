@@ -75,6 +75,7 @@ public sealed class LodExploreBake
                 pipeline.World.MarkChanged(key);
                 pipeline.World.RenderDirty.Add(key);
                 pipeline.InvalidateGpuMesh?.Invoke(key);
+                pipeline.InvalidateMipAncestors(key);
                 pipeline.DrainLoginPersistence(1);
                 baked++;
                 SectionsBaked++;
