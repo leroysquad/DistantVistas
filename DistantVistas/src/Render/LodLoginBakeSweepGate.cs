@@ -63,6 +63,42 @@ public static class LodLoginBakeSweepGate
 
     public static void MarkHandoverDeferred() => HandoverDeferred = true;
 
+        paintAttempts = 0;
+    }
+
+    /// <summary>
+    /// Complete deferred handover and switch to RunningGame without clearing
+    /// <see cref="SweepActive"/> — required so RenderToDefaultFramebuffer presents
+    /// after char-create while the sweep overlay is armed.
+    /// </summary>
+    public static void EnsureRunningGameRenderPath(ICoreClientAPI capi)
+    {
+        if (!SweepActive) return;
+
+        AllowHandoverPassThrough = true;
+        try
+        {
+            var clientMain = (ClientMain)capi.World;
+            GuiScreenRunningGame? running = clientMain.ScreenRunningGame;
+            if (running == null) return;
+
+            if (HandoverDeferred && HandoverMethod != null)
+                HandoverMethod.Invoke(running, null);
+            HandoverDeferred = false;
+
+            LoadScreenNoLoadCallMethod?.Invoke(running.ScreenManager, new object[] { running });
+        }
+        catch (Exception ex)
+        {
+            capi.Logger.Warning(
+                "[DistantVistas] Login sweep: EnsureRunningGameRenderPath failed ({0}).", ex.Message);
+        }
+        finally
+        {
+            AllowHandoverPassThrough = false;
+        }
+    }
+
     public static void Release()
     {
         SweepActive = false;

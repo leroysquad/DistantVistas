@@ -59,6 +59,7 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     bool backdropMissing;
     bool titleMissing;
     bool loggedFirstPaint;
+    bool loggedPaintSkip;
     float fraction;
     float overlayAlpha = 1f;
     string status = "";
@@ -164,6 +165,12 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         float h = rapi.FrameHeight;
         if (w <= 0 || h <= 0)
         {
+            if (countHealth && !loggedPaintSkip)
+            {
+                loggedPaintSkip = true;
+                capi.Logger.Warning(
+                    "[DistantVistas] Login splash: skip paint — frame size {0}x{1}.", w, h);
+            }
             if (countHealth) ConsecutiveOpaqueFrames = 0;
             return;
         }
@@ -216,7 +223,16 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
     bool DrawFullFrame(float w, float h, bool orthoPass, bool countHealth)
     {
         bool drewOpaque = DrawOpaqueCover(w, h, orthoPass);
-        if (!drewOpaque) return false;
+        if (!drewOpaque)
+        {
+            if (countHealth && !loggedPaintSkip)
+            {
+                loggedPaintSkip = true;
+                capi.Logger.Warning(
+                    "[DistantVistas] Login splash: opaque cover draw failed ({0}x{1}).", w, h);
+            }
+            return false;
+        }
 
         if (countHealth || stockOnly)
         {

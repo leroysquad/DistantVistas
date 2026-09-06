@@ -118,12 +118,18 @@ public static class LoginSweepChecks
             "harmony allows pass-through during completion invoke");
         c.True(harmony.Contains("handOverRenderingToRunningGame"),
             "harmony defers running-game handover during sweep");
+        c.True(harmony.Contains("!LodLoginBakeSweepGate.SweepActive) return true"),
+            "handover defer only while sweep is armed, not when config alone");
         c.True(harmony.Contains("RenderToPrimary"),
             "harmony skips running-game primary render during sweep");
         c.True(harmony.Contains("OnNewFrame"),
             "harmony pulses sweep before ScreenManager screen draw");
-        c.True(harmony.Contains("SweepActive") && harmony.Contains("PaintSplashCover"),
-            "harmony paints splash from OnNewFrame while sweep active");
+        c.True(harmony.Contains("SweepActive") && harmony.Contains("InvokePaintSplashCover"),
+            "harmony paints splash on present paths while sweep active");
+        c.True(harmony.Contains("loading-game-present"),
+            "harmony paints splash when loading-game framebuffer is skipped");
+        c.True(harmony.Contains("on-new-frame"),
+            "harmony paints splash from OnNewFrame Postfix safety path");
         c.True(harmony.Contains("PaintSplashBeforeRunningFramebuffer"),
             "harmony paints splash before running-game framebuffer present");
         c.True(harmony.Contains("PaintSplashCover"),
@@ -696,6 +702,8 @@ public static class LoginSweepChecks
 
         string bake = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
+        c.True(bake.Contains("EnsureRunningGameRenderPath"),
+            "login bake completes running-game handover without ending sweep");
         c.True(bake.Contains("LodLoginBakeCharacterWait.IsProtectedDialog"),
             "close-blocking-dialogs skips character/class selection");
     }

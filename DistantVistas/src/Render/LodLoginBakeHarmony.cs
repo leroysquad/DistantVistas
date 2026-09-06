@@ -6,15 +6,15 @@ using Vintagestory.Client.NoObf;
 namespace DistantVistas;
 
 /// <summary>
-/// Defers world-load handover while the login visit sweep runs. Sweep ticks advance
-/// from OnNewFrame; splash paints on <see cref="GuiScreenRunningGame.RenderToDefaultFramebuffer"/>
-/// Postfix (present path) and via registered Ortho/AfterFinal IRenderers when they run.
-/// World flash is blocked by <see cref="LodLoginBakeWorldHide"/>, not by skipping
-/// RenderToPrimary. The DV splash MUST present every frame during the sweep.
+/// Defers world-load handover only while the login visit sweep is actively running.
+/// Splash paints on every present path: RunningGame and LoadingGame
+/// <see cref="GuiScreenRunningGame.RenderToDefaultFramebuffer"/> Postfixes, plus
+/// ScreenManager.OnNewFrame Postfix when earlier stages were skipped.
 /// </summary>
 public static class LodLoginBakeHarmony
 {
     static Harmony? harmony;
+    static int paintAttempts;
 
     /// <summary>When true, block <see cref="GuiScreenRunningGame.handOverRenderingToRunningGame"/>.</summary>
     public static Func<bool>? IsLoginSweepEnabled { get; set; }
@@ -22,12 +22,24 @@ public static class LodLoginBakeHarmony
     /// <summary>Advance sweep ticks at the start of each ScreenManager frame, before any screen draw.</summary>
     public static Action<float>? RenderPulse { get; set; }
 
-    /// <summary>
-    /// Paint DV splash on the running-game present path. Invoked from
-    /// <see cref="PaintSplashBeforeRunningFramebuffer"/> when <see cref="LodLoginBakeSweepGate.SweepActive"/>.
-    /// Do not call from OnNewFrame — that path does not present the framebuffer (0.8.25).
-    /// </summary>
+    /// <summary>Paint DV splash on framebuffer present paths while <see cref="LodLoginBakeSweepGate.SweepActive"/>.</summary>
     public static Action? PaintSplashCover { get; set; }
+
+    internal static void InvokePaintSplashCover(string path)
+    {
+        if (!LodLoginBakeSweepGate.SweepActive) return;
+        paintAttempts++;
+        try
+        {
+            PaintSplashCover?.Invoke();
+        }
+        catch
+        {
+            // Paint is best-effort; other present paths may succeed the same frame.
+        }
+    }
+
+    public static void ResetPaintDiagnostics() => paintAttempts = 0;
 
     public static void Apply(Vintagestory.API.Common.Mod mod)
     {
@@ -43,6 +55,7 @@ public static class LodLoginBakeHarmony
         IsLoginSweepEnabled = null;
         RenderPulse = null;
         PaintSplashCover = null;
+        paintAttempts = 0;
     }
 
     static bool SkipRunningGameRender() => LodLoginBakeSweepGate.SuppressRunningGameRender;
@@ -50,12 +63,18 @@ public static class LodLoginBakeHarmony
     static bool SkipLoadingGameDraw() => LodLoginBakeSweepGate.SweepActive;
 
     [HarmonyPatch(typeof(ScreenManager), "OnNewFrame")]
-    sealed class PulseBeforeScreenFrame
+    sealed class PulseAndPaintScreenFrame
     {
-        static void Prefix(float dt)
+        static void Prefix(float dt) => RenderPulse?.Invoke(dt);
+
+        /// <summary>
+        /// Safety present path when LoadingGame framebuffer was skipped and Ortho stages
+        /// never ran (char-create → bootstrap black screen, 0.8.28–0.8.32).
+        /// </summary>
+        static void Postfix(float dt)
         {
-            // Tick only — splash paints on RunningGame RenderToDefaultFramebuffer Postfix.
-            RenderPulse?.Invoke(dt);
+            if (!LodLoginBakeSweepGate.SweepActive) return;
+            InvokePaintSplashCover("on-new-frame");
         }
     }
 
@@ -63,6 +82,9 @@ public static class LodLoginBakeHarmony
     sealed class SkipLoadingGameRenderDuringSweep
     {
         static bool Prefix() => !SkipLoadingGameDraw();
+
+        /// <summary>When vanilla loader draw is skipped, still paint the DV splash on present.</summary>
+        static void Postfix() => InvokePaintSplashCover("loading-game-present");
     }
 
     [HarmonyPatch(typeof(GuiScreenRunningGame), "handOverRenderingToRunningGame")]
@@ -71,6 +93,9 @@ public static class LodLoginBakeHarmony
     static bool Prefix()
     {
         if (LodLoginBakeSweepGate.AllowHandoverPassThrough) return true;
+        // Only defer handover while the sweep is actively armed — not merely because the
+        // feature is enabled in config (blocked level-load handover → black screen).
+        if (!LodLoginBakeSweepGate.SweepActive) return true;
         if (IsLoginSweepEnabled?.Invoke() != true) return true;
         LodLoginBakeSweepGate.MarkHandoverDeferred();
         return false;
@@ -111,10 +136,6 @@ public static class LodLoginBakeHarmony
     [HarmonyPatch(typeof(GuiScreenRunningGame), "RenderToDefaultFramebuffer")]
     sealed class PaintSplashBeforeRunningFramebuffer
     {
-        static void Postfix()
-        {
-            if (!LodLoginBakeSweepGate.SweepActive) return;
-            PaintSplashCover?.Invoke();
-        }
+        static void Postfix() => InvokePaintSplashCover("running-game-present");
     }
 }

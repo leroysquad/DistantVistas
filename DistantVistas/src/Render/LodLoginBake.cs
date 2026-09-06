@@ -206,7 +206,9 @@ public sealed class LodLoginBake
 
         overlay.Show();
         renderer.LoginBakeOverlayActive = true;
+        LodLoginBakeHarmony.ResetPaintDiagnostics();
         LodLoginBakeSweepGate.Arm();
+        LodLoginBakeSweepGate.EnsureRunningGameRenderPath(capi);
 
         LodLoginSweepResume? resume = LodLoginSweepResume.TryLoad(capi);
         if (resume != null && resume.IsEligible(capi.World))
