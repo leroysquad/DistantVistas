@@ -15,6 +15,9 @@ public sealed class LodLoginBakeViewBoost
     /// <summary>VS client hard ceiling for view distance (blocks).</summary>
     public const int MaxVanillaViewDistance = 2048;
 
+    /// <summary>Floor during login sweep — wide column sweep / batch bake per stop.</summary>
+    public const int SweepMinViewDistanceBlocks = 2000;
+
     /// <summary>Lower overdraw during sweep = LOD draws closer under vanilla for wider cover.</summary>
     public const float SweepOverdrawStart = 0.35f;
 
@@ -132,6 +135,7 @@ public sealed class LodLoginBakeViewBoost
             : MaxVanillaViewDistance;
         ceiling = GameMath.Clamp(ceiling, 128, MaxVanillaViewDistance);
         int boosted = Math.Max(data.DesiredViewDistance, ceiling);
+        boosted = Math.Max(boosted, SweepMinViewDistanceBlocks);
         return GameMath.Clamp(boosted, 128, MaxVanillaViewDistance);
     }
 }

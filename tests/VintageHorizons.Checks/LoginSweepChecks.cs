@@ -73,10 +73,10 @@ public static class LoginSweepChecks
         c.Eq(1, targeted.Keys.Count, "incomplete plan dedupes keys");
         c.True(targeted.ModeLabel.Contains("incomplete"), "incomplete plan label");
 
-        c.Eq(75, LodLoginSweepBootstrap.RevisitMaxVisitStops,
-            "revisit cap targets ~5 min at 4s/stop");
-        c.Eq(75, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
-            "bootstrap land cap matches revisit (~5 min at 4s/stop)");
+        c.Eq(30, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "revisit cap targets ~1 min at 2s/stop");
+        c.Eq(30, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "bootstrap land cap matches revisit (~1 min at 2s/stop)");
         c.True(LodLoginSweepBootstrap.RevisitMaxVisitStops >= LodLoginSweepBootstrap.BootstrapMaxVisitStops,
             "revisit budget is at least bootstrap budget");
     }
@@ -428,6 +428,10 @@ public static class LoginSweepChecks
             "login bake settles after each teleport");
         c.True(bake.Contains("BakeSettle"),
             "login bake settles after each bake");
+        c.True(bake.Contains("BatchBakeL0Radius = 8"),
+            "login bake batch-bakes wider neighbour disk at 2048 view");
+        c.True(bake.Contains("MaxBatchBakePerStop = 24"),
+            "login bake batch-bakes more neighbours per teleport");
         c.True(bake.Contains("BakeBatchAtStop"),
             "login bake batch-bakes capture-idle neighbours per stop");
         c.True(bake.Contains("OverlayWarmup"),
@@ -582,19 +586,22 @@ public static class LoginSweepChecks
 
     static void SweepTiming(Check c)
     {
-        c.Eq(180.0, LodLoginSweepTiming.TargetMinSec, "sweep target min seconds");
-        c.Eq(300.0, LodLoginSweepTiming.TargetMaxSec, "sweep target max seconds");
-        c.Eq(300.0, LodLoginSweepTiming.BootstrapTargetMaxSec, "bootstrap target max seconds");
+        c.Eq(45.0, LodLoginSweepTiming.TargetMinSec, "sweep target min seconds");
+        c.Eq(60.0, LodLoginSweepTiming.TargetMaxSec, "sweep target max seconds");
+        c.Eq(60.0, LodLoginSweepTiming.BootstrapTargetMaxSec, "bootstrap target max seconds");
+        c.Eq(2.0, LodLoginSweepTiming.InitialSecPerStop, "initial per-stop estimate for 1-min budget");
         c.Eq(6000, LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks,
             "empty-canvas bootstrap probe radius default");
         c.Eq(94, LodLoginSweepBootstrap.BootstrapCellRadius(),
             "6000 blocks is ~94 L0 cells radius at 64-block footprint");
-        c.Eq(75, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
-            "bootstrap visit cap targets ~5 min at 4s/stop");
-        c.Eq(75, LodLoginSweepBootstrap.RevisitMaxVisitStops,
-            "revisit visit cap targets ~5 min at 4s/stop");
-        c.Eq(48, LodLoginSweep.MaxChunkWaitTicks, "chunk wait capped ~2.4s at 50ms pulse");
-        c.Eq(28, LodLoginSweep.MaxCaptureWaitTicks, "capture wait capped ~1.4s at 50ms pulse");
+        c.Eq(30, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "bootstrap visit cap targets ~1 min at 2s/stop");
+        c.Eq(30, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "revisit visit cap targets ~1 min at 2s/stop");
+        c.Eq(20, LodLoginSweep.MaxChunkWaitTicks, "chunk wait capped ~1.0s at 50ms pulse");
+        c.Eq(14, LodLoginSweep.MaxCaptureWaitTicks, "capture wait capped ~0.7s at 50ms pulse");
+        c.Eq(3, LodLoginSweepBootstrap.OpenOceanMaxSamples,
+            "open-ocean full-bake samples capped for 1-min sweep");
 
         string bootstrap = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepBootstrap.cs"));
@@ -657,6 +664,8 @@ public static class LoginSweepChecks
         string viewBoost = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeViewBoost.cs"));
         c.Eq(2048, LodLoginBakeViewBoost.MaxVanillaViewDistance, "sweep view boost ceiling");
+        c.Eq(2000, LodLoginBakeViewBoost.SweepMinViewDistanceBlocks,
+            "sweep view boost floor during entire visit");
         c.True(viewBoost.Contains("FarViewDistanceCap"),
             "view boost clears DV far cap during sweep");
         c.True(viewBoost.Contains("ApplyZFar"),

@@ -61,14 +61,14 @@ public static class LodLoginSweepBootstrap
     public const int EmptyCanvasBootstrapRadiusBlocks = 6000;
 
     /// <summary>
-    /// Hard cap on bootstrap visit stops (~5 min at <see cref="LodLoginSweepTiming.InitialSecPerStop"/>).
+    /// Hard cap on bootstrap visit stops (~1 min at <see cref="LodLoginSweepTiming.InitialSecPerStop"/>).
     /// Spatial subsample uses <see cref="BudgetBootstrapVisitStops"/> (inner-weighted bands).
     /// </summary>
     public static int BootstrapMaxVisitStops =>
         LodLoginSweepTiming.BootstrapCellBudget(LodLoginSweepTiming.InitialSecPerStop);
 
     /// <summary>
-    /// Hard cap on season-revisit stops (~5 min at <see cref="LodLoginSweepTiming.InitialSecPerStop"/>).
+    /// Hard cap on season-revisit stops (~1 min at <see cref="LodLoginSweepTiming.InitialSecPerStop"/>).
     /// Large visited canvases are spatially subsampled — never every L0 key.
     /// </summary>
     public static int RevisitMaxVisitStops =>
@@ -84,7 +84,7 @@ public static class LodLoginSweepBootstrap
     public const int OceanSeaDelta = 6;
 
     /// <summary>Representative open-ocean sample visits (full bake) spread across the body.</summary>
-    public const int OpenOceanMaxSamples = 6;
+    public const int OpenOceanMaxSamples = 3;
 
     enum CellKind { Unknown, Ocean, Land }
 

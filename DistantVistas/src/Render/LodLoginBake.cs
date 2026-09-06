@@ -25,13 +25,13 @@ public sealed class LodLoginBake
 
     const int OverlayWarmupMinTicks = 1;
     const int OverlayWarmupMaxTicks = 20;
-    /// <summary>~0.2s — chunk column request fires on teleport; no long pose settle needed.</summary>
-    const int TeleportSettleTicks = 4;
-    /// <summary>~0.15s — season bake is synchronous; brief gap before next teleport.</summary>
-    const int BakeSettleTicks = 3;
+    /// <summary>~0.1s — chunk column request fires on teleport; no long pose settle needed.</summary>
+    const int TeleportSettleTicks = 2;
+    /// <summary>~0.1s — season bake is synchronous; brief gap before next teleport.</summary>
+    const int BakeSettleTicks = 2;
     /// <summary>L0 cells around each stop to batch-bake when capture is already idle.</summary>
-    const int BatchBakeL0Radius = 6;
-    const int MaxBatchBakePerStop = 16;
+    const int BatchBakeL0Radius = 8;
+    const int MaxBatchBakePerStop = 24;
 
     const int StabilizeWindowFrames = 90;
     const int StabilizeWindowsRequired = 4;

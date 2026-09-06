@@ -4,29 +4,29 @@ namespace DistantVistas;
 
 /// <summary>
 /// Measures per-stop timing during the login visit sweep and formats ETA strings.
-/// Target window: ~3–5 minutes wall-clock for season revisit and first-join bootstrap
-/// on large canvases.
+/// Target window: ~1 minute wall-clock for season revisit and first-join bootstrap
+/// at ~2048-block view distance with batch neighbour bakes per stop.
 /// </summary>
 public sealed class LodLoginSweepTiming
 {
-    /// <summary>Lower bound of the revisit sweep target window (3 minutes).</summary>
-    public const double TargetMinSec = 180.0;
+    /// <summary>Lower bound of the sweep target window (~45 seconds).</summary>
+    public const double TargetMinSec = 45.0;
 
-    /// <summary>Hard upper bound of the revisit sweep target window (5 minutes).</summary>
-    public const double TargetMaxSec = 300.0;
+    /// <summary>Hard upper bound of the sweep target window (~1 minute).</summary>
+    public const double TargetMaxSec = 60.0;
 
-    /// <summary>
-    /// First-join bootstrap uses the same ~3–5 minute window as revisit (was 150s / ~38 stops
-    /// at 4s/stop — too sparse across the ~6 km probe disk).
-    /// </summary>
+    /// <summary>First-join bootstrap uses the same ~1 minute wall-clock cap as revisit.</summary>
     public const double BootstrapTargetMaxSec = TargetMaxSec;
 
-    /// <summary>Typical per-stop estimate before measured samples (~4s with batch bake at 2048 view).</summary>
-    public const double InitialSecPerStop = 4.0;
+    /// <summary>
+    /// Typical per-stop estimate before measured samples (~2s with 2048 view, batch bake,
+    /// and tightened chunk/capture waits).
+    /// </summary>
+    public const double InitialSecPerStop = 2.0;
 
-    public const int MinVisitStops = 24;
-    /// <summary>Revisit ceiling — yields ~75 stops at <see cref="InitialSecPerStop"/> / 300s.</summary>
-    public const int MaxVisitStops = 100;
+    public const int MinVisitStops = 20;
+    /// <summary>Revisit ceiling — yields ~30 stops at <see cref="InitialSecPerStop"/> / 60s.</summary>
+    public const int MaxVisitStops = 50;
 
     readonly Stopwatch clock = new();
     readonly List<double> stopDurations = new();
@@ -70,7 +70,7 @@ public sealed class LodLoginSweepTiming
 
     /// <summary>
     /// Max visit stops for a sweep given a wall-clock budget and measured/estimated stop rate.
-    /// At <see cref="InitialSecPerStop"/> and <see cref="TargetMaxSec"/>, yields 75 stops (~5 min).
+    /// At <see cref="InitialSecPerStop"/> and <see cref="TargetMaxSec"/>, yields 30 stops (~1 min).
     /// </summary>
     public static int VisitStopBudget(double secPerStop, double targetMaxSec) =>
         (int)Math.Clamp(
