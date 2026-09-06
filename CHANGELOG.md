@@ -1,3 +1,6 @@
+## 0.8.32
+- **Login sweep always restores pre-sweep pose.** Capture position + look (yaw/pitch + camera) at `Begin()` immediately after character creation — before bootstrap teleports. `RestorePlayerPose` now applies `LockPlayerCamera` on every release path (success, Esc, abort, error, dispose). Teardown runs pose restore + `worldHide.Restore` in `finally` after view-boost/game-mode/HUD teardown so the player is never left at the last teleport stop. Resume snapshots persist camera XYZ for paused sweeps.
+
 ## 0.8.31
 - **Login sweep plans toward unbaked coverage.** Bootstrap and revisit planning now skip L0 cells that already have a full capture + season bake in the per-world cache (`LodLoginBakeAudit.IsVisitComplete` / `FilterNeedsVisit`). Thin/partial captures (`ThinCapture`) count as gaps. Bootstrap spends the **75** land/coast stop budget only on disk cells that still need work; open-ocean sample/stamp unchanged. Revisit fills **FindMisses / incomplete keys first**, then spends any remaining budget on a spatial subsample of complete cells for season refresh (outside the 30-day skip window). Within-window complete marker still skips the entire sweep. 0.8.30 ocean sample+stamp, splash present, and dense bootstrap retained.
 

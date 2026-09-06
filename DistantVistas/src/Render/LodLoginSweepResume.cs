@@ -38,6 +38,9 @@ public sealed class LodLoginSweepResume
     public double RestoreZ { get; set; }
     public float RestoreYaw { get; set; }
     public float RestorePitch { get; set; }
+    public double RestoreCameraX { get; set; }
+    public double RestoreCameraY { get; set; }
+    public double RestoreCameraZ { get; set; }
 
     static readonly JsonSerializerOptions JsonOptions = new()
     {

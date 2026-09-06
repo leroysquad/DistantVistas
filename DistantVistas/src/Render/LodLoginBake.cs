@@ -296,6 +296,21 @@ public sealed class LodLoginBake
         UpdateProgress(Progress, StatusWithEta($"{startMsg} (Esc to pause & save)"), force: true);
         statusWriter.TouchAdvance("armed");
         statusWriter.WriteNow(phase, sweepModeLabel, total, finished, force: true);
+
+        CaptureRestorePose();
+    }
+
+    /// <summary>
+    /// Pin the player's pre-sweep pose (spawn / relog location) before any visit teleports.
+    /// </summary>
+    void CaptureRestorePose()
+    {
+        if (restoreCaptured) return;
+
+        EntityPlayer entity = capi.World.Player.Entity;
+        restorePos.SetFrom(entity.Pos);
+        restoreCameraPos.Set(entity.CameraPos);
+        restoreCaptured = true;
     }
 
     void TickOverlayWarmup()
@@ -888,9 +903,7 @@ public sealed class LodLoginBake
 
         try
         {
-            try { worldHide.Restore(); } catch { }
             try { overlay.Hide(); } catch { }
-            try { RestorePlayerPose(); } catch { }
             try { ReleasePlayerControls(); } catch { }
             try { audioMute.Restore(); } catch { }
             try { gameMode.Restore(); } catch { }
@@ -901,8 +914,10 @@ public sealed class LodLoginBake
         }
         finally
         {
-            // Always unfreeze time on success, Esc, cancel, abort, or world leave —
-            // even when other teardown steps throw unexpectedly.
+            // Always return the player home (position + look) and unfreeze time — success,
+            // Esc cancel, abort, error, or world leave — even when other teardown throws.
+            try { RestorePlayerPose(); } catch { }
+            try { worldHide.Restore(); } catch { }
             try { timeFreeze.Restore(); } catch { }
         }
 
@@ -941,12 +956,7 @@ public sealed class LodLoginBake
         hudHide.EnsureHidden();
         viewBoost.EnsureBoosted();
 
-        if (!restoreCaptured)
-        {
-            restorePos.SetFrom(entity.Pos);
-            restoreCameraPos.Set(entity.CameraPos);
-            restoreCaptured = true;
-        }
+        CaptureRestorePose();
 
         HoldPlayerPose(entity);
         LockPlayerCamera(capi, player, restorePos, restoreCameraPos);
@@ -971,8 +981,12 @@ public sealed class LodLoginBake
         restorePos.Yaw = resume.RestoreYaw;
         restorePos.Pitch = resume.RestorePitch;
         EntityPlayer entity = capi.World.Player.Entity;
+        if (resume.RestoreCameraY != 0 || resume.RestoreCameraX != 0 || resume.RestoreCameraZ != 0)
+            restoreCameraPos.Set(resume.RestoreCameraX, resume.RestoreCameraY, resume.RestoreCameraZ);
+        else
+            RebuildRestoreCameraFromPose(entity);
         entity.Pos.SetFrom(restorePos);
-        restoreCameraPos.Set(entity.CameraPos);
+        LockPlayerCamera(capi, capi.World.Player, restorePos, restoreCameraPos);
         restoreCaptured = true;
     }
 
@@ -1008,6 +1022,9 @@ public sealed class LodLoginBake
             snap.RestoreZ = restorePos.Z;
             snap.RestoreYaw = restorePos.Yaw;
             snap.RestorePitch = restorePos.Pitch;
+            snap.RestoreCameraX = restoreCameraPos.X;
+            snap.RestoreCameraY = restoreCameraPos.Y;
+            snap.RestoreCameraZ = restoreCameraPos.Z;
         }
 
         snap.Save(capi);
@@ -1067,7 +1084,19 @@ public sealed class LodLoginBake
     void RestorePlayerPose()
     {
         if (!restoreCaptured) return;
-        LodLoginBakePlayerMove.ApplyQuietFrom(capi, capi.World.Player.Entity, restorePos);
+
+        IClientPlayer player = capi.World.Player;
+        EntityPlayer entity = player.Entity;
+        LodLoginBakePlayerMove.ApplyQuietFrom(capi, entity, restorePos);
+        LockPlayerCamera(capi, player, restorePos, restoreCameraPos);
+    }
+
+    void RebuildRestoreCameraFromPose(EntityPlayer entity)
+    {
+        restoreCameraPos.Set(
+            restorePos.X,
+            restorePos.Y + entity.LocalEyePos.Y,
+            restorePos.Z);
     }
 
     void TeleportPlayer(double x, double y, double z, bool requestChunks = true) =>

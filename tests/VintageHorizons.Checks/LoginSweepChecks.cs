@@ -170,6 +170,12 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
         c.True(bake.Contains("finally") && bake.Contains("timeFreeze.Restore()"),
             "login bake always restores time in ReleaseResources finally");
+        c.True(bake.Contains("CaptureRestorePose"),
+            "login bake captures pre-sweep pose at arm");
+        c.True(bake.Contains("RestorePlayerPose(); } catch { }") || bake.Contains("RestorePlayerPose()"),
+            "login bake restores player pose on release");
+        c.True(bake.Contains("LockPlayerCamera(capi, player, restorePos, restoreCameraPos)"),
+            "restore applies saved yaw/pitch and camera");
     }
 
     static void TeardownHook(Check c)
@@ -194,6 +200,8 @@ public static class LoginSweepChecks
             "login bake does not abort solely on overlay paint counter");
         c.True(bake.Contains("restoreCameraPos"),
             "login bake pins camera while entity teleports for chunk load");
+        c.True(bake.Contains("RestoreCameraX"),
+            "resume snapshot persists camera for paused sweeps");
         c.True(bake.Contains("CameraPos.Set"),
             "login bake writes frozen camera position each tick");
 
