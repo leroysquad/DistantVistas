@@ -86,7 +86,7 @@ public static class LodLoginSweepBootstrap
     /// <summary>Representative open-ocean sample visits (full bake) spread across the body.</summary>
     public const int OpenOceanMaxSamples = 3;
 
-    enum CellKind { Unknown, Ocean, Land }
+    internal enum CellKind { Unknown, Ocean, Land }
 
     public static LodLoginSweepPlan Plan(
         LodWorld world,

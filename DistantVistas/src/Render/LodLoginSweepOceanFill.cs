@@ -1,5 +1,6 @@
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.MathTools;
 
 namespace DistantVistas;
 
@@ -167,7 +168,7 @@ public static class LodLoginSweepOceanFill
             if (block?.Code == null) continue;
             if (LodBlockPolicy.FlagsFor(block) != LodPaletteEntry.FlagWater) continue;
             blockId = block.BlockId;
-            color = block.GetColor(capi, 0, 0, 0);
+            color = block.GetColor(capi, new BlockPos());
             if (color == 0) color = 0x00204880;
             flags = LodPaletteEntry.FlagWater;
             return true;
@@ -189,7 +190,7 @@ public static class LodLoginSweepOceanFill
                 && block.BlockMaterial != EnumBlockMaterial.Gravel)
                 continue;
             blockId = block.BlockId;
-            color = block.GetColor(capi, 0, 0, 0);
+            color = block.GetColor(capi, new BlockPos());
             if (color == 0) color = 0x00404048;
             flags = 0;
             return true;

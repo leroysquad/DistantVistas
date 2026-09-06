@@ -528,8 +528,8 @@ public sealed class LodLoginBakeScreenRenderer : IRenderer, IDisposable
         if (bakedId > 0 && TryDrawSolidQuad(bakedId, x, y, width, height, z, orthoPass, color))
             return true;
 
-        int whiteId = EnsureWhiteTexture();
-        if (whiteId > 0 && TryDrawSolidQuad(whiteId, x, y, width, height, z, orthoPass, color))
+        int whiteTexId = EnsureWhiteTexture();
+        if (whiteTexId > 0 && TryDrawSolidQuad(whiteTexId, x, y, width, height, z, orthoPass, color))
             return true;
 
         if (!orthoPass) return false;
