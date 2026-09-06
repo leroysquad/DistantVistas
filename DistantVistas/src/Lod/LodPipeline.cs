@@ -819,31 +819,47 @@ public class LodPipeline
             World.ClassifySparseL0(result.SectionKey, section);
             World.MarkChanged(result.SectionKey);
             ExploreBake.Queue(result.SectionKey, section, DeferLegacyHeal);
-            TryBakeCapturedSection(result.SectionKey, section, result.Provisional);
+            FinalizeL0DiscoverBake(result.SectionKey, section, result.Provisional);
         }
     }
 
     /// <summary>
-    /// Non-provisional L0 with resident map chunks: full visit bake (remesh, mip, persist)
-    /// on the same tick as capture when cheap — explore drain covers the rest.
+    /// Lock L0 to band-3 baked RGB on the capture tick so the DV mesh is already green
+    /// before vanilla covers it and stays green after leave (hard swap, not a fade).
+    /// GetColor when chunks are resident; <see cref="LodSeasonBake.UpgradeLegacyEntries"/>
+    /// for any live-tint rows left; remesh + mip burst so coarse parents do not keep
+    /// lavender live-tint plates.
     /// </summary>
-    void TryBakeCapturedSection(long sectionKey, LodSection section, bool provisional)
+    void FinalizeL0DiscoverBake(long sectionKey, LodSection section, bool provisional)
     {
         if (provisional || DeferLegacyHeal) return;
         if (LodWorld.KeyLevel(sectionKey) != 0) return;
         if (api.Side != EnumAppSide.Client || ExploreUntintedOf == null) return;
 
         var capi = (ICoreClientAPI)api;
-        if (!LodExploreBake.CanBakeSectionNow(capi.World, sectionKey)) return;
+        bool hadLiveTint = LodExploreBake.SectionHasLiveTint(section);
+        int changed = 0;
 
-        int changed = LodSeasonBake.BakeSectionFromVisit(
+        if (LodExploreBake.CanBakeSectionNow(capi.World, sectionKey))
+        {
+            changed += LodSeasonBake.BakeSectionFromVisit(
+                capi, section, sectionKey, ExplorePlantTintFallback, ExploreUntintedOf);
+        }
+
+        changed += LodSeasonBake.UpgradeLegacyEntries(
             capi, section, sectionKey, ExplorePlantTintFallback, ExploreUntintedOf);
-        if (changed <= 0) return;
 
-        World.MarkChanged(sectionKey);
         World.RenderDirty.Add(sectionKey);
         InvalidateGpuMesh?.Invoke(sectionKey);
-        DrainLoginPersistence(1);
+
+        if (changed > 0)
+        {
+            World.MarkChanged(sectionKey);
+            DrainLoginPersistence(1);
+        }
+
+        if (changed > 0 || hadLiveTint)
+            World.ProcessPropagation(CatchUpPropagationsPerTick);
     }
 
     /// <summary>

@@ -683,8 +683,9 @@ public class DistantVistasModSystem : ModSystem
     /// <summary>
     /// Client palette registration for newly captured blocks. When the map chunk is
     /// resident we sample vanilla <c>GetColor</c> and store FlagBaked + SlotNone so
-    /// far LOD matches near green after the player leaves. Provisional peeks and the
-    /// login sweep keep the live-tint path until real terrain is confirmed.
+    /// far LOD matches near green after the player leaves — spring snow-row climate
+    /// samples cannot lavenderize valley grass via live tint. Provisional peeks and
+    /// the login sweep keep the live-tint path until real terrain is confirmed.
     /// A server has no atlas and cannot answer this at all (DESIGN.md §10.4).
     /// </summary>
     (int Color, byte TintSlot, bool Baked) DescribePalette(int blockId, int blockX, int blockY, int blockZ)
@@ -732,12 +733,12 @@ public class DistantVistasModSystem : ModSystem
         bakedColor = 0;
         if (loginBake?.Active == true) return false;
         if (pipeline.CurrentCaptureProvisional) return false;
-        if (!IsCaptureColumnMapLoaded(x, z)) return false;
 
         bool isSnowCap = LodPaletteRepair.IsSnowOrIceAlbedo(untintedColor)
             || LodSeasonBake.ColumnSurfaceIsSnowy(block);
         if (isSnowCap)
         {
+            if (!IsCaptureColumnMapLoaded(x, z)) return false;
             bakedColor = LodSeasonBake.SampleVanillaColor(capi, block, x, y, z);
             if (bakedColor == 0) bakedColor = untintedColor;
             bakedColor = LodPaletteRepair.KeepCapturedColor(
@@ -747,7 +748,9 @@ public class DistantVistasModSystem : ModSystem
 
         if (!LodSeasonBake.CanBake(block, untintedColor, tints.PlantTintFallback)) return false;
 
-        bakedColor = LodSeasonBake.SampleVanillaColor(capi, block, x, y, z);
+        if (IsCaptureColumnMapLoaded(x, z))
+            bakedColor = LodSeasonBake.SampleVanillaColor(capi, block, x, y, z);
+
         if (bakedColor == 0)
         {
             (int composite, LodUntintedShare share) = UntintedForRebake(block);
@@ -770,7 +773,7 @@ public class DistantVistasModSystem : ModSystem
         int chunkSize = GlobalConstants.ChunkSize;
         return LodCoveragePolicy.AllMapChunksLoaded(
             x, x + 1, z, z + 1, chunkSize,
-            (cx, cz) => cx >= 0 && cz >= 0 && ba.GetMapChunk(cx, cz) != null);
+            (cx, cz) => ba.GetMapChunk(cx, cz) != null);
     }
 
     /// <summary>

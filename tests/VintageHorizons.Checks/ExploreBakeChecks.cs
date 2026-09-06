@@ -28,8 +28,12 @@ public static class ExploreBakeChecks
             "pipeline wires explore untinted resolver from mod system");
         c.True(pipeline.Contains("CurrentCaptureProvisional"),
             "pipeline exposes provisional flag for palette registration");
-        c.True(pipeline.Contains("TryBakeCapturedSection"),
-            "capture apply runs visit bake when L0 chunks are resident");
+        c.True(pipeline.Contains("FinalizeL0DiscoverBake"),
+            "capture apply finalizes L0 bake before first mesh upload");
+        c.True(pipeline.Contains("UpgradeLegacyEntries"),
+            "capture apply upgrades any remaining live-tint palette rows");
+        c.True(pipeline.Contains("InvalidateGpuMesh"),
+            "capture apply drops stale GPU mesh so DV paint remeshes band 3");
 
         string explore = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodExploreBake.cs"));
@@ -52,6 +56,8 @@ public static class ExploreBakeChecks
             "discover bake falls back to snow-guarded tint repro when GetColor misses");
         c.True(mod.Contains("ColumnSurfaceIsSnowy"),
             "real snow caps bake GetColor instead of spring live-tint");
+        c.False(mod.Contains("cx >= 0 && cz >= 0"),
+            "map-chunk probe works in negative world coordinates");
         c.True(mod.Contains("return (bakedColor, (byte)LodTintRegistry.SlotNone, true)"),
             "discover bake returns FlagBaked palette row");
         c.False(mod.Contains("Baked=false ALWAYS"),
