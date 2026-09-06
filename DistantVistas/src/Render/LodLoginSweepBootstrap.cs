@@ -191,32 +191,30 @@ public static class LodLoginSweepBootstrap
             kinds[key] = ClassifyCell(world, sx, sz, footprint, sea);
         }
 
-        if (TryPlanCoastGuard(kinds, centerSx, centerSz, footprint, out List<long> coastKeys))
+        if (TryPlanCoastGuard(kinds, centerSx, centerSz, footprint, out List<long> coastKeys, out int openOceanSkipped))
         {
-            int planned = coastKeys.Count;
+            LogOceanSkip(capi, openOceanSkipped);
+            int plannedWorthy = coastKeys.Count;
             coastKeys = BudgetBootstrapVisitStops(coastKeys, centerSx, centerSz, BootstrapMaxVisitStops);
-            LogBudget(capi, planned, coastKeys.Count);
+            LogBudget(capi, plannedWorthy, coastKeys.Count);
             coastKeys.Sort();
             return new LodLoginSweepPlan(
                 LodLoginSweepPlanMode.BootstrapCoastGuard,
                 coastKeys,
-                LabelForBudgetedBootstrap("Bootstrap (coast guard)", planned, coastKeys.Count));
+                LabelForBudgetedBootstrap("Bootstrap (coast guard)", plannedWorthy, coastKeys.Count));
         }
 
-        var radiusKeys = new List<long>(disk.Count);
-        foreach ((int sx, int sz) in disk)
-        {
-            if (sx < 0 || sz < 0) continue;
-            radiusKeys.Add(LodWorld.SectionKey(0, sx, sz));
-        }
-        int plannedRadius = radiusKeys.Count;
-        radiusKeys = BudgetBootstrapVisitStops(radiusKeys, centerSx, centerSz, BootstrapMaxVisitStops);
-        LogBudget(capi, plannedRadius, radiusKeys.Count);
-        radiusKeys.Sort();
+        List<long> worthyKeys = SelectVisitWorthyCells(kinds);
+        int openOcean = kinds.Count - worthyKeys.Count;
+        LogOceanSkip(capi, openOcean);
+        int plannedWorthy = worthyKeys.Count;
+        worthyKeys = BudgetBootstrapVisitStops(worthyKeys, centerSx, centerSz, BootstrapMaxVisitStops);
+        LogBudget(capi, plannedWorthy, worthyKeys.Count);
+        worthyKeys.Sort();
         return new LodLoginSweepPlan(
             LodLoginSweepPlanMode.BootstrapRadius,
-            radiusKeys,
-            LabelForBudgetedBootstrap("Bootstrap (new world)", plannedRadius, radiusKeys.Count));
+            worthyKeys,
+            LabelForBudgetedBootstrap("Bootstrap (new world)", plannedWorthy, worthyKeys.Count));
     }
 
     internal static List<long> BudgetVisitStops(
@@ -337,14 +335,65 @@ public static class LodLoginSweepBootstrap
             kind, budgeted, planned, LodLoginSweepTiming.FormatDuration(targetSec));
     }
 
+    static void LogOceanSkip(ICoreClientAPI? capi, int skipped)
+    {
+        if (skipped <= 0 || capi == null) return;
+        capi.Logger.Notification(
+            "[DistantVistas] Bootstrap: skipping {0} open-ocean L0 cells (visit land + coastline only).",
+            skipped);
+    }
+
+    /// <summary>
+    /// Land, unclassified, and coastline ocean only — skip open-ocean body tiles that do
+    /// not border land (identical water does not change vistas).
+    /// </summary>
+    internal static List<long> SelectVisitWorthyCells(Dictionary<long, CellKind> kinds)
+    {
+        var worthy = new List<long>(kinds.Count);
+        foreach ((long key, CellKind kind) in kinds)
+        {
+            if (kind == CellKind.Land || kind == CellKind.Unknown)
+                worthy.Add(key);
+        }
+
+        foreach ((long key, CellKind kind) in kinds)
+        {
+            if (kind != CellKind.Ocean) continue;
+            if (TouchesLand(key, kinds))
+                worthy.Add(key);
+        }
+
+        return worthy;
+    }
+
+    static bool TouchesLand(long oceanKey, Dictionary<long, CellKind> kinds)
+    {
+        int sx = LodWorld.KeySx(oceanKey);
+        int sz = LodWorld.KeySz(oceanKey);
+        for (int dz = -1; dz <= 1; dz++)
+        {
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                if (dx == 0 && dz == 0) continue;
+                long nk = LodWorld.SectionKey(0, sx + dx, sz + dz);
+                if (!kinds.TryGetValue(nk, out CellKind nkKind)) continue;
+                if (nkKind == CellKind.Land || nkKind == CellKind.Unknown)
+                    return true;
+            }
+        }
+        return false;
+    }
+
     static bool TryPlanCoastGuard(
         Dictionary<long, CellKind> kinds,
         int centerSx,
         int centerSz,
         int footprint,
-        out List<long> keys)
+        out List<long> keys,
+        out int openOceanSkipped)
     {
         keys = new List<long>();
+        openOceanSkipped = 0;
         var ocean = new List<(int Sx, int Sz, long Key)>();
         int minSx = int.MaxValue, maxSx = int.MinValue;
         int minSz = int.MaxValue, maxSz = int.MinValue;
@@ -368,26 +417,8 @@ public static class LodLoginSweepBootstrap
         bool spawnInOcean = kinds.TryGetValue(spawnKey, out CellKind spawnKind) && spawnKind == CellKind.Ocean;
         if (!spawnInOcean && spanBlocks < LargeOceanMinSpanBlocks) return false;
 
-        var chosen = new HashSet<long>();
-        foreach ((int _, int _, long key) in ocean)
-            chosen.Add(key);
-
-        foreach ((int sx, int sz, long _) in ocean)
-        {
-            for (int dz = -1; dz <= 1; dz++)
-            {
-                for (int dx = -1; dx <= 1; dx++)
-                {
-                    if (dx == 0 && dz == 0) continue;
-                    long nk = LodWorld.SectionKey(0, sx + dx, sz + dz);
-                    if (!kinds.TryGetValue(nk, out CellKind nkKind)) continue;
-                    if (nkKind == CellKind.Ocean) continue;
-                    chosen.Add(nk);
-                }
-            }
-        }
-
-        keys = chosen.ToList();
+        keys = SelectVisitWorthyCells(kinds);
+        openOceanSkipped = kinds.Count - keys.Count;
         return keys.Count > 0;
     }
 

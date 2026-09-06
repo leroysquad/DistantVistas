@@ -25,8 +25,13 @@ public sealed class LodLoginBake
 
     const int OverlayWarmupMinTicks = 1;
     const int OverlayWarmupMaxTicks = 20;
-    const int TeleportSettleTicks = 10;
-    const int BakeSettleTicks = 12;
+    /// <summary>~0.2s — chunk column request fires on teleport; no long pose settle needed.</summary>
+    const int TeleportSettleTicks = 4;
+    /// <summary>~0.15s — season bake is synchronous; brief gap before next teleport.</summary>
+    const int BakeSettleTicks = 3;
+    /// <summary>L0 cells around each stop to batch-bake when capture is already idle.</summary>
+    const int BatchBakeL0Radius = 6;
+    const int MaxBatchBakePerStop = 16;
 
     const int StabilizeWindowFrames = 90;
     const int StabilizeWindowsRequired = 4;
@@ -54,6 +59,7 @@ public sealed class LodLoginBake
     readonly System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf;
     readonly Queue<long> pending = new();
     readonly HashSet<long> completedKeys = new();
+    readonly HashSet<long> plannedKeys = new();
     readonly List<double> stabilizeWindow = new(128);
     readonly List<double> windowMedians = new(8);
     readonly EntityPos restorePos = new();
@@ -231,6 +237,12 @@ public sealed class LodLoginBake
             PlanSweepQueue();
         }
 
+        plannedKeys.Clear();
+        foreach (long key in pending)
+            plannedKeys.Add(key);
+        foreach (long key in completedKeys)
+            plannedKeys.Add(key);
+
         sweepTiming.Begin();
         finished = 0;
         worldWaitTicks = 0;
@@ -251,10 +263,6 @@ public sealed class LodLoginBake
         stabilizeWindow.Clear();
         windowMedians.Clear();
 
-        capi.Logger.Notification(
-            "[DistantVistas] LOGIN VISIT SWEEP ARMED — mode={0}, regions={1}, view={2} blocks, overlay warming up.",
-            sweepModeLabel, total, viewBoost.BoostedViewDistanceBlocks);
-
         pipeline.DeferLegacyHeal = true;
         viewBoost.EnsureBoosted();
         audioMute.EnsureMuted();
@@ -262,6 +270,11 @@ public sealed class LodLoginBake
         gameMode.EnsureCreative();
         hudHide.EnsureHidden();
         playerHide.EnsureHidden();
+
+        capi.Logger.Notification(
+            "[DistantVistas] LOGIN VISIT SWEEP ARMED — mode={0}, regions={1}, view={2} blocks, overlay warming up.",
+            sweepModeLabel, total, viewBoost.BoostedViewDistanceBlocks);
+
         if (resuming)
         {
             capi.Logger.Notification(
@@ -530,9 +543,9 @@ public sealed class LodLoginBake
                 break;
 
             case StopPhase.Bake:
-                BakeAndPersist(key);
-                finished++;
-                completedKeys.Add(key);
+            {
+                int bakedAtStop = BakeBatchAtStop(key);
+                finished += bakedAtStop;
                 SaveResumeSnapshot();
                 sweepTiming.NoteFinished(finished);
                 statusWriter.TouchAdvance($"region-{finished}-of-{total}");
@@ -541,6 +554,7 @@ public sealed class LodLoginBake
                 UpdateProgress(Progress,
                     StatusWithEta($"{VisitPrefix()}{Pct(finished, total)} — settling…"));
                 break;
+            }
 
             case StopPhase.BakeSettle:
                 stopTicks++;
@@ -641,20 +655,25 @@ public sealed class LodLoginBake
 
     void BeginNextStop()
     {
-        if (pending.Count == 0) return;
-        worldHide.HideAllLoaded();
-        long key = pending.Dequeue();
-        currentKey = key;
-        stopPhase = StopPhase.Teleport;
-        stopTicks = 0;
+        while (pending.Count > 0)
+        {
+            long key = pending.Dequeue();
+            if (completedKeys.Contains(key)) continue;
 
-        (double x, double y, double z) = LodLoginSweep.VisitPosition(capi.World, key);
-        TeleportPlayer(x, y, z, requestChunks: false);
-        int revealRadius = viewBoost.ChunkVisibleRadius;
-        LodLoginBakePlayerMove.RequestChunkColumnsVisible(
-            capi, x, z, capi.World.Player.Entity.Pos.Dimension, revealRadius);
-        UpdateProgress(Progress,
-            StatusWithEta($"{VisitPrefix()}moving to region… ({Pct(finished, total)})"));
+            worldHide.HideAllLoaded();
+            currentKey = key;
+            stopPhase = StopPhase.Teleport;
+            stopTicks = 0;
+
+            (double x, double y, double z) = LodLoginSweep.VisitPosition(capi.World, key);
+            TeleportPlayer(x, y, z, requestChunks: false);
+            int revealRadius = viewBoost.ChunkVisibleRadius;
+            LodLoginBakePlayerMove.RequestChunkColumnsVisible(
+                capi, x, z, capi.World.Player.Entity.Pos.Dimension, revealRadius);
+            UpdateProgress(Progress,
+                StatusWithEta($"{VisitPrefix()}moving to region… ({Pct(finished, total)})"));
+            return;
+        }
     }
 
     void SweepColumnsAround(long l0Key)
@@ -688,6 +707,62 @@ public sealed class LodLoginBake
         pipeline.InvalidateGpuMesh?.Invoke(l0Key);
         world.RenderDirty.Add(l0Key);
         pipeline.DrainLoginPersistence(1);
+    }
+
+    /// <summary>
+    /// After capture idles at a stop, bake the target L0 and any planned neighbours that
+    /// the boosted column sweep already loaded — avoids a full teleport-wait per cell.
+    /// </summary>
+    int BakeBatchAtStop(long primaryKey)
+    {
+        int baked = 0;
+        foreach (long key in CollectBatchBakeKeys(primaryKey))
+        {
+            if (completedKeys.Contains(key)) continue;
+            if (!plannedKeys.Contains(key)) continue;
+            if (!pipeline.IsL0SectionCaptureIdle(key)) continue;
+            if (!LodLoginSweep.AllMapChunksLoaded(capi.World.BlockAccessor, key)) continue;
+
+            BakeAndPersist(key);
+            completedKeys.Add(key);
+            baked++;
+        }
+
+        if (baked == 0)
+        {
+            BakeAndPersist(primaryKey);
+            if (completedKeys.Add(primaryKey))
+                baked = 1;
+        }
+
+        return baked;
+    }
+
+    List<long> CollectBatchBakeKeys(long primaryKey)
+    {
+        int sx0 = LodWorld.KeySx(primaryKey);
+        int sz0 = LodWorld.KeySz(primaryKey);
+        var candidates = new List<(long DistSq, long Key)>();
+
+        for (int dsz = -BatchBakeL0Radius; dsz <= BatchBakeL0Radius; dsz++)
+        {
+            for (int dsx = -BatchBakeL0Radius; dsx <= BatchBakeL0Radius; dsx++)
+            {
+                int sx = sx0 + dsx;
+                int sz = sz0 + dsz;
+                if (sx < 0 || sz < 0) continue;
+                long key = LodWorld.SectionKey(0, sx, sz);
+                if (!plannedKeys.Contains(key)) continue;
+                long dist = (long)dsx * dsx + (long)dsz * dsz;
+                candidates.Add((dist, key));
+            }
+        }
+
+        candidates.Sort((a, b) => a.DistSq.CompareTo(b.DistSq));
+        var result = new List<long>(Math.Min(MaxBatchBakePerStop, candidates.Count));
+        for (int i = 0; i < candidates.Count && result.Count < MaxBatchBakePerStop; i++)
+            result.Add(candidates[i].Key);
+        return result;
     }
 
     void BeginDraining()

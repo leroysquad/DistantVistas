@@ -72,10 +72,10 @@ public static class LoginSweepChecks
         c.Eq(1, targeted.Keys.Count, "incomplete plan dedupes keys");
         c.True(targeted.ModeLabel.Contains("incomplete"), "incomplete plan label");
 
-        c.Eq(75, LodLoginSweepBootstrap.RevisitMaxVisitStops,
-            "revisit cap targets ~5 min at 4s/stop");
-        c.Eq(75, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
-            "bootstrap cap matches revisit (~5 min at 4s/stop)");
+        c.Eq(100, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "revisit cap targets ~4 min at 2.5s/stop");
+        c.Eq(100, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "bootstrap cap matches revisit (~4 min at 2.5s/stop)");
         c.True(LodLoginSweepBootstrap.RevisitMaxVisitStops >= LodLoginSweepBootstrap.BootstrapMaxVisitStops,
             "revisit budget is at least bootstrap budget");
     }
@@ -363,6 +363,8 @@ public static class LoginSweepChecks
             "login bake settles after each teleport");
         c.True(bake.Contains("BakeSettle"),
             "login bake settles after each bake");
+        c.True(bake.Contains("BakeBatchAtStop"),
+            "login bake batch-bakes capture-idle neighbours per stop");
         c.True(bake.Contains("OverlayWarmup"),
             "login bake warms overlay before teleports");
         c.True(bake.Contains("warmup complete — entering visit teleports"),
@@ -522,12 +524,12 @@ public static class LoginSweepChecks
             "empty-canvas bootstrap probe radius default");
         c.Eq(94, LodLoginSweepBootstrap.BootstrapCellRadius(),
             "6000 blocks is ~94 L0 cells radius at 64-block footprint");
-        c.Eq(75, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
-            "bootstrap visit cap targets ~5 min at 4s/stop");
-        c.Eq(75, LodLoginSweepBootstrap.RevisitMaxVisitStops,
-            "revisit visit cap targets ~5 min at 4s/stop");
-        c.Eq(80, LodLoginSweep.MaxChunkWaitTicks, "chunk wait capped ~4s at 50ms pulse");
-        c.Eq(48, LodLoginSweep.MaxCaptureWaitTicks, "capture wait capped ~2.4s at 50ms pulse");
+        c.Eq(100, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "bootstrap visit cap targets ~4 min at 2.5s/stop");
+        c.Eq(100, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "revisit visit cap targets ~4 min at 2.5s/stop");
+        c.Eq(48, LodLoginSweep.MaxChunkWaitTicks, "chunk wait capped ~2.4s at 50ms pulse");
+        c.Eq(28, LodLoginSweep.MaxCaptureWaitTicks, "capture wait capped ~1.4s at 50ms pulse");
 
         string bootstrap = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepBootstrap.cs"));
@@ -535,6 +537,10 @@ public static class LoginSweepChecks
             "bootstrap applies hard visit stop budget");
         c.True(bootstrap.Contains("BudgetBootstrapVisitStops"),
             "bootstrap uses inner-weighted distance-band subsample");
+        c.True(bootstrap.Contains("SelectVisitWorthyCells"),
+            "bootstrap skips open ocean body tiles");
+        c.True(bootstrap.Contains("open-ocean L0 cells"),
+            "bootstrap logs ocean skip count");
         c.True(bootstrap.Contains("PlanRevisitKeys"),
             "revisit applies spatial subsample budget");
         c.True(bootstrap.Contains("BootstrapCoastGuard"),
