@@ -1,5 +1,6 @@
 using System.Globalization;
 using Vintagestory.API.Client;
+using Vintagestory.API.Common.Entities;
 
 namespace DistantVistas;
 
