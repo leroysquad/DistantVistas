@@ -446,8 +446,10 @@ public sealed class LodLoginScoutFill
     static int ResidentCaptureCols(LodPipeline pipeline, long key)
     {
         if (!pipeline.World.HasDataSet.Contains(key)) return 0;
-        if (!TryGetSection(pipeline, key, out LodSection? section) || section == null) return 0;
-        return section.CapturedColumns;
+        if (pipeline.World.Sections.TryGetValue(key, out LodSection? section) && section != null)
+            return section.CapturedColumns;
+        // Revisit row on disk — score without demand-loading every pending key each tick.
+        return ResidentFastHandoffCols;
     }
 
     int PartialCaptureMin(int waitTicks)
