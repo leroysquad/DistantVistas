@@ -1,8 +1,7 @@
 # Distant Vistas — Official Description (1.0.32)
 
-Plain-language overview for ModDB, store listings, and release notes. Technical scale
-figures (block radius, square blocks, line counts) live in
-`docs/community/moddb-1.0.32-listing.html` and can be pasted into markdown separately.
+Plain-language overview for ModDB, store listings, and release notes. Block-scale math
+(radius, end-to-end, square blocks) lives in `docs/community/moddb-1.0.32-listing.html`.
 
 ---
 
@@ -19,6 +18,21 @@ matching versions.
 Distant Vistas is a fork of **Vintage Horizons** (AliasFactory, MIT). Rendering techniques
 draw on **Farseer** (Badgerson, MIT). Author: **IllLeroySquad**.
 [GitHub](https://github.com/leroysquad/DistantVistas)
+
+---
+
+## Codebase size (exact, counted from source)
+
+| Component | Lines | Files |
+| --- | ---: | ---: |
+| Mod C# (`DistantVistas/src/`) | 30,917 | 89 |
+| Automated checks (`tests/`) | 8,846 | 34 |
+| **Total C#** | **39,763** | **123** |
+| GLSL shaders | 1,282 | 10 |
+| Build, bench, and test scripts | 2,732 | 16 |
+
+Counts use `wc -l` on each source file. Largest single file: `LodTerrainRenderer.cs` at
+3,458 lines.
 
 ---
 
@@ -109,4 +123,4 @@ live in `VintagestoryData/ModData/distantvistas/`.
 
 Distant Vistas brings persistent, full three-dimensional far terrain to Vintage Story on
 any server, with live seasonal colour, a spawn-centered login bake, and configurable
-render range. Official release **1.0.32**.
+render range. Official release **1.0.32** — **39,763 lines** of C# across **123 files**.
