@@ -10,6 +10,7 @@ Ported onto `cursor/1.0.26-catchup-playtest-e27c` as **1.0.32**. Original resear
 | A2 | Near mesh-gate inside SpawnSolidRadiusBlocks; far release after paint | Done (`WaitForMesh` inside 1024) |
 | A3 | GetColor ×4096 × stack; SampleTextureMean 8× per ground layer | Done (`LodBakeScratch` + per-section BlockId texture-mean cache) |
 | A4 | Smaller batch radius beyond ~1024 | Done (leftover neighbour bake radius 0 past spawn-solid; overlay paints the visit cell) |
+| SIMD | Post-GetColor BlurLand / Quantize / RGB pack (`LodRgbSimd`) | **Done** (AVX2 → Vector128 → scalar; bit-identical; not inside `GetColor`) |
 | 5 | No forceRecapture in Mesh | Done (WaitChunks near-only, `forceRecapture: false`; Paint/Mesh never sweep) |
 | 6 | UpdatePartitioning every ~8 ticks (pinned scouts) | Done (`PartitioningEveryTicks = 8` via `LodVsCompat`) |
 | 7 | Throttle spawn reveal ring | Done (`SpawnRevealEveryTicks = 4`) |
@@ -18,6 +19,7 @@ Ported onto `cursor/1.0.26-catchup-playtest-e27c` as **1.0.32**. Original resear
 | 10 | Drain/stabilize + emptyMeshKeys must not block scout slots | Done (`HasDrawableMesh` wait; `HasEmptyMeshClaim` releases the slot) |
 | B | Reuse ready / batch-candidate / despawn lists | Done (in-place `CollectBatchBakeKeys` into `stopBakeKeys`) |
 | B | `MaxBakePerTick` 12→16 | Absorbed as **24** so parallel captures drain in one overlay tick |
+| B | ArrayPool mix / halo / blur scratch | Done (`LodSurfaceMix.Rent` + halo + `blurScratch`) |
 
 Invariants kept: no player teleports; exact pickup XYZ; scout despawn on slot release / Reset / overlay end; spawn-solid 1024; Farseer gray tent + black tips.
 
@@ -42,7 +44,7 @@ Rent fixed-size buffers from `ArrayPool<T>.Shared` instead of `new T[n]` in the 
 - Adam Sitnik, [Pooling large arrays with ArrayPool](https://adamsitnik.com/Array-Pool/) (2018)
 - Microsoft Learn, [Span\<T\>](https://learn.microsoft.com/en-us/dotnet/fundamentals/runtime-libraries/system-span%7Bt%7D)
 
-**DV:** `LodBakeScratch`, existing `LodSurfaceMix.Rent`, `LodMesher.RentCopy`.
+**DV:** `LodBakeScratch`, `LodSurfaceMix.Rent` / halo / `blurScratch` (`ArrayPool`), existing `LodMesher.RentCopy`.
 
 ### 2. Work-stealing vs main-thread GetColor
 
@@ -57,9 +59,16 @@ Login bake GC mixed GetColor object traffic + mesh uploads + `List` growth in th
 - Microsoft Learn, [Large object heap](https://learn.microsoft.com/en-us/dotnet/standard/garbage-collection/large-object-heap)
 - Maoni Stephens, [CLR 4.0 GC / background GC](https://devblogs.microsoft.com/dotnet/so-whats-new-in-the-clr-4-0-gc/)
 
-### 4. SIMD after GetColor (not done)
+### 4. SIMD after GetColor (done)
 
-`BlurLand` / `Quantize` are candidates **after** colors are sampled. `Block.GetColor` cannot be vectorized. Low priority while `BlurRadius = 0`.
+`LodRgbSimd` vectorizes **post-GetColor** work only: `BlurLand` (two box-blur passes, including the production `BlurRadius = 0` mask/alpha copy over 4096 cells), `Quantize` / `QuantizeSpan`, and RGB pack/unpack over already-sampled `int[]` buffers. Path: AVX2 8-wide, then portable `Vector128` (SSE2 / NEON; same hardware as `System.Numerics.Vector.IsHardwareAccelerated`), then scalar. `ForceScalar` in checks proves **bit-identical** integer averages (truncated `r/n`) and the same `0xFFBBGGRR` pack as `LodSurfaceMix.Pack`. Vintage Story `Block.GetColor` / `GetColorWithoutTint` stay scalar on the client main thread.
+
+Production bake still does **not** quantize the 64×64 grid (that would checkerboard snow/dirt). `LodSurfaceMix.Quantize` and `LodRgbSimd.QuantizeSpan` are live APIs; overlay `BlurLand` always runs the SIMD kernel.
+
+- Microsoft Learn, [Use SIMD-accelerated types](https://learn.microsoft.com/en-us/dotnet/standard/simd)
+- Microsoft Learn, [Vector256\<T\>](https://learn.microsoft.com/en-us/dotnet/api/system.runtime.intrinsics.vector256-1) / [Vector128\<T\>](https://learn.microsoft.com/en-us/dotnet/api/system.runtime.intrinsics.vector128-1)
+- Microsoft Learn, [System.Numerics.Vector\<T\>](https://learn.microsoft.com/en-us/dotnet/api/system.numerics.vector-1)
+- Intel, [AVX2](https://www.intel.com/content/www/us/en/docs/intrinsics-guide/index.html#avx2techs=AVX2)
 
 ### 5. Spatial locality / two-tier scout gate
 

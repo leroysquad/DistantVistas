@@ -22,6 +22,7 @@ public static class SeasonBakeChecks
         CanopyGrayPathGate(c);
         CanopyGrayMottleDeterministic(c);
         CanopyGrayMixKeepsAutumn(c);
+        SimdAfterGetColor(c);
     }
 
     static void MultiplyRgbIdentity(Check c)
@@ -371,5 +372,207 @@ public static class SeasonBakeChecks
         LodPaletteRepair.Channels(half, out _, out _, out _, out int luma, out int chroma);
         c.True(luma < LodPaletteRepair.BrightCapLuma, "gray mix stays under bright-cap sanitize");
         c.True(chroma > 20, "gray mix keeps autumn chroma");
+    }
+
+    /// <summary>
+    /// Post-GetColor SIMD (LodRgbSimd) must match the scalar kernels bit-for-bit.
+    /// GetColor itself is never vectorized.
+    /// </summary>
+    static void SimdAfterGetColor(Check c)
+    {
+        c.True(LodRgbSimd.PathName is "avx2" or "vector128" or "vector" or "scalar",
+            "SIMD path name is avx2, vector128, vector, or scalar");
+
+        int[] steps = { 12, 1, 15 };
+        int mismatches = 0;
+        string? first = null;
+        try
+        {
+            foreach (int step in steps)
+            {
+                int[] sample = { 0, 1, 6, 11, 12, 13, 127, 128, 243, 244, 250, 255 };
+                foreach (int r in sample)
+                foreach (int g in sample)
+                foreach (int b in sample)
+                {
+                    int packed = LodSurfaceMix.Pack(r, g, b);
+                    LodRgbSimd.ForceScalar = true;
+                    int scalar = LodRgbSimd.QuantizePacked(packed, step);
+                    LodRgbSimd.ForceScalar = false;
+                    int simd = LodRgbSimd.QuantizePacked(packed, step);
+                    int viaMix = LodSurfaceMix.Quantize(packed, step);
+                    if (scalar != simd || scalar != viaMix)
+                    {
+                        mismatches++;
+                        first ??= $"quantize step={step} rgb={r},{g},{b} scalar=0x{scalar:X8} simd=0x{simd:X8} mix=0x{viaMix:X8}";
+                    }
+                }
+
+                for (int v = 0; v <= 255; v++)
+                {
+                    int packed = LodSurfaceMix.Pack(v, (v * 3) & 255, (v * 7) & 255);
+                    LodRgbSimd.ForceScalar = true;
+                    int scalar = LodRgbSimd.QuantizePacked(packed, step);
+                    LodRgbSimd.ForceScalar = false;
+                    int simd = LodRgbSimd.QuantizePacked(packed, step);
+                    if (scalar != simd)
+                    {
+                        mismatches++;
+                        first ??= $"quantize sweep v={v} step={step}";
+                    }
+                }
+            }
+        }
+        finally
+        {
+            LodRgbSimd.ForceScalar = false;
+        }
+        c.Eq(0, mismatches, first == null ? "Quantize SIMD is bit-identical to scalar" : first);
+
+        var rng = new Random(20260907);
+        int[] spanSrc = new int[4096 + 3];
+        for (int i = 0; i < spanSrc.Length; i++)
+        {
+            if (rng.Next(8) == 0) spanSrc[i] = 0;
+            else spanSrc[i] = LodSurfaceMix.Pack(rng.Next(256), rng.Next(256), rng.Next(256));
+        }
+        int[] spanScalar = (int[])spanSrc.Clone();
+        int[] spanSimd = (int[])spanSrc.Clone();
+        try
+        {
+            LodRgbSimd.ForceScalar = true;
+            LodRgbSimd.QuantizeSpan(spanScalar, LodSurfaceMix.QuantizeStep);
+            LodRgbSimd.ForceScalar = false;
+            LodRgbSimd.QuantizeSpan(spanSimd, LodSurfaceMix.QuantizeStep);
+        }
+        finally
+        {
+            LodRgbSimd.ForceScalar = false;
+        }
+        EqRgb(c, spanScalar, spanSimd, "QuantizeSpan SIMD is bit-identical to scalar");
+
+        int n = 64 * 64;
+        int[] packed = new int[n];
+        int[] r = new int[n];
+        int[] g = new int[n];
+        int[] b = new int[n];
+        int[] round = new int[n];
+        for (int i = 0; i < n; i++)
+            packed[i] = LodSurfaceMix.Pack((i * 13) & 255, (i * 29) & 255, (i * 47) & 255);
+        try
+        {
+            LodRgbSimd.ForceScalar = false;
+            LodRgbSimd.UnpackPlanes(packed, r, g, b);
+            LodRgbSimd.PackPlanes(r, g, b, round);
+        }
+        finally
+        {
+            LodRgbSimd.ForceScalar = false;
+        }
+        EqRgb(c, packed, round, "UnpackPlanes/PackPlanes roundtrip");
+
+        foreach (int gs in new[] { 1, 7, 8, 64 })
+        foreach (int radius in new[] { 0, 1 })
+        {
+            FillRgbGrid(gs, 1000 + gs * 17 + radius, out int[] src, out byte[] mask);
+            int cells = gs * gs;
+            int[] scalar = new int[cells];
+            int[] simd = new int[cells];
+            int[] viaMix = new int[cells];
+            try
+            {
+                LodRgbSimd.ForceScalar = true;
+                LodRgbSimd.BlurLandOnce(src, mask, scalar, gs, radius);
+                LodRgbSimd.ForceScalar = false;
+                LodRgbSimd.BlurLandOnce(src, mask, simd, gs, radius);
+                LodSurfaceMix.BlurLand(src, mask, viaMix, gs, radius);
+            }
+            finally
+            {
+                LodRgbSimd.ForceScalar = false;
+            }
+            EqRgb(c, scalar, simd, $"BlurLandOnce r={radius} gs={gs} SIMD vs scalar");
+
+            int[] twoScalar = new int[cells];
+            int[] scratch = new int[cells];
+            LodRgbSimd.BlurLandOnceScalar(src, mask, scratch, gs, radius);
+            LodRgbSimd.BlurLandOnceScalar(scratch, mask, twoScalar, gs, radius);
+            EqRgb(c, twoScalar, viaMix, $"LodSurfaceMix.BlurLand r={radius} gs={gs} vs two scalar passes");
+        }
+
+        // Radius-0 land with packed 0 must force alpha 0xFF (Pack(Unpack(0))).
+        int[] zsrc = { 0 };
+        byte[] zmask = { 1 };
+        int[] zdst = new int[1];
+        LodRgbSimd.BlurLandOnceScalar(zsrc, zmask, zdst, 1, 0);
+        c.Eq(LodSurfaceMix.Pack(0, 0, 0), zdst[0], "scalar radius-0 land of 0 packs alpha");
+        try
+        {
+            LodRgbSimd.ForceScalar = false;
+            LodRgbSimd.BlurLandOnce(zsrc, zmask, zdst, 1, 0);
+        }
+        finally
+        {
+            LodRgbSimd.ForceScalar = false;
+        }
+        c.Eq(LodSurfaceMix.Pack(0, 0, 0), zdst[0], "SIMD radius-0 land of 0 packs alpha");
+    }
+
+    static void FillRgbGrid(int gs, int seed, out int[] rgb, out byte[] mask)
+    {
+        var rng = new Random(seed);
+        int n = gs * gs;
+        rgb = new int[n];
+        mask = new byte[n];
+        for (int i = 0; i < n; i++)
+        {
+            int t = rng.Next(6);
+            mask[i] = t switch
+            {
+                0 or 1 or 2 => (byte)1,
+                3 or 4 => (byte)2,
+                _ => (byte)0,
+            };
+            if (mask[i] == 0)
+                rgb[i] = 0;
+            else if (mask[i] == 1 && rng.Next(11) == 0)
+                rgb[i] = 0;
+            else
+                rgb[i] = LodSurfaceMix.Pack(rng.Next(256), rng.Next(256), rng.Next(256));
+        }
+        if (n > 0)
+        {
+            mask[0] = 1;
+            rgb[0] = 0;
+        }
+        if (n > 1)
+        {
+            mask[1] = 2;
+            rgb[1] = LodSurfaceMix.Pack(10, 40, 180);
+        }
+    }
+
+    static void EqRgb(Check c, int[] expected, int[] actual, string what)
+    {
+        if (expected.Length != actual.Length)
+        {
+            c.Eq(expected.Length, actual.Length, what + " length");
+            return;
+        }
+
+        int diffs = 0;
+        int first = -1;
+        for (int i = 0; i < expected.Length; i++)
+        {
+            if (expected[i] == actual[i]) continue;
+            if (first < 0) first = i;
+            diffs++;
+        }
+
+        if (diffs == 0)
+            c.Eq(0, 0, what);
+        else
+            c.Eq(0, diffs,
+                $"{what} ({diffs} cells, first [{first}] expect 0x{expected[first]:X8} got 0x{actual[first]:X8})");
     }
 }

@@ -1,3 +1,4 @@
+using System.Buffers;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.MathTools;
@@ -60,9 +61,15 @@ public static class LodSurfaceMix
     {
         if (rawMix == null || rawMix.Length < cols)
         {
-            rawMix = new int[cols];
-            blurredMix = new int[cols];
-            mixMask = new byte[cols];
+            if (rawMix != null)
+            {
+                ArrayPool<int>.Shared.Return(rawMix);
+                ArrayPool<int>.Shared.Return(blurredMix!);
+                ArrayPool<byte>.Shared.Return(mixMask!);
+            }
+            rawMix = ArrayPool<int>.Shared.Rent(cols);
+            blurredMix = ArrayPool<int>.Shared.Rent(cols);
+            mixMask = ArrayPool<byte>.Shared.Rent(cols);
         }
         raw = rawMix;
         blurred = blurredMix!;
@@ -375,12 +382,8 @@ public static class LodSurfaceMix
         return live;
     }
 
-    public static int Quantize(int color, int step = QuantizeStep)
-    {
-        if (color == 0 || step <= 1) return color;
-        Unpack(color, out int r, out int g, out int b);
-        return Pack(Snap(r, step), Snap(g, step), Snap(b, step));
-    }
+    public static int Quantize(int color, int step = QuantizeStep) =>
+        LodRgbSimd.QuantizePacked(color, step);
 
     /// <summary>
     /// Same blur as <see cref="BlurLand"/>, but edge columns also see live stacks
@@ -402,9 +405,15 @@ public static class LodSurfaceMix
         int haloN = h * h;
         if (haloRaw == null || haloRaw.Length < haloN)
         {
-            haloRaw = new int[haloN];
-            haloBlur = new int[haloN];
-            haloMask = new byte[haloN];
+            if (haloRaw != null)
+            {
+                ArrayPool<int>.Shared.Return(haloRaw);
+                ArrayPool<int>.Shared.Return(haloBlur!);
+                ArrayPool<byte>.Shared.Return(haloMask!);
+            }
+            haloRaw = ArrayPool<int>.Shared.Rent(haloN);
+            haloBlur = ArrayPool<int>.Shared.Rent(haloN);
+            haloMask = ArrayPool<byte>.Shared.Rent(haloN);
         }
         int[] hRaw = haloRaw;
         int[] hBlur = haloBlur!;
@@ -460,50 +469,12 @@ public static class LodSurfaceMix
     {
         int n = gs * gs;
         if (blurScratch == null || blurScratch.Length < n)
-            blurScratch = new int[n];
-        BlurLandOnce(src, mask, blurScratch, gs, radius);
-        BlurLandOnce(blurScratch, mask, dst, gs, radius);
-    }
-
-    static void BlurLandOnce(int[] src, byte[] mask, int[] dst, int gs, int radius)
-    {
-        for (int cz = 0; cz < gs; cz++)
         {
-            for (int cx = 0; cx < gs; cx++)
-            {
-                int i = cz * gs + cx;
-                byte m = mask[i];
-                if (m != 1)
-                {
-                    dst[i] = m == 2 ? src[i] : 0;
-                    continue;
-                }
-
-                long r = 0, g = 0, b = 0, n = 0;
-                int z0 = cz - radius, z1 = cz + radius;
-                int x0 = cx - radius, x1 = cx + radius;
-                if (z0 < 0) z0 = 0;
-                if (x0 < 0) x0 = 0;
-                if (z1 >= gs) z1 = gs - 1;
-                if (x1 >= gs) x1 = gs - 1;
-                for (int nz = z0; nz <= z1; nz++)
-                {
-                    int row = nz * gs;
-                    for (int nx = x0; nx <= x1; nx++)
-                    {
-                        int j = row + nx;
-                        if (mask[j] != 1) continue;
-                        Unpack(src[j], out int sr, out int sg, out int sb);
-                        r += sr;
-                        g += sg;
-                        b += sb;
-                        n++;
-                    }
-                }
-
-                dst[i] = n == 0 ? src[i] : Pack((int)(r / n), (int)(g / n), (int)(b / n));
-            }
+            if (blurScratch != null) ArrayPool<int>.Shared.Return(blurScratch);
+            blurScratch = ArrayPool<int>.Shared.Rent(n);
         }
+        LodRgbSimd.BlurLandOnce(src, mask, blurScratch, gs, radius);
+        LodRgbSimd.BlurLandOnce(blurScratch, mask, dst, gs, radius);
     }
 
     public static int SampleColumnStack(
@@ -676,12 +647,6 @@ public static class LodSurfaceMix
             (int)(sr * sw + gr * gw + pr * pw + 0.5f),
             (int)(sg * sw + gg * gw + pg * pw + 0.5f),
             (int)(sb * sw + gb * gw + pb * pw + 0.5f));
-    }
-
-    static int Snap(int v, int step)
-    {
-        int q = ((v + step / 2) / step) * step;
-        return q > 255 ? 255 : q;
     }
 
     static bool Has(string path, string token) =>

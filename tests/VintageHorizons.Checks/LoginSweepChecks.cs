@@ -27,6 +27,7 @@ public static class LoginSweepChecks
         CreativeMode(c);
         HudHide(c);
         CharacterWait(c);
+        PostGetColorSimd(c);
     }
 
     static void L0ChunkColumns(Check c)
@@ -1531,5 +1532,47 @@ public static class LoginSweepChecks
             "join quiet does not Harmony-patch vsvaogc");
         c.True(!mod.Contains("HarmonyLib") && !mod.Contains("PatchAll("),
             "Distant Vistas does not Harmony-patch vsvaogc or the present path");
+    }
+
+    static void PostGetColorSimd(Check c)
+    {
+        string simdPath = Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodRgbSimd.cs");
+        c.True(File.Exists(simdPath), "LodRgbSimd.cs ships (post-GetColor SIMD)");
+        string simd = File.ReadAllText(simdPath);
+        c.True(simd.Contains("Vector256"), "SIMD uses Vector256");
+        c.True(simd.Contains("Avx2"), "SIMD uses AVX2 when the CPU has it");
+        c.True(simd.Contains("Vector128"), "SIMD falls back to portable Vector128 (SSE2/NEON)");
+        c.True(simd.Contains("Vector.IsHardwareAccelerated"),
+            "SIMD consults System.Numerics.Vector.IsHardwareAccelerated");
+        c.True(simd.Contains("Vector.Divide") && simd.Contains("Vector<int>"),
+            "QuantizeSpan uses System.Numerics.Vector<int> when AVX2 is absent");
+        c.True(simd.Contains("BlurLandOnceScalar"),
+            "scalar BlurLand kernel remains the bit-identical reference");
+        c.True(simd.Contains("QuantizePacked") && simd.Contains("QuantizeSpan"),
+            "quantize is vectorized on packed RGB buffers");
+        c.True(simd.Contains("UnpackPlanes") && simd.Contains("PackPlanes"),
+            "RGB pack/unpack runs over sampled color planes");
+        c.True(!simd.Contains("GetColor("),
+            "SIMD never calls Block.GetColor");
+        c.True(!simd.Contains("GetColorWithoutTint"),
+            "SIMD never calls GetColorWithoutTint");
+
+        string mix = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSurfaceMix.cs"));
+        c.True(mix.Contains("LodRgbSimd.BlurLandOnce"),
+            "BlurLand uses the SIMD kernel (radius 0 still runs the mask/alpha copy)");
+        c.True(mix.Contains("LodRgbSimd.QuantizePacked"),
+            "Quantize uses the SIMD packed kernel");
+        c.True(mix.Contains("ArrayPool"),
+            "mix / halo / blur scratch come from ArrayPool");
+        c.Eq(0, LodSurfaceMix.BlurRadius, "production BlurRadius stays 0");
+
+        string plan = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "docs", "plans", "login-bake-efficiency.md"));
+        c.True(plan.Contains("SIMD after GetColor (done)"),
+            "efficiency plan marks post-GetColor SIMD done, not a leftover TODO");
+        c.True(plan.Contains("LodRgbSimd"),
+            "efficiency plan names the live SIMD type");
     }
 }
