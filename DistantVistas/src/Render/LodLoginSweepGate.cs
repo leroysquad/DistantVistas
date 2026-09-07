@@ -53,8 +53,12 @@ public static class LodLoginSweepGate
                     capi, completeForResume, worldId, visited, resumeMisses, unfilledGaps))
             {
                 LodLoginSweepResume.Delete(capi);
-                return LogDecide(capi, world, blocks, completeForResume, visited, new Result(false,
-                    "dropped leftover mid-sweep resume (in-window complete; paint-rev no longer teleports)"));
+                // Same honesty as in-window skip: leftover holes are frontier drip,
+                // not a complete canvas. Overlay stays off (Esc leftover would re-wedge).
+                string dropReason = resumeMisses > 0 || unfilledGaps > 0
+                    ? $"in-window skip; {resumeMisses} deferred incomplete region(s), {unfilledGaps} unfilled gaps (frontier drip)"
+                    : "dropped leftover mid-sweep resume (in-window complete; paint-rev no longer teleports)";
+                return LogDecide(capi, world, blocks, completeForResume, visited, new Result(false, dropReason));
             }
             return LogDecide(capi, world, blocks, completeForResume, visited, new Result(true, "resuming cancelled mid-sweep checkpoint"));
         }

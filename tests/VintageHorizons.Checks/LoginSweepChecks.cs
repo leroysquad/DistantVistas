@@ -978,6 +978,8 @@ public static class LoginSweepChecks
             "gate runs when an eligible resume exists and skip would not apply");
         c.True(gate.Contains("ShouldDropLeftoverResume") || gate.Contains("dropped leftover mid-sweep resume"),
             "gate drops leftover Esc pause when in-window complete would skip");
+        c.True(gate.Contains("resumeMisses > 0 || unfilledGaps > 0"),
+            "dropped Esc resume with leftover holes names deferred counts, not complete");
         c.True(gate.Contains("empty canvas needs bootstrap sweep"),
             "gate runs bootstrap on empty visited canvas");
         c.True(gate.Contains("still incomplete"),

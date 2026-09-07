@@ -4,7 +4,7 @@ Source audit: `cursor/neglected-issues-audit-1ef2` / `docs/plans/neglected-issue
 
 | Item | Status |
 |------|--------|
-| In-window skip claiming complete with large `FindMisses` / `LastUnfilledGaps` | Done — threshold 32: force scout fill; below that, honest deferred-count skip |
+| In-window skip claiming complete with large `FindMisses` / `LastUnfilledGaps` | Done — threshold 32: force scout fill; below that, honest deferred-count skip (including dropped Esc resume) |
 | `DiscoverOnly` / `explorePending` stall after skip | Done — `MaxExplorePendingYield` 4→24; skip does not `ExploreBake.Clear()` |
 | Palette no-colour `MarkChanged` storm on first load | Done — persist every repair; remesh ≤2 sections/tick (`NotePaletteRepair`) |
 | Expire-recapture missing-tex white strip | Done — `RejectExpireMissingTex` / `IsMissingTextureWhite` before write |
