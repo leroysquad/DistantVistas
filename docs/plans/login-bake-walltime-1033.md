@@ -1,4 +1,4 @@
-# Login bake wall-time 1.0.33 / 1.0.34 / 1.0.35
+# Login bake wall-time 1.0.33 / 1.0.34 / 1.0.35 / 1.0.36
 
 Target: cold-login overlay bake **under ~2–3 minutes** for a typical **1680 L0** revisit on a mid/high PC (stretch **~90s** when capture keeps 16 scouts fed).
 
@@ -180,3 +180,34 @@ Invariants unchanged: no teleports; scout viewers; exact pickup; spawn-solid 102
 | Store resident | **`TryGetSection`** loads disk section before partial / expire handoff |
 
 **Expect after fix:** H-PAINT batches resume within seconds of a WaitChunks pile-up; `paintReadyQueued&gt;0`; `painted` releases return; `avgNearTicks` stays in **teens–30s**, not **77+** with zero paint; `maxWait`-only slices alternate with **`partialPaint` / `waitExpirePaint` / `painted`**.
+
+## 1.0.36 WaitChunks wait cuts (~13:57 PT playtest)
+
+**Symptom (1.0.35 partial unblock):** WaitChunks still **2710 vs Capture 1279**; WaitChunks `ticksInPhase` **avg 55 / max 119**; `paintReadyQueued` **zero in ~96%** of scout-budget samples; `avgNearTicks` **~62**; **maxWait 104 vs painted 114** (~1:1); early window `farLive=16` `avgFarTicks=120`.
+
+**Root cause:** 1.0.35 escalation (**32/48 tick** thresholds, **256→1** partial ladder tied to **72–96 tick** waits) still parked scouts **~1–2 s** in WaitChunks before Capture/paint. **16 far WaitChunks** competed for chunk IO while paint queue starved. **maxWait requeue** still consumed ~half of releases without productive paint.
+
+**Shipped:**
+
+| Fix | Change |
+|-----|--------|
+| Hard Capture deadline | **8 ticks (~400 ms)** — every scout enters Capture (no full-map gate) |
+| Shorter safety caps | `MaxWaitTicks` 96→**24**; `MaxCaptureWaitTicks` 16→**6** |
+| Early paint handoff | **4+ ticks** `PartialCaptureMin` (64→16→4→1); dedicated **12-tick** handoff pass |
+| Faster rotation | **6+** scouts WaitChunks **≥16 ticks** → paint (was all **16 @ 48**) |
+| Concurrency caps | Near WaitChunks **4** (was 8); **new far cap 6** — pending skips saturated band |
+| Faster stream | `RevealGrowPerTick` **8**; `RequestUpRetryTicks` **8** |
+| Capture stall | **`captureStall`** release + requeue after **6** capture ticks (no slot parking) |
+| Key churn | `MaxWaitKeyedRetries` **1** |
+
+**Expect after 1.0.36:**
+
+| Signal | 1.0.35 playtest | Target |
+|--------|-----------------|--------|
+| WaitChunks `ticksInPhase` avg | ~55 | **teens (~12–18)** |
+| WaitChunks max | ~119 | **&lt;32** typical |
+| `paintReadyQueued` &gt; 0 | ~4% of samples | **&gt;50%** while scouts live |
+| `maxWait` vs `painted` | ~1:1 | **`painted` ≫ `maxWait`** |
+| `avgNearTicks` / `avgFarTicks` | ~62 / ~120 | **teens–25** |
+| Capture vs WaitChunks phase count | 1279 vs 2710 | **Capture ≥ WaitChunks** |
+| Freeze dead-end | rare | **none** (Capture @ 8 + handoff @ 4) |

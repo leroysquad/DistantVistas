@@ -17,22 +17,28 @@ public sealed class LodLoginScoutFill
     /// <summary>Legacy near/far slot caps (telemetry). All slots share one FIFO queue.</summary>
     public const int MaxNearConcurrent = 8;
     public const int MaxFarConcurrent = 8;
-    public const int MaxWaitTicks = 96;
+    public const int MaxWaitTicks = 24;
     /// <summary>Do not park more than this many spawn-disk scouts in WaitChunks at once.</summary>
-    public const int MaxNearWaitChunksLive = 8;
-    /// <summary>Escalate WaitChunks → Capture when partial map or resident capture exists.</summary>
-    public const int WaitChunksForceCaptureTicks = 32;
-    /// <summary>When all slots WaitChunks, rotate oldest into paint/capture handoff.</summary>
-    public const int WaitChunksRotateTicks = 48;
-    public const int MaxCaptureWaitTicks = 16;
+    public const int MaxNearWaitChunksLive = 4;
+    /// <summary>Cap far-ring WaitChunks so paint-near keys are not starved by rim streamers.</summary>
+    public const int MaxFarWaitChunksLive = 6;
+    /// <summary>Always enter Capture after this many WaitChunks ticks (~400 ms).</summary>
+    public const int WaitChunksForceCaptureTicks = 8;
+    /// <summary>Try paint handoff while still waiting for map (resident / partial capture).</summary>
+    public const int WaitChunksHandoffTicks = 12;
+    /// <summary>When this many scouts WaitChunks, rotate stale slots into paint.</summary>
+    public const int WaitChunksRotateMinLive = 6;
+    /// <summary>Rotate WaitChunks slots into paint handoff (~800 ms).</summary>
+    public const int WaitChunksRotateTicks = 16;
+    public const int MaxCaptureWaitTicks = 6;
     public const int MaxMeshWaitTicks = 120;
     /// <summary>After this many maxWait requeues, hand off paint if any section data exists.</summary>
-    public const int MaxWaitKeyedRetries = 2;
+    public const int MaxWaitKeyedRetries = 1;
     public const int ChunkVisibleRadius = 2;
     public const int SweepRadiusChunks = 2;
     public const int SweepRowsPerCall = 1;
-    public const int RevealGrowPerTick = 4;
-    public const int RequestUpRetryTicks = 20;
+    public const int RevealGrowPerTick = 8;
+    public const int RequestUpRetryTicks = 8;
     /// <summary>KeepLoaded / visible ring at spawn-solid visit cells.</summary>
     public const int NearRevealChunks = 4;
     /// <summary>Far visit cells only need the L0 footprint (64 blocks ≈ 2 chunks).</summary>
@@ -137,16 +143,19 @@ public sealed class LodLoginScoutFill
             LocalVisitRevealChunks,
             Math.Max(ChunkVisibleRadius, chunkVisibleTarget));
         int nearWaitChunks = CountNearWaitChunks();
+        int farWaitChunks = CountFarWaitChunks();
 
         for (int i = 0; i < slots.Length; i++)
         {
             if (slots[i] is { Live: true }) continue;
             long? key = TakeNextPending(
-                capi, pending, completedKeys, pickupX, pickupZ, nearWaitChunks);
+                capi, pending, completedKeys, pickupX, pickupZ, nearWaitChunks, farWaitChunks);
             if (key == null) break;
             StartSlot(capi, i, key.Value, pickupX, pickupZ, onsetChunks, targetCap);
             if (VisitIsNear(capi, key.Value, pickupX, pickupZ))
                 nearWaitChunks++;
+            else
+                farWaitChunks++;
         }
 
         for (int i = 0; i < slots.Length; i++)
@@ -180,8 +189,6 @@ public sealed class LodLoginScoutFill
                 }
 
                 bool loaded = LodLoginSweep.AllMapChunksLoaded(capi.World.BlockAccessor, key);
-                bool anyLoaded = LodLoginSweep.AnyMapChunksLoaded(capi.World.BlockAccessor, key);
-                int partialMin = PartialCaptureMin(scout.Ticks);
 
                 if (loaded)
                 {
@@ -192,8 +199,25 @@ public sealed class LodLoginScoutFill
                     continue;
                 }
 
-                if (scout.Ticks >= WaitChunksForceCaptureTicks
-                    && (anyLoaded || HasPartialCapture(pipeline, key, partialMin)))
+                if (scout.Ticks >= 4
+                    && TryTimeoutHandoff(
+                        pipeline, key, scout, PartialCaptureMin(scout.Ticks), out string earlyReason))
+                {
+                    ReleaseSlot(capi, i, renderer, pipeline, earlyReason);
+                    waitRetries.Remove(key);
+                    continue;
+                }
+
+                if (scout.Ticks >= WaitChunksHandoffTicks
+                    && TryTimeoutHandoff(
+                        pipeline, key, scout, PartialCaptureMin(scout.Ticks), out string handoffReason))
+                {
+                    ReleaseSlot(capi, i, renderer, pipeline, handoffReason);
+                    waitRetries.Remove(key);
+                    continue;
+                }
+
+                if (scout.Ticks >= WaitChunksForceCaptureTicks)
                 {
                     pipeline.QueueL0SectionForce(key);
                     scout.Current = LodScoutEntity.Phase.Capture;
@@ -203,7 +227,7 @@ public sealed class LodLoginScoutFill
                 }
 
                 if (scout.Ticks >= WaitChunksRotateTicks
-                    && CountPhase(LodScoutEntity.Phase.WaitChunks) >= MaxConcurrent
+                    && CountPhase(LodScoutEntity.Phase.WaitChunks) >= WaitChunksRotateMinLive
                     && TryTimeoutHandoff(pipeline, key, scout, minCols: 1, out string rotateReason))
                 {
                     ReleaseSlot(capi, i, renderer, pipeline, rotateReason);
@@ -218,9 +242,9 @@ public sealed class LodLoginScoutFill
                 }
 
                 pipeline.QueueL0SectionForce(key);
-                if (TryTimeoutHandoff(pipeline, key, scout, minCols: 1, out string handoffReason))
+                if (TryTimeoutHandoff(pipeline, key, scout, minCols: 1, out string expireReason))
                 {
-                    ReleaseSlot(capi, i, renderer, pipeline, handoffReason);
+                    ReleaseSlot(capi, i, renderer, pipeline, expireReason);
                     waitRetries.Remove(key);
                     continue;
                 }
@@ -236,11 +260,19 @@ public sealed class LodLoginScoutFill
             {
                 if (!CaptureReady(pipeline, key, scout.Ticks))
                 {
-                    if (scout.Ticks >= MaxCaptureWaitTicks
-                        && TryTimeoutHandoff(pipeline, key, scout, minCols: 1, out string captureReason))
+                    if (scout.Ticks >= MaxCaptureWaitTicks)
                     {
-                        ReleaseSlot(capi, i, renderer, pipeline, captureReason);
-                        waitRetries.Remove(key);
+                        if (TryTimeoutHandoff(pipeline, key, scout, minCols: 1, out string captureReason))
+                        {
+                            ReleaseSlot(capi, i, renderer, pipeline, captureReason);
+                            waitRetries.Remove(key);
+                            continue;
+                        }
+
+                        waitRetries.TryGetValue(key, out int captureRetries);
+                        waitRetries[key] = captureRetries + 1;
+                        RequeuePending(pending, key);
+                        ReleaseSlot(capi, i, renderer, pipeline, "captureStall");
                         continue;
                     }
 
@@ -292,7 +324,8 @@ public sealed class LodLoginScoutFill
         HashSet<long> completedKeys,
         double pickupX,
         double pickupZ,
-        int nearWaitChunksLive)
+        int nearWaitChunksLive,
+        int farWaitChunksLive)
     {
         if (pending.Count == 0) return null;
 
@@ -301,7 +334,8 @@ public sealed class LodLoginScoutFill
             pendingScratch.Add(pending.Dequeue());
         if (pendingScratch.Count == 0) return null;
 
-        int pick = SelectPendingIndex(capi, pendingScratch, completedKeys, pickupX, pickupZ, nearWaitChunksLive);
+        int pick = SelectPendingIndex(
+            capi, pendingScratch, completedKeys, pickupX, pickupZ, nearWaitChunksLive, farWaitChunksLive);
         if (pick < 0)
         {
             for (int i = 0; i < pendingScratch.Count; i++)
@@ -324,7 +358,8 @@ public sealed class LodLoginScoutFill
         HashSet<long> completedKeys,
         double pickupX,
         double pickupZ,
-        int nearWaitChunksLive)
+        int nearWaitChunksLive,
+        int farWaitChunksLive)
     {
         int best = -1;
         int bestRetries = int.MaxValue;
@@ -339,6 +374,12 @@ public sealed class LodLoginScoutFill
             bool near = VisitIsNear(capi, key, pickupX, pickupZ);
 
             if (nearWaitChunksLive >= MaxNearWaitChunksLive && near)
+            {
+                if (fallback < 0) fallback = i;
+                continue;
+            }
+
+            if (farWaitChunksLive >= MaxFarWaitChunksLive && !near)
             {
                 if (fallback < 0) fallback = i;
                 continue;
@@ -367,22 +408,22 @@ public sealed class LodLoginScoutFill
 
     static int PartialCaptureMin(int waitTicks)
     {
-        if (waitTicks >= MaxWaitTicks - 1) return 1;
-        if (waitTicks >= 72) return 16;
-        if (waitTicks >= 48) return 64;
-        return 256;
+        if (waitTicks >= 16) return 1;
+        if (waitTicks >= 12) return 4;
+        if (waitTicks >= 8) return 16;
+        return 64;
     }
 
     static bool CaptureReady(LodPipeline pipeline, long key, int ticksInCapture)
     {
         if (pipeline.IsL0SectionCaptureIdle(key) && HasPartialCapture(pipeline, key, 1))
             return true;
+        if (ticksInCapture >= 2 && HasPartialCapture(pipeline, key, 16))
+            return true;
+        if (ticksInCapture >= 4 && HasPartialCapture(pipeline, key, 4))
+            return true;
         if (ticksInCapture >= MaxCaptureWaitTicks)
-            return HasPartialCapture(pipeline, key, 64) || HasPartialCapture(pipeline, key, 1);
-        if (ticksInCapture >= 8 && HasPartialCapture(pipeline, key, 256))
-            return true;
-        if (ticksInCapture >= 4 && HasPartialCapture(pipeline, key, 64))
-            return true;
+            return HasPartialCapture(pipeline, key, 1);
         return false;
     }
 
@@ -449,6 +490,18 @@ public sealed class LodLoginScoutFill
         {
             LodScoutEntity? scout = slots[i];
             if (scout is { Live: true, WaitForMesh: true, Current: LodScoutEntity.Phase.WaitChunks })
+                n++;
+        }
+        return n;
+    }
+
+    int CountFarWaitChunks()
+    {
+        int n = 0;
+        for (int i = 0; i < slots.Length; i++)
+        {
+            LodScoutEntity? scout = slots[i];
+            if (scout is { Live: true, WaitForMesh: false, Current: LodScoutEntity.Phase.WaitChunks })
                 n++;
         }
         return n;

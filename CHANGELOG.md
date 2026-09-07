@@ -1,3 +1,9 @@
+## 1.0.36
+- **Hard WaitChunks / scout wait cuts.** 1.0.35 unblocked total freeze but playtest still showed WaitChunks avg **55 ticks**, `paintReadyQueued` zero **~96%** of samples, **maxWait ≈ painted**. 1.0.36: **Capture at 8 ticks** (no full-map gate), paint handoff from **4 ticks** with aggressive `PartialCaptureMin`, `MaxWaitTicks` **24** / `MaxCaptureWaitTicks` **6**, near WaitChunks cap **4** + **far cap 6**, pile-up rotate at **6 scouts @ 16 ticks**, faster reveal/retry, **`captureStall`** slot release. Details: `docs/plans/login-bake-walltime-1033.md` § 1.0.36.
+- Player still does not teleport. Exact pickup XYZ. Gray tent + black tips. No SIMD inside GetColor. No false-complete. Look lock intact.
+- Drop `distantvistas_1.0.36.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+- **Verify:** WaitChunks avg ticksInPhase in teens; `paintReadyQueued>0` most seconds; `painted` ≫ `maxWait`; finished climbs faster.
+
 ## 1.0.35
 - **Login overlay speed cut (GC + GetColor hot path) plus WaitChunks freeze fix.** 1.0.34 fixed scout FIFO stall (`paintReadyQueued>0`, L0 past ~358) but Sovereign playtest still showed ~9 GB managed / 2383 gen0 in first 30s and a **WaitChunks dead-end** (`nearLive=16`, `paintReadyQueued=0`, only `maxWait` releases, zero H-PAINT). 1.0.35: **16×16** GetColor cache, BlockId-only + season tile caches, defer partial palette snapshot rebuilds, paint wall **120ms** / **32** stops/tick, spawn-near-first paint queue, throttled inline loads, spawn-first revisit budget. **Scout unblock:** partial-map **WaitChunks→Capture** at 32 ticks, tiered partial paint (256→1), **8-cap** near WaitChunks, full-grid **rotate at 48 ticks**, `waitExpirePaint` / capture timeout handoffs, key deferral on repeated maxWait. Details: `docs/plans/login-bake-walltime-1033.md` § 1.0.35.
 - Player still does not teleport. Exact pickup XYZ. Gray tent + black tips. No SIMD inside GetColor. No false-complete. Look lock intact.

@@ -2,11 +2,11 @@
     "type":  "code",
     "modid":  "distantvistas",
     "name":  "Distant Vistas",
-    "version":  "1.0.35",
+    "version":  "1.0.36",
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.35. Login overlay speed + WaitChunks freeze fix: wider GetColor caches, spawn-near paint queue, partial-map capture escalation, 8-cap near WaitChunks. Builds on 1.0.34 scout FIFO + look lock. Farseer gray tent + black tips. Vintage Horizons fork.",
+    "description":  "Official 1.0.36. Hard WaitChunks wait cuts: Capture at 8 ticks, paint handoff from 4 ticks, near/far WaitChunks caps, faster reveal/retry. Builds on 1.0.35 speed + scout unblock. Farseer gray tent + black tips. Vintage Horizons fork.",
     "authors":  [
                     "IllLeroySquad"
                 ],
