@@ -79,6 +79,8 @@ public sealed class LodLoginBake
     readonly EntityPos restorePos = new();
     readonly Vec3d restoreCameraPos = new();
     readonly Stopwatch stabilizeClock = new();
+    double pickupX, pickupY, pickupZ;
+    float pickupYaw, pickupPitch;
 
     int total;
     int finished;
@@ -382,8 +384,9 @@ public sealed class LodLoginBake
     }
 
     /// <summary>
-    /// Capture the exact pickup pose once. Warmup may replace an unset (0,0) pose
-    /// with the real spawn, then never overwrite — recapturing every tick locked onto hops.
+    /// Snapshot the exact pickup Pos.X/Y/Z (and yaw/pitch) once. Not spawn, not a
+    /// chunk origin. Warmup may replace an unset (0,0) pose with the live pickup,
+    /// then never overwrite — recapturing every tick locked onto hops.
     /// </summary>
     void CaptureRestorePose(bool allowOverwrite = false)
     {
@@ -396,8 +399,7 @@ public sealed class LodLoginBake
         if (restoreCaptured && !LooksUnset(restorePos))
             return;
 
-        restorePos.SetFrom(entity.Pos);
-        restoreCameraPos.Set(entity.CameraPos);
+        RememberPickupFrom(entity.Pos, entity.CameraPos);
         restoreCaptured = true;
         // #region agent log
         AgentEscLog("pose-capture", "H-P-pin",
@@ -412,6 +414,22 @@ public sealed class LodLoginBake
 
     static bool LooksUnset(EntityPos pos) =>
         Math.Abs(pos.X) < 0.01 && Math.Abs(pos.Z) < 0.01;
+
+    static bool LooksUnset(double x, double z) =>
+        Math.Abs(x) < 0.01 && Math.Abs(z) < 0.01;
+
+    void RememberPickupFrom(EntityPos pos, Vec3d cameraPos)
+    {
+        pickupX = pos.X;
+        pickupY = pos.Y;
+        pickupZ = pos.Z;
+        pickupYaw = pos.Yaw;
+        pickupPitch = pos.Pitch;
+        restorePos.SetPos(pickupX, pickupY, pickupZ);
+        restorePos.Yaw = pickupYaw;
+        restorePos.Pitch = pickupPitch;
+        restoreCameraPos.Set(cameraPos);
+    }
 
     void TickOverlayWarmup()
     {
@@ -1639,17 +1657,24 @@ public sealed class LodLoginBake
         pending.Clear();
         foreach (long key in resume.Pending)
             pending.Enqueue(key);
-        restorePos.SetPos(resume.RestoreX, resume.RestoreY, resume.RestoreZ);
-        restorePos.Yaw = resume.RestoreYaw;
-        restorePos.Pitch = resume.RestorePitch;
+        pickupX = resume.RestoreX;
+        pickupY = resume.RestoreY;
+        pickupZ = resume.RestoreZ;
+        pickupYaw = resume.RestoreYaw;
+        pickupPitch = resume.RestorePitch;
+        restorePos.SetPos(pickupX, pickupY, pickupZ);
+        restorePos.Yaw = pickupYaw;
+        restorePos.Pitch = pickupPitch;
         EntityPlayer entity = capi.World.Player.Entity;
         if (resume.RestoreCameraY != 0 || resume.RestoreCameraX != 0 || resume.RestoreCameraZ != 0)
             restoreCameraPos.Set(resume.RestoreCameraX, resume.RestoreCameraY, resume.RestoreCameraZ);
         else
             RebuildRestoreCameraFromPose(entity);
-        entity.Pos.SetFrom(restorePos);
-        LockPlayerCamera(capi, capi.World.Player, restorePos, restoreCameraPos);
         restoreCaptured = true;
+        entity.Pos.SetFrom(restorePos);
+        LodLoginBakePlayerMove.ApplyExactPickup(
+            capi, entity, pickupX, pickupY, pickupZ, pickupYaw, pickupPitch, requestChunks: false);
+        LockPlayerCamera(capi, capi.World.Player, restorePos, restoreCameraPos);
     }
 
     void SaveResumeSnapshot()
@@ -1684,11 +1709,11 @@ public sealed class LodLoginBake
 
         if (restoreCaptured)
         {
-            snap.RestoreX = restorePos.X;
-            snap.RestoreY = restorePos.Y;
-            snap.RestoreZ = restorePos.Z;
-            snap.RestoreYaw = restorePos.Yaw;
-            snap.RestorePitch = restorePos.Pitch;
+            snap.RestoreX = pickupX;
+            snap.RestoreY = pickupY;
+            snap.RestoreZ = pickupZ;
+            snap.RestoreYaw = pickupYaw;
+            snap.RestorePitch = pickupPitch;
             snap.RestoreCameraX = restoreCameraPos.X;
             snap.RestoreCameraY = restoreCameraPos.Y;
             snap.RestoreCameraZ = restoreCameraPos.Z;
@@ -1699,8 +1724,7 @@ public sealed class LodLoginBake
 
     /// <summary>
     /// Keep the local player at the exact pickup XYZ + facing for the whole overlay.
-    /// Scout <see cref="LodLoginBakePlayerMove.RequestChunkColumnsVisible"/> calls must
-    /// not leave Pos on a visit cell — re-pin after every scout tick.
+    /// If anything still hopped Pos or ServerPos, write the original doubles back.
     /// </summary>
     void PinPickupPose()
     {
@@ -1708,12 +1732,11 @@ public sealed class LodLoginBake
         EntityPlayer entity = player.Entity;
         if (entity == null) return;
         entity.Pos.Motion.Set(0, 0, 0);
-        if (!restoreCaptured || LooksUnset(restorePos)) return;
+        if (!restoreCaptured || LooksUnset(pickupX, pickupZ)) return;
 
+        LodLoginBakePlayerMove.ApplyExactPickup(
+            capi, entity, pickupX, pickupY, pickupZ, pickupYaw, pickupPitch, requestChunks: false);
         entity.Pos.SetFrom(restorePos);
-        entity.Pos.Motion.Set(0, 0, 0);
-        entity.PositionBeforeFalling.Set(restorePos.X, restorePos.Y, restorePos.Z);
-        try { entity.UpdatePartitioning(); } catch { }
         LockPlayerCamera(capi, player, restorePos, restoreCameraPos);
     }
 
@@ -1757,9 +1780,14 @@ public sealed class LodLoginBake
         }
     }
 
+    /// <summary>
+    /// Safety net: if any leftover hop moved the player, put them back on the
+    /// exact pickup doubles (Pos + ServerPos + yaw/pitch). Not spawn, not a
+    /// nearby column, not a rounded chunk origin.
+    /// </summary>
     void RestorePlayerPose(bool requestChunks = false)
     {
-        if (!restoreCaptured) return;
+        if (!restoreCaptured || LooksUnset(pickupX, pickupZ)) return;
 
         IClientPlayer player = capi.World.Player;
         EntityPlayer entity = player.Entity;
@@ -1776,7 +1804,10 @@ public sealed class LodLoginBake
             if (lastApproved <= 0)
                 radius = Math.Min(radius, 4);
         }
-        LodLoginBakePlayerMove.ApplyQuietFrom(capi, entity, restorePos, requestChunks, radius);
+        LodLoginBakePlayerMove.ApplyExactPickup(
+            capi, entity, pickupX, pickupY, pickupZ, pickupYaw, pickupPitch,
+            requestChunks, radius);
+        LodLoginBakePlayerMove.ApplyQuietFrom(capi, entity, restorePos, requestChunks: false);
         LockPlayerCamera(capi, player, restorePos, restoreCameraPos);
         LodLoginBakeMouseDelta.Drain(capi);
         // #region agent log
@@ -1784,7 +1815,7 @@ public sealed class LodLoginBake
         {
             System.IO.File.AppendAllText(
                 @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
-                "{\"sessionId\":\"40cccb\",\"hypothesisId\":\"H3\",\"location\":\"LodLoginBake.RestorePlayerPose\",\"message\":\"spawn-restore\",\"data\":{\"requestChunks\":" + (requestChunks ? "true" : "false") + ",\"radius\":" + radius + ",\"lastApproved\":" + lastApproved + ",\"desired\":" + desired + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+                "{\"sessionId\":\"40cccb\",\"hypothesisId\":\"H3\",\"location\":\"LodLoginBake.RestorePlayerPose\",\"message\":\"pickup-restore\",\"data\":{\"requestChunks\":" + (requestChunks ? "true" : "false") + ",\"radius\":" + radius + ",\"lastApproved\":" + lastApproved + ",\"desired\":" + desired + ",\"x\":" + pickupX.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",\"y\":" + pickupY.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",\"z\":" + pickupZ.ToString(System.Globalization.CultureInfo.InvariantCulture) + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
         }
         catch { }
         // #endregion
@@ -1793,9 +1824,9 @@ public sealed class LodLoginBake
     void RebuildRestoreCameraFromPose(EntityPlayer entity)
     {
         restoreCameraPos.Set(
-            restorePos.X,
-            restorePos.Y + entity.LocalEyePos.Y,
-            restorePos.Z);
+            pickupX,
+            pickupY + entity.LocalEyePos.Y,
+            pickupZ);
     }
 
     static string Pct(int done, int total) =>

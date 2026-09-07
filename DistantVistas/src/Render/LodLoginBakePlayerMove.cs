@@ -24,6 +24,48 @@ public static class LodLoginBakePlayerMove
     }
 
     /// <summary>
+    /// Write the exact pickup doubles onto Pos and ServerPos. Never Floor to a
+    /// chunk origin, never VisitPosition, never a spawn substitute. Yaw/pitch too.
+    /// Safety net when any leftover hop still moved the player.
+    /// </summary>
+    public static void ApplyExactPickup(
+        ICoreClientAPI capi,
+        EntityPlayer entity,
+        double x,
+        double y,
+        double z,
+        float yaw,
+        float pitch,
+        bool requestChunks = false,
+        int chunkVisibleRadius = ChunkVisibleRadius)
+    {
+        WriteExactPickup(entity, x, y, z, yaw, pitch);
+        if (requestChunks)
+            RequestChunkColumnsVisible(capi, x, z, entity.Pos.Dimension, chunkVisibleRadius);
+    }
+
+    public static void WriteExactPickup(
+        EntityPlayer entity,
+        double x,
+        double y,
+        double z,
+        float yaw,
+        float pitch)
+    {
+        // Direct doubles — do not round, Floor, or go through a BlockPos.
+        entity.Pos.SetPos(x, y, z);
+        entity.Pos.Yaw = yaw;
+        entity.Pos.Pitch = pitch;
+        entity.Pos.Motion.Set(0, 0, 0);
+        entity.ServerPos.SetPos(x, y, z);
+        entity.ServerPos.Yaw = yaw;
+        entity.ServerPos.Pitch = pitch;
+        entity.ServerPos.Motion.Set(0, 0, 0);
+        entity.PositionBeforeFalling.Set(x, y, z);
+        try { entity.UpdatePartitioning(); } catch { }
+    }
+
+    /// <summary>
     /// Teleport the local player on the client: set entity pose, clear motion, refresh
     /// partitioning, and nudge the chunk loader. No chat or server commands.
     /// </summary>
@@ -52,13 +94,9 @@ public static class LodLoginBakePlayerMove
         bool requestChunks = true,
         int chunkVisibleRadius = ChunkVisibleRadius)
     {
-        entity.Pos.SetFrom(pose);
-        entity.Pos.Motion.Set(0, 0, 0);
-        entity.PositionBeforeFalling.Set(pose.X, pose.Y, pose.Z);
-        entity.UpdatePartitioning();
-
-        if (requestChunks)
-            RequestChunkColumnsVisible(capi, pose.X, pose.Z, entity.Pos.Dimension, chunkVisibleRadius);
+        ApplyExactPickup(
+            capi, entity, pose.X, pose.Y, pose.Z, pose.Yaw, pose.Pitch,
+            requestChunks, chunkVisibleRadius);
     }
 
     /// <summary>Hold pose between ticks without re-requesting chunks every frame.</summary>

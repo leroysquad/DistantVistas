@@ -1,12 +1,13 @@
 ## 1.0.30
 - **Player stays at spawn the entire overlay.** 1.0.27/1.0.28 still hopped: warmup recaptured pose onto visit cells, leftover `TeleportPlayer` existed, and post-login `LodFrontierScout` `ApplyQuiet`/`HoldQuiet`-snapped to distant L0. Those paths are gone. Overlay pins the exact pickup XYZ + facing every tick (including after scout chunk requests and through drain/stabilize). Distant columns load via staggered scout workers (`LodScoutEntity` tokens + `SetChunkColumnVisible`), then despawn. Frontier fill after overlay is visibility-only — no player hops.
+- **If anything still hops you, overlay puts you back on the exact pickup doubles.** Snapshot `Pos.X/Y/Z` (and yaw/pitch) at overlay start. Success, Esc, fail, and world-leave write those same doubles onto `Pos` and `ServerPos` — not spawn, not a nearby column, not a rounded chunk origin. Scouts remain the preferred path; restore is the safety net.
 - **Denser scout coverage in the same ~7 min wall.** 12 concurrent scouts (was 6). Visit budget 240–840 stops at 0.5s/stop fallback (was 180–520 at 1s). Player does not pay hop cost.
 - **Login snapshot waits for a solid, centered world.** 1.0.28 playtest (up close): desert LOD with dark oval holes, land offset beside spawn, and a dense white/yellow smoke blob on the near ground — overlay had dropped before meshes finished.
 - Overlay splash stays up until spawn-local L0 (768 blocks) has drawable meshes and far meshes reach half of Farseer onset (~2038 of 4075). Mesh schedule/upload runs under the splash (previously the whole render frame was skipped). 3s frame-time timeout is gone; hold up to 90s after drain.
 - Visit queue is **spawn-first**, then the rim, ordered near-to-far. Raw key sort was painting a disk beside the player. 1.0.29 +700 / 4075 disk goal kept.
 - **Less near-ground smoke.** Farseer gray tent + black tips stay; low-ground LOD mist and low Farseer smoke are thinner so they do not wash terrain up close.
 - Drop `distantvistas_1.0.30.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
-- **Verify:** overlay does not move you. After overlay, you are at the same XYZ + look as pickup; no dark holes underfoot; land centered on spawn; Farseer gray/black silhouette visible in the distance; no thick white blob on near desert. Pos must not change during the overlay.
+- **Verify:** overlay does not move you. After overlay (or Esc/fail), you are at the **same X/Y/Z + look as pickup** — not a chunk corner. No dark holes underfoot; land centered on spawn; Farseer gray/black silhouette; no thick white blob on near desert.
 
 ## 1.0.29
 - **Coverage size only. Farseer look is still 1.0.28.** "Black" means the liked Farseer silhouette — gray tent/smoke body with **black mountain tips** — not a void, not a sky fill, not flattening land into empty black. `farseer-region.fsh` / `region.fsh` / `lodterrain.fsh` are unchanged from 1.0.28.

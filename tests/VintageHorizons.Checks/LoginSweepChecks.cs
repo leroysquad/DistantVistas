@@ -504,6 +504,18 @@ public static class LoginSweepChecks
             "login bake pins the exact pickup pose, not visit cells");
         c.True(bake.Contains("PinPickupPose"),
             "login bake re-pins pickup XYZ after scout chunk requests");
+        c.True(bake.Contains("pickupX"),
+            "login bake stores exact pickup X as a double");
+        c.True(bake.Contains("pickupY"),
+            "login bake stores exact pickup Y as a double");
+        c.True(bake.Contains("pickupZ"),
+            "login bake stores exact pickup Z as a double");
+        c.True(bake.Contains("pickupYaw") && bake.Contains("pickupPitch"),
+            "login bake snapshots pickup yaw/pitch");
+        c.True(bake.Contains("ApplyExactPickup"),
+            "login bake restores exact pickup doubles if anything hopped");
+        c.True(bake.Contains("pickupX, pickupY, pickupZ"),
+            "overlay end/Esc/fail writes the original pickup XYZ, not spawn or a chunk origin");
 
         string scoutFill = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginScoutFill.cs"));
@@ -553,8 +565,33 @@ public static class LoginSweepChecks
             "login bake scales column sweep to boosted view distance");
         c.True(bake.Contains("LodLoginBakePlayerMove.ApplyQuietFrom"),
             "login bake restores pose with quiet client moves");
+        c.True(bake.Contains("LodLoginBakePlayerMove.ApplyExactPickup"),
+            "leftover hops snap back to exact pickup doubles");
         c.True(bake.Contains("SpawnRestoreRadius"),
             "login bake re-requests spawn columns at real view radius");
+        c.True(bake.Contains("finally") && bake.Contains("RestorePlayerPose(requestChunks: success)"),
+            "success, Esc, fail, and world-leave all restore pickup pose");
+
+        string playerMove = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakePlayerMove.cs"));
+        c.True(playerMove.Contains("void ApplyExactPickup"),
+            "player move has an exact-pickup restore");
+        c.True(playerMove.Contains("void WriteExactPickup"),
+            "exact pickup writes Pos and ServerPos");
+        c.True(playerMove.Contains("ServerPos.SetPos(x, y, z)"),
+            "ServerPos gets the same exact doubles as Pos (engine copy-back cannot keep a hop)");
+        c.True(playerMove.Contains("entity.Pos.SetPos(x, y, z)"),
+            "Pos is written with the original doubles");
+        int writeAt = playerMove.IndexOf("void WriteExactPickup", StringComparison.Ordinal);
+        int holdAt = playerMove.IndexOf("void HoldQuiet", writeAt, StringComparison.Ordinal);
+        c.True(writeAt >= 0 && holdAt > writeAt, "WriteExactPickup bounds");
+        string writeExact = playerMove.Substring(writeAt, holdAt - writeAt);
+        c.True(!writeExact.Contains("Math.Floor"),
+            "exact pickup does not Floor XYZ to a chunk origin");
+        c.True(!writeExact.Contains("VisitPosition"),
+            "exact pickup does not snap to a visit-cell column");
+        c.True(!writeExact.Contains("(int)x") && !writeExact.Contains("(int)y") && !writeExact.Contains("(int)z"),
+            "exact pickup does not round XYZ to ints");
 
         string inputLock = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeInputLock.cs"));
