@@ -38,20 +38,18 @@ Counts use `wc -l` on each source file. Largest single file: `LodTerrainRenderer
 
 | Contributor | Mod C# | Tests | **C# total** |
 | --- | ---: | ---: | ---: |
+| **IllLeroySquad** (direct + Cursor Agent, directed) | 21,786 | 4,612 | **26,398** |
 | **AliasFactory** (Vintage Horizons foundation) | 9,134 | 4,234 | **13,368** |
-| **IllLeroySquad** | 4,565 | 989 | **5,554** |
-| **Cursor Agent** (AI-assisted development) | 17,221 | 3,623 | **20,841** |
 | **Total** | **30,920** | **8,846** | **39,766** |
 
-The original Horizons foundation is **~9,000 lines of mod C#** (9,134 above). The
-remaining mod source and nearly all post-fork test code is Distant Vistas development.
-IllLeroySquad identities in git: `IllLeroySquad`, `leroysquad`, and `Private Citizen`.
+Git records AI-assisted commits under the `Cursor Agent` author name. For attribution,
+those lines count as **IllLeroySquad** work (26,398 = 5,554 direct + 20,844 Cursor Agent).
+The original Horizons foundation is **~9,000 lines of mod C#** (9,134 above).
 
 | | Lines |
 | --- | ---: |
-| You (IllLeroySquad) | **5,554** |
-| Original creator (AliasFactory) | **13,368** C# (**9,134** in mod source) |
-| Cursor Agent | **20,841** |
+| **You (IllLeroySquad)** | **26,398** |
+| **Original creator (AliasFactory)** | **13,368** C# (**9,134** in mod source) |
 | **Total C#** | **39,766** |
 
 Blame totals may differ from `wc -l` by a few lines when files have uncommitted edits;
@@ -146,5 +144,5 @@ live in `VintagestoryData/ModData/distantvistas/`.
 
 Distant Vistas brings persistent, full three-dimensional far terrain to Vintage Story on
 any server, with live seasonal colour, a spawn-centered login bake, and configurable
-render range. Official release **1.0.32** — **39,763 lines** of C# (**5,554** IllLeroySquad,
-**9,134** AliasFactory mod foundation, **20,841** Cursor Agent).
+render range. Official release **1.0.32** — **39,763 lines** of C# (**26,398**
+IllLeroySquad, **9,134** AliasFactory mod foundation).

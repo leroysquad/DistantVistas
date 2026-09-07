@@ -6,7 +6,7 @@
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.32. 39,763 lines C#: 5,554 IllLeroySquad, 9,134 AliasFactory foundation, 20,841 Cursor Agent. Client-side far terrain with persistent LOD cache, extended render distance, live seasonal colour, and spawn-centered login bake.",
+    "description":  "Official 1.0.32. 39,763 lines C#: 26,398 IllLeroySquad, 9,134 AliasFactory foundation. Client-side far terrain with persistent LOD cache, extended render distance, live seasonal colour, and spawn-centered login bake.",
     "authors":  [
                     "IllLeroySquad"
                 ],
