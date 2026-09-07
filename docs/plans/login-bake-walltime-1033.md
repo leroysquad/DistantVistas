@@ -1,4 +1,4 @@
-# Login bake wall-time 1.0.33
+# Login bake wall-time 1.0.33 / 1.0.34
 
 Target: cold-login overlay bake **under ~2–3 minutes** for a typical **1680 L0** revisit on a mid/high PC (stretch **~90s** when capture keeps 16 scouts fed).
 
@@ -54,6 +54,7 @@ Remaining bottleneck if still >3 min: (1) near mesh-wait pinning slots, (2) chun
 | Shorter stabilize + post-overlay horizon mesh release when spawn solid + far ready | `LodLoginBake.TickStabilizing` |
 | Scout-path NDJSON sequence (`H-SCOUT-SEQ`: spawn/phase/release/budget/thrash) | `LodScoutSeqDiag`, `LodLoginScoutFill`, `LodScoutHostSystem`, `LodScoutViewerEntity` |
 | **PlayModeBakeBudget** after soft-release (steady background GetColor/mesh/SQLite) | `PlayModeBakeBudget`, `LodExploreBake`, `LodPipeline`, `LodTerrainRenderer` |
+| Overlay scout FIFO + fast capture→paint (1.0.34 stall fix) | `LodLoginScoutFill`, `LodLoginBakeInputLock` |
 
 Invariants kept: no player teleports; exact pickup XYZ; scout despawn; spawn-solid 1024; Farseer gray tent + black tips; no false-complete; no SIMD inside GetColor; no forceRecapture on scout ticks.
 
@@ -96,3 +97,21 @@ After overlay releases (spawn solid + far ready), unfinished horizon GetColor / 
 ## Scout sequence log (H-SCOUT-SEQ)
 
 Filter `debug-40cccb.log` for `"hypothesisId":"H-SCOUT-SEQ"`. Read in time order: `scout-spawn` → `scout-phase` (WaitChunks→Capture) → `scout-release` (`painted` = normal capture handoff to paint queue). `scout-budget` ~1/s shows slot pressure (`nearLive`/`farLive`, `held*`, `spawnsLastSec`/`releasesLastSec`, paint caps). `scout-thrash` = slot lived &lt;5 ticks or same key respawned within 2s — thrashing, not steady throughput.
+
+## 1.0.34 overlay stall fix (2026-09-07 playtest)
+
+**Symptom:** `l0Count` plateau ~358; `scout-budget` shows `paintReadyQueued=0` while 16 scouts live; `heldNear` hundreds (near/far slot split starved FIFO); `avgNearTicks≈80` / `avgFarTicks≈400`; load-screen star jitter (`H-LOOK` delta storms).
+
+**Root cause:** Pending keys inside spawn-solid 1024 were diverted to `heldNear` when filling “far” slots, while near slots dwelled 80 capture ticks and far slots hit 400-tick `maxWait` **without** paint handoff — empty `scoutReady` pipeline between bursts.
+
+**Shipped:**
+
+| Fix | Change |
+|-----|--------|
+| A | All 16 scouts share **FIFO pending** — flush legacy `heldNear`/`heldFar` each tick; no slot band starvation |
+| A | Capture→paint in **≤16 ticks** typical (`MaxCaptureWaitTicks` 80→**16**); partial capture handoff at 256+ cols |
+| B | `maxWait` 400→**120**; on timeout re-queue pending + `partialPaint` when capture exists (not silent drop) |
+| B | `WaitForMesh` = telemetry only; spawn sweep via `RunSpawnDiskSweep`; mesh gate stays overlay **end** |
+| C | `HoldLook` every overlay tick + server controls blocked; silent delta drain while `OverlayLookLocked` |
+
+**Expect after fix:** `paintReadyQueued` &gt; 0 most seconds when scouts live; `heldNear`≈0; `avgNearTicks` / `avgFarTicks` in teens not 80/400; L0 count climbs past 358 without interval stalls.

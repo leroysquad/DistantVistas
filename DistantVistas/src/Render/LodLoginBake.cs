@@ -1673,6 +1673,9 @@ public sealed class LodLoginBake
         LodPauseOnStartCompat.KeepUnpaused(capi);
         CloseBlockingDialogs();
 
+        if (phase != Phase.Done)
+            LodLoginBakeInputLock.HoldLook(capi);
+
         IClientPlayer player = capi.World.Player;
         EntityPlayer entity = player.Entity;
         EntityControls controls = entity.Controls;
@@ -1683,7 +1686,6 @@ public sealed class LodLoginBake
         timeFreeze.EnsureFrozen();
         gameMode.EnsureCreative();
         viewBoost.EnsureBoosted();
-        LodLoginBakeMouseDelta.Drain(capi);
 
         // Capture pickup once. Recapturing every warmup tick locked restorePos onto hops.
         if (!restoreCaptured || LooksUnset(restorePos))
@@ -1691,6 +1693,7 @@ public sealed class LodLoginBake
 
         PinPickupPose();
         BlockPlayerInput(controls);
+        BlockPlayerInput(entity.ServerControls);
         playerHide.EnsureHidden();
     }
 
@@ -1782,6 +1785,9 @@ public sealed class LodLoginBake
 
     void PinPickupPose()
     {
+        if (phase != Phase.Done)
+            LodLoginBakeInputLock.HoldLook(capi);
+
         IClientPlayer player = capi.World.Player;
         EntityPlayer entity = player.Entity;
         if (entity == null) return;

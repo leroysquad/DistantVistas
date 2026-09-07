@@ -653,10 +653,12 @@ public static class LoginSweepChecks
         c.True(File.Exists(Path.Combine(
                 GameAssemblies.RepoRoot, "docs", "plans", "login-bake-efficiency.md")),
             "efficiency plan (citations + A/B tiers) ships in-repo");
-        c.True(scoutFill.Contains("MaxNearConcurrent"),
-            "near mesh-wait scouts do not occupy all 16 slots");
-        c.True(scoutFill.Contains("heldFar"),
-            "far visit keys are held aside so spawn-first queues still start far scouts");
+        c.True(scoutFill.Contains("TakeNextPending"),
+            "overlay scouts fill pending FIFO without heldNear starvation");
+        c.True(scoutFill.Contains("FlushHeldToPending"),
+            "legacy heldNear/heldFar queues drain into pending each tick");
+        c.Eq(16, LodLoginScoutFill.MaxCaptureWaitTicks,
+            "scout capture wait aligned with LodLoginSweep (~0.8s at 50ms pulse)");
         c.True(scoutFill.Contains("RequestUpRetryTicks"),
             "scouts retry KeepLoaded if the server refused an Up at the hold cap");
         c.True(bake.Contains("scoutFill.HeldCount"),

@@ -14,14 +14,11 @@ namespace DistantVistas;
 public sealed class LodLoginScoutFill
 {
     public const int MaxConcurrent = 16;
-    /// <summary>
-    /// Spawn-solid scouts occupy these slots through mesh wait. Remaining slots
-    /// run the far ring so overlay % is not stuck on 16 near tessellation waits.
-    /// </summary>
+    /// <summary>Legacy near/far slot caps (telemetry). All slots share one FIFO queue.</summary>
     public const int MaxNearConcurrent = 8;
     public const int MaxFarConcurrent = 8;
-    public const int MaxWaitTicks = 400;
-    public const int MaxCaptureWaitTicks = 80;
+    public const int MaxWaitTicks = 120;
+    public const int MaxCaptureWaitTicks = 16;
     public const int MaxMeshWaitTicks = 120;
     public const int ChunkVisibleRadius = 2;
     public const int SweepRadiusChunks = 2;
@@ -106,10 +103,8 @@ public sealed class LodLoginScoutFill
     }
 
     /// <summary>
-    /// Advance every empty slot from <paramref name="pending"/> so all
-    /// <see cref="MaxConcurrent"/> workers run together. Mixes near mesh-wait
-    /// and far paint-release so the overlay is not 16 spawn waits. Returns keys
-    /// that finished capture this tick (ready to GetColor-paint).
+    /// Advance every empty slot from <paramref name="pending"/> (FIFO). Returns keys
+    /// ready for GetColor-paint. heldNear/heldFar are flushed each tick — no mid-disk backlog.
     /// </summary>
     public List<long> Tick(
         ICoreClientAPI capi,
@@ -125,25 +120,17 @@ public sealed class LodLoginScoutFill
         FinishedThisTick = 0;
         LastFinishedKey = null;
         readyScratch.Clear();
+        FlushHeldToPending(pending);
         int targetCap = Math.Min(
             LocalVisitRevealChunks,
             Math.Max(ChunkVisibleRadius, chunkVisibleTarget));
 
-        int nearLive = 0;
-        int farLive = 0;
-        CountLiveMix(out nearLive, out farLive);
-
         for (int i = 0; i < slots.Length; i++)
         {
             if (slots[i] is { Live: true }) continue;
-            bool wantNear = PickWantNear(nearLive, farLive);
-            long? key = TakeVisitKey(capi, pending, completedKeys, pickupX, pickupZ, wantNear);
-            if (key == null)
-                key = TakeVisitKey(capi, pending, completedKeys, pickupX, pickupZ, !wantNear);
+            long? key = TakeNextPending(pending, completedKeys);
             if (key == null) break;
             StartSlot(capi, i, key.Value, pickupX, pickupZ, onsetChunks, targetCap);
-            if (slots[i] is { WaitForMesh: true }) nearLive++;
-            else farLive++;
         }
 
         for (int i = 0; i < slots.Length; i++)
@@ -155,18 +142,17 @@ public sealed class LodLoginScoutFill
             HoldViewer(scout);
 
             int dim = capi.World.Player.Entity.Pos.Dimension;
+            bool farRing = !scout.WaitForMesh;
             int target = Math.Min(
-                scout.WaitForMesh ? NearRevealChunks : FarRevealChunks,
-                ClampReveal(scout, pickupX, pickupZ, onsetChunks, targetCap));
+                farRing ? FarRevealChunks : NearRevealChunks,
+                ClampReveal(scout, pickupX, pickupZ, onsetChunks, targetCap, farRing));
             GrowReveal(capi, scout, dim, target);
 
             if (scout.Current == LodScoutEntity.Phase.WaitChunks)
             {
                 int cx = scout.Cx;
                 int cz = scout.Cz;
-                // Near WaitChunks only. Paint/Mesh never SweepLoadedColumns or
-                // forceRecapture — that recapture storm held 16 slots and blew GC.
-                if (scout.WaitForMesh && scout.Ticks % 2 == 0)
+                if (scout.RunSpawnDiskSweep && scout.Ticks % 2 == 0)
                     pipeline.SweepLoadedColumns(
                         cx, cz, SweepRadiusChunks, forceRecapture: false,
                         rowsPerCall: SweepRowsPerCall, lane: LodPipeline.SweepLaneScout);
@@ -185,7 +171,15 @@ public sealed class LodLoginScoutFill
                         LodScoutSeqDiag.LogPhase(i, scout, renderer, pipeline);
                         continue;
                     }
-                    // Do not bake missing-tex white. Miss audit / retry can pick this L0 up.
+
+                    pipeline.QueueL0SectionForce(key);
+                    if (HasPartialCapture(pipeline, key) && TryHandoffPaint(key, scout))
+                    {
+                        ReleaseSlot(capi, i, renderer, pipeline, "partialPaint");
+                        continue;
+                    }
+
+                    RequeuePending(pending, key);
                     ReleaseSlot(capi, i, renderer, pipeline, "maxWait");
                     continue;
                 }
@@ -199,23 +193,13 @@ public sealed class LodLoginScoutFill
 
             if (scout.Current == LodScoutEntity.Phase.Capture)
             {
-                if (!pipeline.IsL0SectionCaptureIdle(key)
-                    && scout.Ticks < MaxCaptureWaitTicks)
+                if (!CaptureReady(pipeline, key, scout.Ticks))
                 {
                     LodScoutSeqDiag.LogPhase(i, scout, renderer, pipeline);
                     continue;
                 }
 
-                if (!scout.PaintQueued)
-                {
-                    readyScratch.Add(key);
-                    LastFinishedKey = key;
-                    FinishedThisTick++;
-                    scout.PaintQueued = true;
-                }
-
-                // Release immediately — PaintReadyScouts owns GetColor. Holding Paint/Mesh
-                // phases pinned all 16 slots while each L0 did 4096×GetColor (~2–3s/stop).
+                TryHandoffPaint(key, scout);
                 ReleaseSlot(capi, i, renderer, pipeline, "painted");
                 continue;
             }
@@ -244,44 +228,50 @@ public sealed class LodLoginScoutFill
         }
     }
 
-    bool PickWantNear(int nearLive, int farLive)
+    void FlushHeldToPending(Queue<long> pending)
     {
-        bool nearRoom = nearLive < MaxNearConcurrent;
-        bool farRoom = farLive < MaxFarConcurrent;
-        if (nearRoom && farRoom)
-            return nearLive <= farLive;
-        if (nearRoom) return true;
-        if (farRoom) return false;
-        return nearLive < farLive;
+        while (heldNear.Count > 0)
+            pending.Enqueue(heldNear.Dequeue());
+        while (heldFar.Count > 0)
+            pending.Enqueue(heldFar.Dequeue());
     }
 
-    long? TakeVisitKey(
-        ICoreClientAPI capi,
-        Queue<long> pending,
-        HashSet<long> completedKeys,
-        double pickupX,
-        double pickupZ,
-        bool wantNear)
+    static long? TakeNextPending(Queue<long> pending, HashSet<long> completedKeys)
     {
-        Queue<long> held = wantNear ? heldNear : heldFar;
-        while (held.Count > 0)
-        {
-            long key = held.Dequeue();
-            if (!completedKeys.Contains(key))
-                return key;
-        }
-
         while (pending.Count > 0)
         {
             long key = pending.Dequeue();
-            if (completedKeys.Contains(key)) continue;
-            bool near = VisitIsNear(capi, key, pickupX, pickupZ);
-            if (near == wantNear)
+            if (!completedKeys.Contains(key))
                 return key;
-            (near ? heldNear : heldFar).Enqueue(key);
         }
-
         return null;
+    }
+
+    static void RequeuePending(Queue<long> pending, long key) => pending.Enqueue(key);
+
+    static bool CaptureReady(LodPipeline pipeline, long key, int ticksInCapture)
+    {
+        if (pipeline.IsL0SectionCaptureIdle(key)) return true;
+        if (ticksInCapture >= MaxCaptureWaitTicks) return true;
+        if (ticksInCapture >= 8 && HasPartialCapture(pipeline, key)) return true;
+        return false;
+    }
+
+    static bool HasPartialCapture(LodPipeline pipeline, long key)
+    {
+        if (!pipeline.World.Sections.TryGetValue(key, out LodSection? section) || section == null)
+            return false;
+        return section.CapturedColumns >= 256;
+    }
+
+    bool TryHandoffPaint(long key, LodScoutEntity scout)
+    {
+        if (scout.PaintQueued) return true;
+        scout.PaintQueued = true;
+        readyScratch.Add(key);
+        LastFinishedKey = key;
+        FinishedThisTick++;
+        return true;
     }
 
     static bool VisitIsNear(
@@ -317,13 +307,14 @@ public sealed class LodLoginScoutFill
         double pickupX,
         double pickupZ,
         int onsetChunks,
-        int targetCap)
+        int targetCap,
+        bool farRing)
     {
         double dx = scout.X - pickupX;
         double dz = scout.Z - pickupZ;
         int distChunks = (int)Math.Ceiling(Math.Sqrt(dx * dx + dz * dz) / GlobalConstants.ChunkSize);
         int room = Math.Max(ChunkVisibleRadius, onsetChunks - distChunks);
-        int cap = Math.Min(targetCap, scout.WaitForMesh ? NearRevealChunks : FarRevealChunks);
+        int cap = Math.Min(targetCap, farRing ? FarRevealChunks : NearRevealChunks);
         return Math.Min(cap, room);
     }
 
@@ -354,7 +345,8 @@ public sealed class LodLoginScoutFill
         var (x, y, z) = LodLoginSweep.VisitPosition(capi.World, key);
         double dx = x - pickupX;
         double dz = z - pickupZ;
-        bool near = dx * dx + dz * dz <= LodLoginBake.SpawnSolidRadiusBlocks * LodLoginBake.SpawnSolidRadiusBlocks;
+        bool insideSpawnDisk = dx * dx + dz * dz
+            <= LodLoginBake.SpawnSolidRadiusBlocks * LodLoginBake.SpawnSolidRadiusBlocks;
         var scout = new LodScoutEntity(key)
         {
             X = x,
@@ -362,7 +354,8 @@ public sealed class LodLoginScoutFill
             Z = z,
             Cx = (int)Math.Floor(x / GlobalConstants.ChunkSize),
             Cz = (int)Math.Floor(z / GlobalConstants.ChunkSize),
-            WaitForMesh = near,
+            RunSpawnDiskSweep = insideSpawnDisk,
+            WaitForMesh = insideSpawnDisk,
         };
 
         try { scout.Viewer = LodScoutViewerEntity.SpawnAt(capi, key, x, y, z); }
@@ -371,13 +364,14 @@ public sealed class LodLoginScoutFill
         slots[index] = scout;
         liveCount = CountLive();
         int dim = capi.World.Player.Entity.Pos.Dimension;
+        bool farRing = !insideSpawnDisk;
         int radius = Math.Min(
-            near ? NearRevealChunks : FarRevealChunks,
-            ClampReveal(scout, pickupX, pickupZ, onsetChunks, targetCap));
+            farRing ? FarRevealChunks : NearRevealChunks,
+            ClampReveal(scout, pickupX, pickupZ, onsetChunks, targetCap, farRing));
         scout.HoldRadius = radius;
         LodLoginBakePlayerMove.RequestChunkColumnsVisible(capi, x, z, dim, ChunkVisibleRadius);
         LodScoutHostSystem.ClientInstance?.RequestUp(key, scout.Cx, scout.Cz, radius, dim, x, y, z);
-        LodScoutSeqDiag.LogSpawn(index, key, near, scout.WaitForMesh, x, y, z, radius);
+        LodScoutSeqDiag.LogSpawn(index, key, !farRing, scout.RunSpawnDiskSweep, x, y, z, radius);
         LodScoutSeqDiag.LogPhase(index, scout, null, null, forceTransition: true);
     }
 

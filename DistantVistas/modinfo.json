@@ -2,11 +2,11 @@
     "type":  "code",
     "modid":  "distantvistas",
     "name":  "Distant Vistas",
-    "version":  "1.0.33",
+    "version":  "1.0.34",
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.33. GetColor cache + stack early exit + time-budgeted overlay paint (~2–3 min typical 1680 L0). Farseer gray tent + black tips. Vintage Horizons fork.",
+    "description":  "Official 1.0.34. Overlay scout FIFO + fast capture-to-paint (fixes ~358 L0 stall); load-screen look lock. Background PlayModeBakeBudget after soft-release. Farseer gray tent + black tips. Vintage Horizons fork.",
     "authors":  [
                     "IllLeroySquad"
                 ],

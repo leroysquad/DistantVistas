@@ -23,7 +23,9 @@ public sealed class LodScoutEntity
     public int Cz { get; set; }
     public bool PaintQueued { get; set; }
     public bool Painted { get; set; }
-    /// <summary>True inside the spawn-solid disk: wait for a drawable mesh before despawn.</summary>
+    /// <summary>Spawn-solid disk: optional column sweep during WaitChunks (not slot mesh-wait).</summary>
+    public bool RunSpawnDiskSweep { get; set; }
+    /// <summary>Telemetry near/far band only — does not pin slots.</summary>
     public bool WaitForMesh { get; set; }
     /// <summary>KeepLoaded radius last sent to the server (retry RequestUp uses this).</summary>
     public int HoldRadius { get; set; }

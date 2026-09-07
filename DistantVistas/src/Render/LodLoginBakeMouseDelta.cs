@@ -25,6 +25,9 @@ public static class LodLoginBakeMouseDelta
         main.DelayedMouseDeltaY = 0;
         if (leftover < 0.5) return;
 
+        // During overlay, drain silently — logging huge leftovers every 250ms hid real signals.
+        if (LodLoginBakeInputLock.OverlayLookLocked) return;
+
         long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         if (now - lastLogMs < 250) return;
         lastLogMs = now;
