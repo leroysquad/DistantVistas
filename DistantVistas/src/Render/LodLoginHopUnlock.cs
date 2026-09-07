@@ -162,7 +162,7 @@ public sealed class LodLoginHopUnlock
         targetRadiusBlocks = targetR;
 
         bearingRad = BearingTowardColdPending(
-            capi, pickupX, pickupZ, pendingKeys, finishedR, targetR);
+            capi, pickupX, pickupZ, pendingKeys, finishedR, targetR, ring);
 
         x = pickupX + Math.Cos(bearingRad) * targetR;
         z = pickupZ + Math.Sin(bearingRad) * targetR;
