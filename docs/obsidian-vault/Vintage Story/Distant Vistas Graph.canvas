@@ -1,0 +1,115 @@
+{
+  "nodes": [
+    {
+      "id": "moc",
+      "type": "file",
+      "file": "MOC - Vintage Story.md",
+      "x": 0,
+      "y": 0,
+      "width": 400,
+      "height": 200
+    },
+    {
+      "id": "dv",
+      "type": "file",
+      "file": "Distant Vistas.md",
+      "x": -500,
+      "y": 250,
+      "width": 360,
+      "height": 180
+    },
+    {
+      "id": "farseer",
+      "type": "file",
+      "file": "Farseer Companion.md",
+      "x": 0,
+      "y": 250,
+      "width": 360,
+      "height": 180
+    },
+    {
+      "id": "login",
+      "type": "file",
+      "file": "Login Bake & Scouts.md",
+      "x": 500,
+      "y": 250,
+      "width": 360,
+      "height": 180
+    },
+    {
+      "id": "efficiency",
+      "type": "file",
+      "file": "Login Bake Efficiency.md",
+      "x": 500,
+      "y": 500,
+      "width": 360,
+      "height": 160
+    },
+    {
+      "id": "season",
+      "type": "file",
+      "file": "Season Colors & Canopy.md",
+      "x": -500,
+      "y": 500,
+      "width": 360,
+      "height": 160
+    },
+    {
+      "id": "audit",
+      "type": "file",
+      "file": "Neglected Issues Audit.md",
+      "x": -250,
+      "y": 720,
+      "width": 360,
+      "height": 160
+    },
+    {
+      "id": "user",
+      "type": "file",
+      "file": "User-Mentioned Unfixed.md",
+      "x": 150,
+      "y": 720,
+      "width": 360,
+      "height": 160
+    },
+    {
+      "id": "playtest",
+      "type": "file",
+      "file": "Playtest Log - 2026-09-07.md",
+      "x": 500,
+      "y": 720,
+      "width": 360,
+      "height": 160
+    },
+    {
+      "id": "pipeline",
+      "type": "file",
+      "file": "Pipeline - Cursor Agents.md",
+      "x": 0,
+      "y": 500,
+      "width": 360,
+      "height": 160
+    },
+    {
+      "id": "perf",
+      "type": "file",
+      "file": "Sources - C Sharp Performance.md",
+      "x": 250,
+      "y": 500,
+      "width": 360,
+      "height": 160
+    }
+  ],
+  "edges": [
+    { "id": "e1", "fromNode": "moc", "fromSide": "bottom", "toNode": "dv", "toSide": "top" },
+    { "id": "e2", "fromNode": "moc", "fromSide": "bottom", "toNode": "farseer", "toSide": "top" },
+    { "id": "e3", "fromNode": "moc", "fromSide": "bottom", "toNode": "login", "toSide": "top" },
+    { "id": "e4", "fromNode": "login", "fromSide": "bottom", "toNode": "efficiency", "toSide": "top" },
+    { "id": "e5", "fromNode": "dv", "fromSide": "bottom", "toNode": "season", "toSide": "top" },
+    { "id": "e6", "fromNode": "moc", "fromSide": "bottom", "toNode": "pipeline", "toSide": "top" },
+    { "id": "e7", "fromNode": "efficiency", "fromSide": "left", "toNode": "perf", "toSide": "right" },
+    { "id": "e8", "fromNode": "audit", "fromSide": "top", "toNode": "user", "toSide": "top" },
+    { "id": "e9", "fromNode": "playtest", "fromSide": "top", "toNode": "efficiency", "toSide": "bottom" },
+    { "id": "e10", "fromNode": "farseer", "fromSide": "left", "toNode": "dv", "toSide": "right" }
+  ]
+}
