@@ -31,29 +31,67 @@ draw on **Farseer** (Badgerson, MIT). Author: **IllLeroySquad**.
 | GLSL shaders | 1,282 | 10 |
 | Build, bench, and test scripts | 2,732 | 16 |
 
-Counts use `wc -l` on each source file. Largest single file: `LodTerrainRenderer.cs` at
-3,458 lines.
+Counts use `wc -l` on each source file. Authorship uses `git blame` on surviving lines.
+Git records AI-assisted commits under `Cursor Agent`; those count as **IllLeroySquad**
+directed work (22,850 lines across the repo). Largest single file: `LodTerrainRenderer.cs`
+at 3,458 lines.
 
-### Authorship (C#, current surviving lines via `git blame`)
+### Authorship — full repository graph
 
-| Contributor | Mod C# | Tests | **C# total** |
-| --- | ---: | ---: | ---: |
-| **IllLeroySquad** (direct + Cursor Agent, directed) | 21,786 | 4,612 | **26,398** |
-| **AliasFactory** (Vintage Horizons foundation) | 9,134 | 4,234 | **13,368** |
-| **Total** | **30,920** | **8,846** | **39,766** |
+| Category | Files | Lines | **IllLeroySquad** | **AliasFactory** |
+| --- | ---: | ---: | ---: | ---: |
+| Mod C# | 89 | 30,920 | 21,786 | 9,134 |
+| Tests (C#) | 34 | 8,846 | 4,612 | 4,234 |
+| Shaders (GLSL) | 10 | 1,285 | 535 | 750 |
+| Scripts | 16 | 2,732 | 6 | 2,726 |
+| Documentation | 16 | 3,195 | 1,535 | 1,660 |
+| Mod metadata (json, csproj) | 4 | 148 | 77 | 71 |
+| Canvases | 2 | 301 | 301 | 0 |
+| **Total** | **171** | **47,427** | **28,852** | **18,575** |
 
-Git records AI-assisted commits under the `Cursor Agent` author name. For attribution,
-those lines count as **IllLeroySquad** work (26,398 = 5,554 direct + 20,844 Cursor Agent).
-The original Horizons foundation is **~9,000 lines of mod C#** (9,134 above).
+**Plain summary**
 
 | | Lines |
 | --- | ---: |
-| **You (IllLeroySquad)** | **26,398** |
-| **Original creator (AliasFactory)** | **13,368** C# (**9,134** in mod source) |
-| **Total C#** | **39,766** |
+| **You (IllLeroySquad, including all Cursor Agent commits)** | **28,852** |
+| **Original creator (AliasFactory)** | **18,575** |
+| **Total repository** | **47,427** |
 
-Blame totals may differ from `wc -l` by a few lines when files have uncommitted edits;
-file counts above use `wc -l` on the release tree.
+AliasFactory's Horizons foundation in mod source alone: **9,134 lines of C#** (~9,000).
+
+**IllLeroySquad breakdown (direct vs Cursor Agent in git history)**
+
+| Git author | Lines |
+| --- | ---: |
+| IllLeroySquad / leroysquad / Private Citizen (direct) | 6,002 |
+| Cursor Agent (directed — counted as yours) | 22,850 |
+| **IllLeroySquad total** | **28,852** |
+
+**Shaders by file (surviving lines)**
+
+| File | Lines | IllLeroySquad | AliasFactory |
+| --- | ---: | ---: | ---: |
+| `lodterrain.fsh` / `.vsh` | 417 | 153 | 264 |
+| `farseer-region.fsh` / `.vsh` | 191 | 191 | 0 |
+| `region.fsh` / `.vsh` (Farseer) | 191 | 191 | 0 |
+| Vanilla chunk shader overrides (`chunk*.vsh`) | 486 | 0 | 486 |
+| **Shader total** | **1,285** | **535** | **750** |
+
+**Documentation by file (surviving lines)**
+
+| File | Lines | IllLeroySquad | AliasFactory |
+| --- | ---: | ---: | ---: |
+| `CHANGELOG.md` | 1,050 | 690 | 360 |
+| `DESIGN.md` | 938 | 0 | 938 |
+| `README.md` | 266 | 47 | 219 |
+| `docs/OFFICIAL-DESCRIPTION.md` | 148 | 148 | 0 |
+| `docs/RELEASING.md` | 129 | 7 | 122 |
+| ModDB / community docs (`docs/community/`, plans, audits) | 664 | 643 | 21 |
+| `LICENSE` | 21 | 0 | 21 |
+| **Documentation total** | **3,195** | **1,535** | **1,660** |
+
+Blame line counts may differ from `wc -l` by a few lines per file; category totals above
+use blame for authorship and `wc -l` for file/line inventory where noted in the first table.
 
 ---
 
@@ -144,5 +182,5 @@ live in `VintagestoryData/ModData/distantvistas/`.
 
 Distant Vistas brings persistent, full three-dimensional far terrain to Vintage Story on
 any server, with live seasonal colour, a spawn-centered login bake, and configurable
-render range. Official release **1.0.32** — **39,763 lines** of C# (**26,398**
-IllLeroySquad, **9,134** AliasFactory mod foundation).
+render range. Official release **1.0.32** — **47,427 lines** across **171 files**
+(**28,852** IllLeroySquad, **18,575** AliasFactory; **9,134** AliasFactory mod C# foundation).
