@@ -296,7 +296,7 @@ public static class LodScoutSeqDiag
         bool flagBaked = false;
         if (pipeline?.World.Sections.TryGetValue(key, out LodSection? section) == true)
         {
-            for (int i = 0; i < section.Palette.Length; i++)
+            for (int i = 0; i < section.Palette.Count; i++)
             {
                 if ((section.Palette[i].Flags & LodPaletteEntry.FlagBaked) == 0) continue;
                 flagBaked = true;
