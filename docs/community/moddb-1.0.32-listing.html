@@ -1,56 +1,128 @@
-<h3>Public servers</h3>
-<p>From <strong>1.0.1</strong> onward: vanilla public servers that do <strong>not</strong> have Distant Vistas skip the join overlay on purpose. The old 1.0 hop-scan teleported you and sent a gamemode command, which kicked people off those servers. Overlay, hops, <code>/gamemode</code>, client teleports, and the 750 view hold are skipped when the assist channel is not connected. Capture while you walk, same as 0.7.78. Singleplayer and servers that also run Distant Vistas still get the overlay.</p>
+<h3>Distant Vistas — Official 1.0.32</h3>
+<p>Client-side level-of-detail mod for Vintage Story. Fork of <strong>Vintage Horizons</strong> (AliasFactory, MIT). Draws real 3D far terrain from a persistent per-world cache built from chunk data the client already received. Compatible with Vintage Story <strong>1.22.5–1.22.7</strong>.</p>
 
-<h3>Official 1.0.32</h3>
-<p>This is official Distant Vistas <strong>1.0.32</strong>. It took a long process to get here. A lot of work went into far land, seasons, frost, Farseer coexistence, and making the join overlay faster without moving your character around the map.</p>
-<p><strong>Hey:</strong> there is still a loading screen when you join singleplayer (or a Distant Vistas server). It should be <strong>faster than 1.0.1</strong> — sixteen scouts work in parallel and 1.0.32 cuts a lot of wasted work during colour sampling — but it is not instant. You might still wait several minutes on a big world. Seasons are involved. The overlay paints a disk of far land, samples live colour, and bakes what you will see on the horizon so summer, winter, frost, and snow match the ground when you spawn. On a vanilla public server that pass is skipped on purpose.</p>
-<p><strong>New since 1.0.1:</strong> you stay at your pickup spot while scouts stream and bake around visit cells — no hop-scan teleport wedge. The overlay should show <strong>16/16 scouts</strong> within seconds and the percent bar should move every few seconds. When it ends you should be at the same X/Y/Z and look direction you had when it started. Far coverage reaches the Farseer silhouette band (~4075 blocks at the 750 graphics hold). Farseer meets our land as gray tent smoke with black mountain tips — not a white sky strip at the join (1.0.32).</p>
-
-<h3>What it does</h3>
-<p>Far terrain past vanilla view distance. A persistent level-of-detail cache from chunks your client already has. Real 3D land, trees, water, and builds you already saw. Not a fog silhouette.</p>
+<h3>Project scale</h3>
 <ul>
-<li><strong>Join overlay.</strong> Four-season Distant Vistas splash. Scouts paint a disk of far land so hills exist when you spawn — <strong>you stay at spawn</strong>; they do not hop your character cell to cell. Sixteen parallel scouts (1.0.31+). Graphics view is held at 750 for that pass, then your real slider comes back. Overlay keeps Windows moving. Mouse look and world audio restore when it ends. Esc goes to the menu. Overlay is singleplayer and Distant Vistas servers only. Vanilla public servers skip it.</li>
-<li><strong>Seasons.</strong> Overlay and walking share one bake from the live month. Summer is bright green. Winter without a snow sheet is mottled brown, tan, and olive. Real snow stays snow. Spring and autumn follow the same calendar mix. Autumn trees and bushes keep species colour on far LOD. <code>/time</code> while you are already in the world does not retint. Change month, then rejoin. After 30 days, or a later calendar month, the overlay recaptures.</li>
-<li><strong>December frost.</strong> Far pines and oaks frost: green or orange sides, frost-white tops. Frosted grass keeps live colour.</li>
-<li><strong>Visited land stays.</strong> Land you already walked stays on the horizon when you leave.</li>
-<li><strong>Vanilla join.</strong> LOD only steps aside when that tile is actually loaded. Looking down still draws far land where vanilla has no chunks. Captured land stays behind and beside the camera. Incomplete far tiles wait until they are real land.</li>
-<li><strong>Night and the view-distance ring.</strong> Night uses the same live ambient as vanilla chunks. LOD joins vanilla at the view-distance ring at full strength.</li>
-<li><strong>Clouds.</strong> Cloud tiles stretch to the LOD horizon so you do not get a nearby cloud box over far mountains.</li>
-<li><strong>Farseer, ChunkLOD, TopoHorizon.</strong> Farseer sits in the background. Distant Vistas tiles sit on top where we have them. Gray tent smoke with black mountain tips at the far rim (keep Farseer SkyTint around <strong>0.4</strong> in Ctrl+Shift+F). We overlay their region shaders without Harmony patches. ChunkLOD and TopoHorizon still make us sit out unless you set <code>.dvdefer off</code>.</li>
-<li><strong>Pause-on-Start.</strong> If you use Pause-on-Start, the overlay still ticks while the splash is up; when it finishes or you Esc out, pause and the menu come back.</li>
-</ul>
-<p>Drop <code>distantvistas_1.0.32.zip</code> in Mods. Do not extract. Fully quit Vintage Story, then start it again. Leaving to the menu does not load a new zip.</p>
-<p><strong>After you join, check:</strong> 16/16 scouts and percent moving; same spawn spot when overlay ends; no holes underfoot; far land meets gray/black Farseer silhouette without a white gap; FPS back.</p>
-<p>What works for me may not work for you. Different worlds, hardware, and servers behave differently. If Horizons or another LOD mod already does what you need, use that.</p>
-
-<h3>Recommended: Client MeshRef Leak Fix</h3>
-<p>I run this with <a href="https://mods.vintagestory.at/vsvaogc"><strong>Client MeshRef Leak Fix</strong></a> (<code>vsvaogc</code>). It is client-only. A dedicated server does not need it. Distant Vistas does not require it to load.</p>
-
-<h3>Singleplayer vs client-side</h3>
-<ul>
-<li><strong>Singleplayer:</strong> install on the client. This is what I built it for and what I test.</li>
-<li><strong>Client-side:</strong> it draws from what the client already loaded. You do not need a server install for that. That is the point. On vanilla public servers the overlay is skipped so hop-scan cannot kick you.</li>
-<li><strong>Server assist:</strong> exists if you put it on a server too. That is not the first thing I built this for.</li>
+<li><strong>~31,000 lines</strong> of C# mod source</li>
+<li><strong>~8,800 lines</strong> of automated check / test code</li>
+<li><strong>~40,000 lines</strong> C# total (mod + tests)</li>
+<li><strong>123</strong> C# source files · <strong>225</strong> git commits</li>
+<li><strong>57</strong> render modules · <strong>11</strong> LOD core · <strong>14</strong> networking · storage and config layers</li>
+<li><strong>10</strong> GLSL shader files (~1,280 lines): far-terrain draw, Farseer region overlay, vanilla chunk edge overrides</li>
+<li><strong>16</strong> build / bench / test scripts</li>
 </ul>
 
-<h3>This was made for me</h3>
-<p>This was made for me. It was made for <strong>singleplayer</strong>. I wanted something like Minecraft Distant Horizons in Vintage Story. I had the tools, so I forked <strong>Vintage Horizons</strong> (AliasFactory, MIT) and built the version I actually want to look at. Everybody else is along for that if they want to be.</p>
-<p>If you can improve it, take it, or change it, I do not care. If the game is better at the end of the day, that is all I care about. Anybody can have the credit. There is no credit due to me.</p>
+<h3>What is in the codebase</h3>
+<ul>
+<li><strong>LOD pipeline</strong> — block capture, RLE sections, 3D meshing, mip pyramid, worker thread, SQLite persistence</li>
+<li><strong>Render</strong> — terrain draw, login overlay and scout bake, live seasonal colour sampling, night ambient, frustum and occlusion, gap-fill and parent coverage rules</li>
+<li><strong>Farseer integration</strong> — region shader overlays (no Harmony patches), visit-mask silhouettes, heightmap enrichment, onset at 4.5× view distance + 700 blocks</li>
+<li><strong>Networking (optional)</strong> — server assist, scout protocol, shared cache assist for multiplayer</li>
+<li><strong>Shaders</strong> — <code>lodterrain</code> (far mesh + season clock), <code>farseer-region</code> / <code>region</code> (silhouette band), patched <code>chunkopaque</code> / <code>chunktransparent</code> / <code>chunkliquid</code> / <code>chunktopsoil</code> (full alpha at view-distance ring)</li>
+</ul>
 
-<h3>Credits</h3>
-<p>Fork of <strong>Vintage Horizons</strong> (AliasFactory, MIT). Rendering tricks adapted from <strong>Farseer</strong> (Badgerson, MIT). Built and shared by <strong>IllLeroySquad</strong>. Not claiming anyone else's work.</p>
+<h3>Capabilities (1.0.32)</h3>
+<ul>
+<li>Unlimited render-distance cap (<code>.dvfar 0</code>)</li>
+<li>Real 3D far terrain at block resolution near the player; coarser mips farther out</li>
+<li>Translucent water over sealed seabed skin (no cave cutaway through ocean)</li>
+<li>Live seasonal colour on vegetation; rock, snow, and water excluded from fake autumn wash</li>
+<li>December frost on tree crowns; winter ground mottled brown/tan/olive, not a white sheet</li>
+<li>Join overlay (singleplayer and Distant Vistas servers): four-season splash, scouts bake far land while the player stays at spawn; 16 parallel scouts; graphics view held at 750 then restored</li>
+<li>Vanilla public servers: overlay skipped — no teleports or gamemode commands; capture while you walk</li>
+<li>Visited captured land stays drawn behind and beside the camera</li>
+<li>Night: same live ambient multiply as vanilla chunk shaders</li>
+<li>Farseer can run in the background; Distant Vistas tiles on top where captured; gray tent + black tips at far rim</li>
+<li>ChunkLOD / TopoHorizon: mod defers unless <code>.dvdefer off</code></li>
+</ul>
+
+<h3>People ask: what is the difference from Vintage Horizons?</h3>
+<p>Same starting point — persistent LOD cache from client chunk data. The draw path and polish diverge:</p>
+<table>
+<thead><tr><th>Topic</th><th>Vintage Horizons</th><th>Distant Vistas</th></tr></thead>
+<tbody>
+<tr><td>Missing detail</td><td>Coarse parent plate as stand-in → giant square shelves with sheer walls</td><td>No parent box stand-in; incomplete L0 stays off screen until real land exists</td></tr>
+<tr><td>Camera trail</td><td>Wanted-level window drops captured tiles behind you → sky holes when flying away</td><td>Captured L0/L1 stays in the draw set behind and beside the camera</td></tr>
+<tr><td>Vanilla handoff</td><td>Horizontal disc — looking down from altitude hides LOD incorrectly</td><td>3D vanilla-owns plus pitch; look-down still draws LOD where vanilla has no chunks</td></tr>
+<tr><td>Night</td><td>Stored albedo lit with calendar sun colour → orange far band after vanilla goes dark</td><td>Stored albedo × live ambient (same clock as chunk shaders)</td></tr>
+<tr><td>Season</td><td>Climate in slow table; far vegetation snaps grey-green when leaving vanilla range</td><td>Climate in slow table + live <code>seasonRel</code> shader clock on vegetation slots only</td></tr>
+<tr><td>View-distance edge</td><td>Stock vanilla chunk shaders fade alpha → white fog slice / mid-mountain cut</td><td>Patched chunk vertex shaders force full alpha so LOD joins at full strength</td></tr>
+<tr><td>Farseer</td><td>Mod could sit idle when Farseer installed</td><td>Draws with Farseer behind; shader overlay without Harmony; visit-mask silhouettes</td></tr>
+<tr><td>Login</td><td>Hop-scan teleported the player cell to cell</td><td>1.0.24+: player stays at spawn; scout stream centers bake visit cells (1.0.30+ player-style viewers; 1.0.31+ 16 parallel scouts)</td></tr>
+<tr><td>Ocean</td><td>Cave interiors visible through transparent water (“cake slice”)</td><td>Sealed seabed skin under water; opaque mesh only to first air gap below water bottom</td></tr>
+<tr><td>Capture</td><td>One quadrant could mark whole L0 section captured → checkerboard holes</td><td>Skip only when this chunk’s quadrant is already captured (0.7.7+)</td></tr>
+</tbody>
+</table>
+
+<h3>Development history — fixes by iteration</h3>
+<p>Much of the 0.7 line shipped as isolated builds before the public ModDB listing. Summarized by problem domain:</p>
+
+<p><strong>Edge, capture, and mesh integrity (0.7.5–0.7.11, pre-public)</strong></p>
+<ul>
+<li>0.7.5 — white fog slice at vanilla view-distance edge (patched chunk shader alpha)</li>
+<li>0.7.7 — checkerboard / 32-block cliff grid (L0 quadrant capture skip bug)</li>
+<li>0.7.10 — horizon-first peeks; white/missing-tex wash hardening</li>
+<li>0.7.11 — ocean “cake slice” through transparent water (sealed seabed skin)</li>
+</ul>
+
+<p><strong>Colour and atmosphere (0.7.12–0.7.26, pre-public)</strong></p>
+<ul>
+<li>0.7.12–0.7.14 — far winter/autumn colour lattice sampling; fog/seam contrast match vanilla</li>
+<li>0.7.15 — server join requires client mod; missing neighbours no longer full-height white cliffs</li>
+<li>0.7.17 — look-down clear square at altitude (3D surface-height handoff)</li>
+<li>0.7.18–0.7.20 — far white mountain caps; grey grass tint; climate slot fixes</li>
+<li>0.7.21–0.7.22 — parent plate stand-ins removed; no mesh-count dump to sky</li>
+<li>0.7.23–0.7.25 — visited trail kept on GPU; land stays behind camera when flying away</li>
+<li>0.7.24 — night far land matches near ground (live ambient multiply)</li>
+<li>0.7.26 — live season shader clock on vegetation; no autumn snap to grey-green</li>
+</ul>
+
+<p><strong>Sky holes, mips, and visited land (0.7.38–0.7.49, isolated before public push)</strong></p>
+<ul>
+<li>0.7.38 — moving sky circle at view distance (skip-disc + shader discard bugs); green ice caps</li>
+<li>0.7.39–0.7.42 — mid-band sky rectangles; gap-fill via clipped ancestor draw</li>
+<li>0.7.41 — mountain chop into caves (mip anti-floater dropped terrain over cave air gaps)</li>
+<li>0.7.43 — capture queue cap; green parent cubes over vanilla; dropped columns when flying</li>
+<li>0.7.44 — cliff faces lost at L0→L1 merge (1-of-4 solid coverage rule)</li>
+<li>0.7.45–0.7.49 — season on far land; view-distance sky circle gone; visited land and walking-season snap held</li>
+</ul>
+
+<p><strong>Farseer, spawn, and performance (0.7.55–0.7.78, public)</strong></p>
+<ul>
+<li>0.7.55 — Farseer no longer disables Distant Vistas draw; mountain leaf/grass shading; spawn plates locked</li>
+<li>0.7.56 — look-down cubes wait until ~67° pitch</li>
+<li>0.7.60 — fine L0 cap at 512 blocks; map-chunk hide far disc</li>
+<li>0.7.74–0.7.77 — FOV occlusion; pressure-only mesh eviction; turn hitch soften</li>
+<li>0.7.78 — smoother pan on big explored land; Linux zip forward-slash paths</li>
+</ul>
+
+<p><strong>Official 1.0 line (public ModDB)</strong></p>
+<ul>
+<li>1.0.0 — official release: join overlay, seasons, frost, visited land, Farseer background draw</li>
+<li>1.0.1 — vanilla public servers skip overlay (no hop teleport / gamemode kick)</li>
+<li>1.0.4–1.0.5 — login plan freeze fix; far mountain FOV occlusion holes</li>
+<li>1.0.6–1.0.11 — Farseer shader overlay at 3×→4.5× handoff; visit-aware silhouettes; cloud horizon to LOD rim; autumn leaf crowns on outer mips</li>
+<li>1.0.12–1.0.20 — clouds; LOD/Farseer rim alignment; crown colour on wall faces; season audit (1.0.19)</li>
+<li>1.0.23–1.0.25 — sticky empty-mesh remesh; Farseer gray/black silhouette; Pause-on-Start compatible overlay; low-ground mist</li>
+<li>1.0.24 — no paint-revision login teleport wedge</li>
+<li>1.0.27 — scout entities; player stays at spawn; walk-away green remesh</li>
+<li>1.0.28–1.0.29 — readable skyline; FlagBaked disk to Farseer onset (~4075 blocks)</li>
+<li>1.0.30 — player-style scout viewer entities; exact pickup XYZ restore; GPU swap-in (no dispose-first holes); spawn-solid wait</li>
+<li>1.0.31 — 16 parallel scouts; two-tier mesh gate (near mesh-wait / far paint-release); 1.22.7 API shim</li>
+<li>1.0.32 — parallel bake drain (MaxBakePerTick 24); texture-mean cache; ArrayPool scratch; post-GetColor SIMD (<code>LodRgbSimd</code>); Farseer onset pulled to meshed rim (no white sky strip); frontier/post-login fill caps; neglected-issue audit fixes</li>
+</ul>
+
+<h3>Install</h3>
+<p>Drop <code>distantvistas_1.0.32.zip</code> in the Mods folder. Do not extract. Fully quit Vintage Story, then start again. Leaving to the menu does not reload a replaced zip.</p>
+<p><strong>Recommended companion mod:</strong> <a href="https://mods.vintagestory.at/vsvaogc">Client MeshRef Leak Fix</a> (<code>vsvaogc</code>) — client only.</p>
 
 <h3>In-game commands</h3>
 <ul>
-<li><code>.dvistas</code> — status, meshes, far edge, server assist</li>
+<li><code>.dvistas</code> — status, mesh counts, far edge, defer state</li>
 <li><code>.dvdetail [blocks]</code> — detail halving distance (default 512)</li>
-<li><code>.dvfar &lt;blocks&gt;</code> — cap LOD distance (<code>0</code> = unlimited)</li>
+<li><code>.dvfar &lt;blocks&gt;</code> — cap LOD render distance (<code>0</code> = unlimited)</li>
 <li><code>.dvdefer [on|off]</code> — defer when ChunkLOD or TopoHorizon draws (restart to apply)</li>
 </ul>
 
-<h3>Author testing (1.22.7, RTX 3090)</h3>
-<ul>
-<li>Singleplayer: high view distance, stable FPS after fill window. This is the instance that looks good.</li>
-<li>Multiplayer: LOD works but is limited by server view distance and chunk streaming. Vanilla public servers skip the join overlay.</li>
-<li>Login overlay: still the slow part. 1.0.32 is faster than 1.0.1 but not instant. Tell me if percent stalls or scouts stay at 1/16.</li>
-</ul>
+<h3>Credits</h3>
+<p>Fork of <strong>Vintage Horizons</strong> (AliasFactory, MIT). Farseer rendering techniques (Badgerson, MIT). Author: <strong>IllLeroySquad</strong>. Source: <a href="https://github.com/leroysquad/DistantVistas">github.com/leroysquad/DistantVistas</a></p>
