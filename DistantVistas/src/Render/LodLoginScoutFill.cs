@@ -14,7 +14,7 @@ namespace DistantVistas;
 /// </summary>
 public sealed class LodLoginScoutFill
 {
-    public const int MaxConcurrent = 6;
+    public const int MaxConcurrent = 12;
     public const int MaxWaitTicks = 100;
     public const int MaxCaptureWaitTicks = 80;
     public const int ChunkVisibleRadius = 2;

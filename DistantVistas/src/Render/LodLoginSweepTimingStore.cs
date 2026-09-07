@@ -174,8 +174,7 @@ public sealed class LodLoginSweepTimingStore
         {
             if (!TryParseStamp(line, out DateTime at)) continue;
 
-            if (line.Contains("quiet teleports begin", StringComparison.Ordinal)
-                && TryParseBeginStops(line, out int n))
+            if (IsSweepBeginLog(line) && TryParseBeginStops(line, out int n))
             {
                 beginAt = at;
                 beginStops = n;
@@ -212,12 +211,22 @@ public sealed class LodLoginSweepTimingStore
         return copy.Count % 2 == 1 ? copy[mid] : (copy[mid - 1] + copy[mid]) * 0.5;
     }
 
+    static bool IsSweepBeginLog(string line) =>
+        line.Contains("quiet teleports begin", StringComparison.Ordinal)
+        || line.Contains("scout workers visit chunk columns", StringComparison.Ordinal);
+
     static bool TryParseBeginStops(string line, out int stops)
     {
         stops = 0;
         int mark = line.IndexOf("quiet teleports begin", StringComparison.Ordinal);
+        int markLen = "quiet teleports begin".Length;
+        if (mark < 0)
+        {
+            mark = line.IndexOf("scout workers visit chunk columns", StringComparison.Ordinal);
+            markLen = "scout workers visit chunk columns".Length;
+        }
         if (mark < 0) return false;
-        for (int i = mark + "quiet teleports begin".Length; i < line.Length; i++)
+        for (int i = mark + markLen; i < line.Length; i++)
         {
             if (!char.IsDigit(line[i])) continue;
             int end = i;

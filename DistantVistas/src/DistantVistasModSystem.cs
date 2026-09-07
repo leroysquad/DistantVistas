@@ -568,7 +568,7 @@ public class DistantVistasModSystem : ModSystem
         pipeline.SweepLoadedColumns(sweepCx, sweepCz, sweepRadius);
         QueueExploreBakeNearPlayer();
         if (loginBake?.Active != true)
-            frontierScout?.Tick(capi, pipeline, renderer, LoginVisitSweepAllowedHere());
+            frontierScout?.Tick(capi, pipeline, renderer);
         // #region agent log
         if (logPlay) AgentPlayTickLog("after-sweep", playTickCount, playTickEnter,
             "\"ok\":true,\"frozen\":" + (pipeline.FreezeCapture ? "true" : "false"));
@@ -1382,9 +1382,9 @@ public class DistantVistasModSystem : ModSystem
         || Environment.GetEnvironmentVariable("VINTAGEHORIZONS_LOGIN_SWEEP") == "1";
 
     /// <summary>
-    /// Overlay hop-scan is singleplayer, or a server that registered the Distant Vistas
+    /// Overlay scout-scan is singleplayer, or a server that registered the Distant Vistas
     /// assist channel. A vanilla public server never reaches Connected; running the scan
-    /// there teleports the player and sends /gamemode, which kicks people off.
+    /// there still sends /gamemode, which kicks people off.
     /// </summary>
     bool LoginVisitSweepAllowedHere()
     {

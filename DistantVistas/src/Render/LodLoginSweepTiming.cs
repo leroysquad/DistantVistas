@@ -26,12 +26,12 @@ public sealed class LodLoginSweepTiming
 
     /// <summary>
     /// Fallback per-stop seconds only when this machine has no measured samples yet.
-    /// 1.0.15 assumes rapid hop+bake; slow PCs remeasure upward from live stops.
+    /// Concurrent scouts have no hop cost; slow PCs remeasure upward from live stops.
     /// </summary>
-    public const double InitialSecPerStop = 1.0;
+    public const double InitialSecPerStop = 0.5;
 
-    public const int MinVisitStops = 180;
-    public const int MaxVisitStops = 520;
+    public const int MinVisitStops = 240;
+    public const int MaxVisitStops = 840;
     public const int MinRetryStops = 36;
     public const int MaxRetryStops = 96;
 

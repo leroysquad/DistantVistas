@@ -8,8 +8,8 @@ namespace DistantVistas;
 /// <summary>
 /// Quiet midground filler: streams + season-bakes L0 between the capture rim and
 /// late Farseer (<see cref="LodCoveragePolicy.HorizonDrawScale"/>). Hard per-tick
-/// caps, yield when queues are hot, steady drip. Prefers SetChunkColumnVisible;
-/// rare quiet hops only when allowed and chunks will not stream otherwise.
+/// caps, yield when queues are hot, steady drip. Force-loads with
+/// SetChunkColumnVisible only - never moves the player.
 /// </summary>
 public sealed class LodFrontierScout
 {
@@ -21,8 +21,6 @@ public sealed class LodFrontierScout
     public const int MaxExplorePendingYield = 4;
     public const int MaxCaptureResultsYield = 8;
     public const int MaxPlanCandidates = 32;
-    public const int HopCooldownTicks = 600;
-    public const int HopHoldTicks = 24;
     public const float LeadConeCos = 0.9659258f; // cos(15 deg)
     public const float MinRingScale = 1.3f;
 
@@ -30,19 +28,14 @@ public sealed class LodFrontierScout
     {
         Idle,
         StreamWait,
-        Cooldown,
-        HopHold
+        Cooldown
     }
 
     Phase phase = Phase.Idle;
     long targetKey;
     int waitTicks;
     int cooldownLeft;
-    int hopCooldownLeft;
-    int hopHoldLeft;
     int scanIndex;
-    double? restoreX, restoreY, restoreZ;
-    bool hopped;
 
     public int TargetsCompleted { get; private set; }
     public int LastTargetSx { get; private set; } = int.MinValue;
@@ -51,49 +44,25 @@ public sealed class LodFrontierScout
 
     public void Reset()
     {
-        RestoreHopIfNeeded(null);
         phase = Phase.Idle;
         targetKey = 0;
         waitTicks = 0;
         cooldownLeft = 0;
-        hopped = false;
-        restoreX = restoreY = restoreZ = null;
-        hopHoldLeft = 0;
     }
 
     public void Tick(
         ICoreClientAPI capi,
         LodPipeline pipeline,
-        LodTerrainRenderer renderer,
-        bool allowHop)
+        LodTerrainRenderer renderer)
     {
         if (!pipeline.Active || !renderer.LoginBakeComplete) return;
         if (renderer.LoginBakeOverlayActive || renderer.LoginBakeBlocked) return;
         if (capi.IsGamePaused) return;
         if (LodLoginBakeCharacterWait.IsPending(capi)) return;
 
-        if (hopCooldownLeft > 0) hopCooldownLeft--;
-
-        if (phase == Phase.HopHold)
-        {
-            if (hopped
-                && targetKey != 0
-                && capi.World.Player.Entity is EntityPlayer epHold)
-            {
-                var (vx, vy, vz) = LodLoginSweep.VisitPosition(capi.World, targetKey);
-                LodLoginBakePlayerMove.HoldQuiet(epHold, vx, vy, vz);
-            }
-
-            hopHoldLeft--;
-            if (hopHoldLeft > 0) return;
-            FinishCapture(capi, pipeline);
-            return;
-        }
-
         if (phase == Phase.Cooldown)
         {
             if (--cooldownLeft > 0) return;
-            RestoreHopIfNeeded(capi);
             phase = Phase.Idle;
             return;
         }
@@ -103,10 +72,10 @@ public sealed class LodFrontierScout
         switch (phase)
         {
             case Phase.Idle:
-                TryStart(capi, pipeline, renderer, allowHop);
+                TryStart(capi, pipeline, renderer);
                 break;
             case Phase.StreamWait:
-                TickStreamWait(capi, pipeline, allowHop);
+                TickStreamWait(capi, pipeline);
                 break;
         }
     }
@@ -121,8 +90,7 @@ public sealed class LodFrontierScout
     void TryStart(
         ICoreClientAPI capi,
         LodPipeline pipeline,
-        LodTerrainRenderer renderer,
-        bool allowHop)
+        LodTerrainRenderer renderer)
     {
         if (!TryPickTarget(capi, pipeline, renderer, out long key, out bool needsStream))
             return;
@@ -153,11 +121,9 @@ public sealed class LodFrontierScout
 
         phase = Phase.StreamWait;
         waitTicks = 0;
-        hopped = false;
-        _ = allowHop;
     }
 
-    void TickStreamWait(ICoreClientAPI capi, LodPipeline pipeline, bool allowHop)
+    void TickStreamWait(ICoreClientAPI capi, LodPipeline pipeline)
     {
         waitTicks++;
         if (LodLoginSweep.AllMapChunksLoaded(capi.World.BlockAccessor, targetKey))
@@ -167,23 +133,6 @@ public sealed class LodFrontierScout
         }
 
         if (waitTicks < MaxChunkWaitTicks) return;
-
-        if (allowHop && hopCooldownLeft <= 0 && capi.World.Player.Entity is EntityPlayer player)
-        {
-            EntityPos pos = player.Pos;
-            restoreX = pos.X;
-            restoreY = pos.Y;
-            restoreZ = pos.Z;
-            var (vx, vy, vz) = LodLoginSweep.VisitPosition(capi.World, targetKey);
-            LodLoginBakePlayerMove.ApplyQuiet(capi, player, vx, vy, vz);
-            hopped = true;
-            hopCooldownLeft = HopCooldownTicks;
-            phase = Phase.HopHold;
-            hopHoldLeft = HopHoldTicks;
-            waitTicks = 0;
-            return;
-        }
-
         EnterCooldown();
     }
 
@@ -215,25 +164,6 @@ public sealed class LodFrontierScout
         cooldownLeft = CooldownTicks;
         targetKey = 0;
         waitTicks = 0;
-    }
-
-    void RestoreHopIfNeeded(ICoreClientAPI? capi)
-    {
-        if (!hopped || capi == null)
-        {
-            hopped = false;
-            restoreX = restoreY = restoreZ = null;
-            return;
-        }
-        if (restoreX is not double x || restoreY is not double y || restoreZ is not double z)
-        {
-            hopped = false;
-            return;
-        }
-        if (capi.World.Player.Entity is EntityPlayer player)
-            LodLoginBakePlayerMove.ApplyQuiet(capi, player, x, y, z);
-        hopped = false;
-        restoreX = restoreY = restoreZ = null;
     }
 
     bool TryPickTarget(

@@ -382,8 +382,8 @@ public sealed class LodLoginBake
     }
 
     /// <summary>
-    /// Pin the player's pre-sweep pose (spawn / relog location) before any visit teleports.
-    /// Warmup may recapture until the entity is actually at spawn; Sweeping never overwrites.
+    /// Capture the exact pickup pose once. Warmup may replace an unset (0,0) pose
+    /// with the real spawn, then never overwrite — recapturing every tick locked onto hops.
     /// </summary>
     void CaptureRestorePose(bool allowOverwrite = false)
     {
@@ -392,6 +392,8 @@ public sealed class LodLoginBake
         if (restoreCaptured && !allowOverwrite) return;
         if (restoreCaptured && resuming) return;
         if (LooksUnset(entity.Pos) && restoreCaptured && !LooksUnset(restorePos))
+            return;
+        if (restoreCaptured && !LooksUnset(restorePos))
             return;
 
         restorePos.SetFrom(entity.Pos);
@@ -659,6 +661,7 @@ public sealed class LodLoginBake
                 break;
         }
 
+        PinPickupPose();
         statusWriter.WriteNow(phase, sweepModeLabel, total, finished);
     }
 
@@ -692,7 +695,7 @@ public sealed class LodLoginBake
         if (loggedTeleportBegin) return;
         loggedTeleportBegin = true;
         capi.Logger.Notification(
-            "[DistantVistas] Login visit sweep: quiet teleports begin — {0} L0 region{1} (scout entities, player stays).",
+            "[DistantVistas] Login visit sweep: scout workers visit chunk columns — player stays at spawn — {0} L0 region{1}.",
             total, total == 1 ? "" : "s");
     }
 
@@ -701,9 +704,11 @@ public sealed class LodLoginBake
         LogTeleportBegin();
 
         GrowRevealAroundSpawn();
+        PinPickupPose();
 
         List<long> ready = scoutFill.Tick(
             capi, pipeline, pending, completedKeys, LodLoginScoutFill.LocalVisitRevealChunks);
+        PinPickupPose();
         for (int i = 0; i < ready.Count; i++)
             scoutReady.Enqueue(ready[i]);
 
@@ -720,6 +725,7 @@ public sealed class LodLoginBake
         {
             long key = currentKey.Value;
             GrowRevealAround(key);
+            PinPickupPose();
             SweepColumnsAround(key);
             if (!BakeBatchAtStop(key))
             {
@@ -1609,16 +1615,11 @@ public sealed class LodLoginBake
         viewBoost.EnsureBoosted();
         LodLoginBakeMouseDelta.Drain(capi);
 
-        bool recapture = !resuming
-            && phase is Phase.OverlayWarmup or Phase.WaitingForWorld;
-        CaptureRestorePose(allowOverwrite: recapture);
+        // Capture pickup once. Recapturing every warmup tick locked restorePos onto hops.
+        if (!restoreCaptured || LooksUnset(restorePos))
+            CaptureRestorePose(allowOverwrite: true);
 
-        HoldPlayerPose(entity);
-        // Drain leftover MouseDelta instead of snapping look after visits. Camera
-        // lock during Auditing/Draining/Stabilizing fights look while the world is
-        // already on screen and dumps leftover delta when the overlay hides.
-        if (phase is Phase.OverlayWarmup or Phase.WaitingForWorld or Phase.Sweeping)
-            LockPlayerCamera(capi, player, restorePos, restoreCameraPos);
+        PinPickupPose();
         BlockPlayerInput(controls);
         playerHide.EnsureHidden();
     }
@@ -1696,25 +1697,24 @@ public sealed class LodLoginBake
         snap.Save(capi);
     }
 
-    void HoldPlayerPose(EntityPlayer entity)
+    /// <summary>
+    /// Keep the local player at the exact pickup XYZ + facing for the whole overlay.
+    /// Scout <see cref="LodLoginBakePlayerMove.RequestChunkColumnsVisible"/> calls must
+    /// not leave Pos on a visit cell — re-pin after every scout tick.
+    /// </summary>
+    void PinPickupPose()
     {
-        if (phase is Phase.OverlayWarmup or Phase.WaitingForWorld)
-        {
-            // Do not snap to a maybe-stale capture while spawn is still settling.
-            entity.Pos.Motion.Set(0, 0, 0);
-            return;
-        }
+        IClientPlayer player = capi.World.Player;
+        EntityPlayer entity = player.Entity;
+        if (entity == null) return;
+        entity.Pos.Motion.Set(0, 0, 0);
+        if (!restoreCaptured || LooksUnset(restorePos)) return;
 
-        if (!restoreCaptured)
-        {
-            entity.Pos.Motion.Set(0, 0, 0);
-            return;
-        }
-
-        // Scout entities stream distant columns. Never HoldQuiet the player onto
-        // visit cells — that reintroduced teleport hops after 1.0.25 dropped ApplyQuiet.
         entity.Pos.SetFrom(restorePos);
         entity.Pos.Motion.Set(0, 0, 0);
+        entity.PositionBeforeFalling.Set(restorePos.X, restorePos.Y, restorePos.Z);
+        try { entity.UpdatePartitioning(); } catch { }
+        LockPlayerCamera(capi, player, restorePos, restoreCameraPos);
     }
 
     static void LockPlayerCamera(
@@ -1797,9 +1797,6 @@ public sealed class LodLoginBake
             restorePos.Y + entity.LocalEyePos.Y,
             restorePos.Z);
     }
-
-    void TeleportPlayer(double x, double y, double z, bool requestChunks = true) =>
-        LodLoginBakePlayerMove.ApplyQuiet(capi, capi.World.Player.Entity, x, y, z, requestChunks);
 
     static string Pct(int done, int total) =>
         total <= 0 ? "0%" : $"{done * 100 / total}%";
