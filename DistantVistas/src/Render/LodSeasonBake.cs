@@ -610,6 +610,7 @@ public static class LodSeasonBake
         ref VisitBakeTally tally)
     {
         int changed = 0;
+        int gs = LodSection.GridSize;
         int nLand = 0, nSnowTop = 0, nPlantTop = 0, nGroundTop = 0;
         long sumTopR = 0, sumMixR = 0, sumBlurR = 0, sumFinalR = 0;
         int nKeepChanged = 0, nSkipped = 0;
@@ -786,7 +787,7 @@ public static class LodSeasonBake
             if (dbgCanopy < 8 && VanillaCanopyPath(probePath))
             {
                 dbgCanopy++;
-                SampleFinalTint(world, block, x, y, z, LodUntintedShare.None, plantTintFallback,
+                SampleFinalTint(world, block, x, y, z, LodUntintedShare.None, null,
                     out float sr, out float sg, out float sb);
                 int tintR = (int)(sr * 255f + 0.5f);
                 int tintG = (int)(sg * 255f + 0.5f);
