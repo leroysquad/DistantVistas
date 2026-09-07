@@ -765,12 +765,28 @@ public static class LoginSweepChecks
                 GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
                 .Contains("1.0.43 stream spawn-solid"),
             "walltime plan documents 1.0.43 stream-1024 residency fix");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
+                .Contains("1.0.44 frontier-relative stream"),
+            "walltime plan documents 1.0.44 progressive overlay stream");
         c.Eq(1024, LodLoginBakeViewBoost.SweepStreamViewDistanceBlocks,
-            "overlay vanilla stream covers spawn-solid so cliff L0s stay resident");
+            "overlay vanilla stream floor is spawn-solid so cliff L0s stay resident");
+        c.Eq(1024, LodLoginBakeViewBoost.MinOverlayStreamBlocks,
+            "progressive stream never drops below spawn-solid 1024");
         c.True(LodLoginBakeViewBoost.IsSweepHoldValue(1024),
             "1024 stream hold is never restored as the player slider");
-        c.True(bake.Contains("hopCameraPos"),
-            "hop CameraPos follows unlock so client stream is not pinned at pickup");
+        c.True(LodLoginBakeViewBoost.IsSweepHoldValue(
+                LodLoginBakeViewBoost.OverlayStreamBlocks(639)),
+            "grown overlay stream is never restored as the player slider");
+        c.True(!bake.Contains("hopCameraPos"),
+            "player CameraPos stays at pickup — hopping it fought server stream");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
+                .Contains("x = pickupX")
+            && File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
+                .Contains("z = pickupZ"),
+            "hop StreamCenter stays at pickup so WorldManager matches vanilla VD");
         c.True(File.ReadAllText(Path.Combine(
                 GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
                 .Contains("priority: true"),
@@ -793,6 +809,10 @@ public static class LoginSweepChecks
                 GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
                 .Contains("streamViewBlocks"),
             "hop residency probe logs overlay stream VD vs player/camera");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
+                .Contains("streamViewBlocks: streamBlocks"),
+            "hop-unlock logs the live overlay stream at retarget");
         c.True(File.ReadAllText(Path.Combine(
                 GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
                 .Contains("hop-unlock"),
@@ -1285,8 +1305,10 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeViewBoost.cs"));
         c.True(view.Contains("SweepBoostViewDistanceBlocks = 750"),
             "login visit Farseer/visit baseline stays 750 blocks");
-        c.True(view.Contains("SweepStreamViewDistanceBlocks = 1024"),
-            "login overlay vanilla stream is spawn-solid 1024");
+        c.True(view.Contains("MinOverlayStreamBlocks = 1024"),
+            "login overlay vanilla stream floor is spawn-solid 1024");
+        c.True(view.Contains("OverlayStreamBlocks"),
+            "overlay vanilla stream grows with filled radius past 1024");
 
         string label = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepBootstrap.cs"));
@@ -1567,7 +1589,25 @@ public static class LoginSweepChecks
         c.Eq(750, LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks,
             "visit/Farseer baseline stays 750 so the FlagBaked disk remains 4075");
         c.Eq(1024, LodLoginBakeViewBoost.SweepStreamViewDistanceBlocks,
-            "overlay writes vanilla view to spawn-solid 1024 then restores");
+            "overlay stream floor is spawn-solid 1024");
+        c.Eq(1024, LodLoginBakeViewBoost.MinOverlayStreamBlocks,
+            "MinOverlayStreamBlocks is the spawn-solid floor");
+        c.Eq(1024, LodLoginBakeViewBoost.OverlayStreamBlocks(0),
+            "empty disk uses the 1024 floor");
+        c.Eq(1024, LodLoginBakeViewBoost.OverlayStreamBlocks(358),
+            "358 cliff stays on spawn-solid 1024");
+        c.True(LodLoginBakeViewBoost.OverlayStreamBlocks(639) > 1024,
+            "639 cliff grows overlay stream past 1024");
+        c.Eq(1184, LodLoginBakeViewBoost.OverlayStreamBlocks(639),
+            "finished 639 (~913 blocks) + 256 lead snaps to 1184");
+        c.True(LodLoginBakeViewBoost.OverlayStreamBlocks(639) <= LodLoginBakeViewBoost.MaxVanillaViewDistance,
+            "grown stream never exceeds the engine 2048 ceiling");
+        c.True(LodLoginBakeViewBoost.OverlayStreamBlocks(1680) <= LodLoginBakeViewBoost.MaxVanillaViewDistance,
+            "full 1680 filled disk still fits under 2048");
+        c.True(LodLoginBakeViewBoost.OverlayStreamBlocks(800) > LodLoginBakeViewBoost.OverlayStreamBlocks(639),
+            "stream keeps a lead as finished climbs toward 800+");
+        c.Eq(4075, LodLoginBakeViewBoost.SweepVisitRadiusBlocks,
+            "visit/Farseer disk stays 4075 (4.5×750+700), not the vanilla stream cap");
         c.Eq(
             (int)Math.Ceiling(LodCoveragePolicy.HorizonDrawDistance(
                 LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks)),
@@ -1578,7 +1618,7 @@ public static class LoginSweepChecks
         c.True(viewBoost.Contains("SweepVisitRadiusBlocks"),
             "ChunkSweepRadiusChunks uses SweepVisitRadiusBlocks toward onset");
         c.True(viewBoost.Contains("SweepStreamViewDistanceBlocks"),
-            "vanilla stream around the player is the spawn-solid 1024 disk");
+            "vanilla stream around the player starts at spawn-solid 1024 and grows with the frontier");
         c.False(viewBoost.Contains("Math.Min(vd, SweepBoostViewDistanceBlocks)"),
             "visit/scout clamp is not a leftover 750 Math.Min");
         c.True(viewBoost.Contains("Stream to Farseer onset + 700"),
@@ -1588,7 +1628,9 @@ public static class LoginSweepChecks
         c.Eq(1000, LodLoginBakeViewBoost.LegacySweepHoldBlocks,
             "old 1000-block hold is leftover, never a restore target");
         c.True(LodLoginBakeViewBoost.IsSweepHoldValue(750), "750 is the visit baseline hold");
-        c.True(LodLoginBakeViewBoost.IsSweepHoldValue(1024), "1024 is the overlay stream hold");
+        c.True(LodLoginBakeViewBoost.IsSweepHoldValue(1024), "1024 is the overlay stream floor hold");
+        c.True(LodLoginBakeViewBoost.IsSweepHoldValue(1184), "grown overlay stream is a hold value");
+        c.True(LodLoginBakeViewBoost.IsSweepHoldValue(2048), "engine-ceiling overlay stream is a hold value");
         c.True(LodLoginBakeViewBoost.IsSweepHoldValue(1000), "1000 is the old scan hold");
         c.False(LodLoginBakeViewBoost.IsSweepHoldValue(160), "160 is a player slider");
         c.False(LodLoginBakeViewBoost.IsSweepHoldValue(352), "352 is a player slider");
@@ -1625,7 +1667,15 @@ public static class LoginSweepChecks
         c.True(viewBoost.Contains("ints.Set(ViewDistanceSettingKey, blocks, true)"),
             "boost triggers the graphics viewDistance watcher");
         c.True(viewBoost.Contains("SweepStreamViewDistanceBlocks"),
-            "boost resolve uses spawn-solid 1024 for vanilla stream, 750 for visit disk");
+            "boost resolve uses spawn-solid 1024 floor for vanilla stream, 750 for visit disk");
+        c.True(viewBoost.Contains("OverlayStreamBlocks"),
+            "boost resolve grows vanilla stream with finished radius");
+        string diag = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"));
+        c.True(diag.Contains("RunId = \"1044\""),
+            "playtest telemetry runId is 1044");
+        c.True(diag.Contains("stream-grow"),
+            "stream-grow logs overlay VD increases past 1024");
         c.True(viewBoost.Contains("FarViewDistanceCap"),
             "view boost clears DV far cap during sweep");
         c.True(viewBoost.Contains("ApplyZFar"),

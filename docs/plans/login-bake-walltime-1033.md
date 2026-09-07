@@ -573,6 +573,49 @@ Hopping the player cannot clear this cliff. Scout KeepLoaded already ran on 16 k
 | `finished` | 358 stall | **>358 climbing** (toward ~804 at 1024) |
 | `scout-host-up` `capped` | silent | rare; `priority:true` for pump |
 
+## 1.0.44 frontier-relative stream (1.0.43 playtest — 358 cleared, new cliff at 639)
+
+**Playtest (runId 1043 / `distantvistas_1.0.43`):** Overlay stream 1024 broke the 358 wall. Same run: finished 390→418+ with `residencyLoaded=3` and Capture alive. Then frozen at **finished=639 / pending≈1025–1029 of 1680**.
+
+| Geometry | 358 cliff (1.0.42) | 639 cliff (1.0.43) |
+|----------|--------------------|--------------------|
+| Filled radius | ~683 blocks | ~913 blocks |
+| Overlay vanilla VD | 750 | **1024** (constant) |
+| Ratio | 683/750 ≈ 0.91 | 913/1024 ≈ 0.89 |
+| Pending | cold past stream | cold past **1024** stream ceiling |
+| Last budget | WaitChunks + paint starve | `waitChunksLive=14`, `captureLive=0`, `paintStarveTicks=962`, `chunkPressure=true` |
+| Releases | maxWait / captureStall | **maxWait 624** dominates (captureStall 12, residentPaint 4) |
+| Late hops | annulus 750–1024 | rings 20–27 `distFromPickup` **836–846**, `pastWarm` 86–96, **`residencyLoaded=0`**, `usedFallback=false` |
+
+**Verdict:** 1024 overlay stream fixed the 750 cull. Next cliff is the **1024 stream ceiling**. Frontier ~913; cold pending beyond that need residency past 1024 from pickup. Hop/KeepLoaded inside ≤846 cannot feed the next ring — and 836 sits **inside** the filled disk (913), so late hops recycled already-baked interior. Moving CameraPos/entity to the hop XYZ fought server stream (WorldManager gens around the real IPlayer at pickup) and regressed `residencyLoaded` to 0.
+
+Hopping the player still cannot clear this class of cliff. Grow vanilla stream around pickup so the next annulus stays inside client view-cull; RequestUp remains a KeepLoaded pump at the frontier L0.
+
+### Shipped
+
+| Fix | Mechanism |
+|-----|-----------|
+| **Progressive overlay VD** | `OverlayStreamBlocks(finished)` = max(1024, finishedRadius+256, finishedRadius/0.88), snap to chunk size, clamp **1024–2048**. Visit/Farseer math stays **750 → 4075** |
+| **Grow in place** | `EnsureBoosted(finished)` each sweep tick; `stream-grow` when VD increases (1184 at finished 639) |
+| **1024–2048 are hold values** | Never restore overlay stream (including 1184/1536/2048) as the player's slider |
+| **Player stays at pickup** | No hop CameraPos / Pos follow. Look lock + exact pickup XYZ. Stream center is always pickup |
+| **Hop annulus tracks filled disk** | Inner = max(finishedRadius, 750); outer = live stream. Unlocks sit on the next ring, not 750–1024 |
+| **Hop = RequestUp only** | Priority KeepLoaded + L0 visible at frontier; 16 scouts stay primary |
+| **Telemetry** | `streamViewBlocks` on `scout-budget` / `hop-unlock` / `hop-residency-probe` / `warm-ring-probe`; `stream-grow` (runId **1044**) |
+
+**Expect after 1.0.44:**
+
+| Signal | 1043 @639 | Target |
+|--------|-----------|--------|
+| Overlay view | 1024 stuck | **grows** (~1184 at 639, toward 1280+ by finished 800) then restore |
+| `finished` | 639 stall | **>639 climbing** toward **800+** |
+| `captureLive` / `paintReadyQueued` | 0 / 0 | **>0** / **>0** |
+| hop `distFromPickup` | 836–846 (inside filled disk) | near **finished radius → live stream** (or hop never fires) |
+| `residencyLoaded` | 0 on late hops | **≥1** on unlock targets, or scouts Capture without hop |
+| slider after overlay | not stuck 1024 | not stuck at 1184/1536 |
+
+Full 1680 filled disk is ~1478 blocks → stream ~1760, still under the 2048 engine ceiling. Sparse visits out to 4075 stay on scouts, not vanilla tessellation.
+
 ## Plan B — soft-release threshold (geometry, not ~600)
 
 **User clarification:** a ~600 `finished` cutoff is **not hard**. Derive release timing from **warm-ring / residency geometry** (same model as the ~358 cliff), not a magic constant.

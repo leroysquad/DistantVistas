@@ -15,7 +15,7 @@ public static class LodScoutSeqDiag
 
     const string HypothesisId = "H-SCOUT-SEQ";
     const string SessionId = "40cccb";
-    const string RunId = "1043";
+    const string RunId = "1044";
 
     const int ThrashMaxTicks = 5;
     const long ThrashRespawnMs = 2000;
@@ -35,6 +35,7 @@ public static class LodScoutSeqDiag
     static int paintScoutReady;
     static int paintStarveTicks;
     static bool chunkPressureActive;
+    static int overlayStreamViewBlocks;
 
     static readonly Dictionary<long, long> lastReleaseMsByKey = new();
     static readonly Dictionary<int, (LodScoutEntity.Phase Phase, long Ms)> lastPhaseLogBySlot = new();
@@ -59,6 +60,7 @@ public static class LodScoutSeqDiag
         paintScoutReady = 0;
         paintStarveTicks = 0;
         chunkPressureActive = false;
+        overlayStreamViewBlocks = 0;
         lastWarmRingMs = 0;
         lastHopResidencyMs = 0;
         lastHopResidencyLoaded = -1;
@@ -82,6 +84,17 @@ public static class LodScoutSeqDiag
     public static void NotePaintStarve(int ticks) => paintStarveTicks = ticks;
 
     public static void NoteChunkPressure(bool active) => chunkPressureActive = active;
+
+    public static void NoteStreamView(int blocks) => overlayStreamViewBlocks = blocks;
+
+    public static void LogStreamGrow(int finished, int streamViewBlocks)
+    {
+        Write("LodLoginBakeViewBoost.EnsureBoosted", "stream-grow",
+            "{\"finished\":" + finished
+            + ",\"streamViewBlocks\":" + streamViewBlocks
+            + ",\"finishedRadiusBlocks\":" + LodLoginScoutFill.FinishedToRadiusBlocks(finished)
+            + "}");
+    }
 
     public static void LogSpawn(
         int slot,
@@ -361,6 +374,7 @@ public static class LodScoutSeqDiag
             + ",\"paintReadyQueued\":" + paintScoutReady
             + ",\"paintStarveTicks\":" + paintStarveTicks
             + ",\"chunkPressure\":" + Bool(chunkPressureActive)
+            + ",\"streamViewBlocks\":" + overlayStreamViewBlocks
             + "}");
 
         spawnsWindow = 0;
@@ -385,7 +399,8 @@ public static class LodScoutSeqDiag
         int loadedAfterDwell,
         int skippedCooldown,
         int residencyLoaded,
-        long pumpAnchorKey)
+        long pumpAnchorKey,
+        int streamViewBlocks)
     {
         if (!overlayActive) return;
         Write("LodLoginHopUnlock.ApplyHop", "hop-unlock",
@@ -402,6 +417,7 @@ public static class LodScoutSeqDiag
             + ",\"loadedAfterDwell\":" + loadedAfterDwell
             + ",\"residencyLoaded\":" + residencyLoaded
             + ",\"pumpAnchorKey\":" + pumpAnchorKey
+            + ",\"streamViewBlocks\":" + streamViewBlocks
             + ",\"skippedCooldown\":" + skippedCooldown
             + ",\"usedFallback\":" + Bool(usedFallback)
             + ",\"bearingRad\":" + bearingRad.ToString("0.####", Inv)
@@ -439,7 +455,7 @@ public static class LodScoutSeqDiag
         int streamViewBlocks)
     {
         if (!overlayActive) return;
-        if (finished < 320 || finished > 420) return;
+        if (finished < 280) return;
         long now = NowMs();
         bool loadedChanged = residencyLoaded != lastHopResidencyLoaded;
         if (!loadedChanged && now - lastHopResidencyMs < 2000) return;
@@ -489,7 +505,7 @@ public static class LodScoutSeqDiag
         int scoutReady)
     {
         if (!overlayActive) return;
-        if (finished < 320 || finished > 400) return;
+        if (finished < 320 || finished > 1400) return;
         long now = NowMs();
         if (lastWarmRingMs != 0 && now - lastWarmRingMs < 5000) return;
         lastWarmRingMs = now;
@@ -497,15 +513,14 @@ public static class LodScoutSeqDiag
         int warmL0Est = LodLoginScoutFill.WarmRingL0CellEstimate(warmHoldBlocks);
         int finishedRadius = LodLoginScoutFill.FinishedToRadiusBlocks(finished);
         var ba = capi.World.BlockAccessor;
-        int pendingN = pending.Count;
         int loaded4 = 0;
         int loaded1Plus = 0;
         int coldNear = 0;
         int insideWarm = 0;
         int annulus = 0;
         int outsideSpawn = 0;
-        double warmSq = (double)warmHoldBlocks * warmHoldBlocks;
-        double spawnSq = LodLoginBake.SpawnSolidRadiusBlocks * LodLoginBake.SpawnSolidRadiusBlocks;
+        double filledSq = (double)finishedRadius * finishedRadius;
+        double streamSq = (double)warmHoldBlocks * warmHoldBlocks;
         int sampled = 0;
         foreach (long key in pending)
         {
@@ -518,10 +533,10 @@ public static class LodScoutSeqDiag
             double dz = z - pickupZ;
             double distSq = dx * dx + dz * dz;
             int resident = pipeline.World.HasDataSet.Contains(key) ? LodLoginScoutFill.ResidentFastHandoffCols : 0;
-            if (distSq <= warmSq) insideWarm++;
-            else if (distSq <= spawnSq) annulus++;
+            if (distSq <= filledSq) insideWarm++;
+            else if (distSq <= streamSq) annulus++;
             else outsideSpawn++;
-            if (distSq <= spawnSq && distSq > warmSq && loaded == 0 && resident < LodLoginScoutFill.ResidentFastHandoffCols)
+            if (distSq <= streamSq && distSq > filledSq && loaded == 0 && resident < LodLoginScoutFill.ResidentFastHandoffCols)
                 coldNear++;
         }
 
@@ -538,6 +553,7 @@ public static class LodScoutSeqDiag
             + ",\"pendingInsideWarm\":" + insideWarm
             + ",\"pendingAnnulus\":" + annulus
             + ",\"pendingOutsideSpawn\":" + outsideSpawn
+            + ",\"streamViewBlocks\":" + warmHoldBlocks
             + ",\"waitChunksLive\":" + waitChunksLive
             + ",\"captureLive\":" + captureLive
             + ",\"liveScouts\":" + liveScouts

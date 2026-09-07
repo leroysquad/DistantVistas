@@ -6,8 +6,10 @@ using Vintagestory.API.Config;
 namespace DistantVistas;
 
 /// <summary>
-/// Overlay hop-unlock pump: moves player to near-cliff cold L0 cells and forces map-chunk
-/// residency via scout-host KeepLoaded + ForceSend (SetChunkColumnVisible alone is insufficient).
+/// Overlay hop-unlock pump: priority RequestUp at a frontier L0 while the real player
+/// stays at pickup. Vanilla stream (frontier-relative) plus scout KeepLoaded resident
+/// the next ring. Client hops of Pos/CameraPos fight WorldManager and were the 1.0.43
+/// late-run residencyLoaded=0 regression.
 /// </summary>
 public sealed class LodLoginHopUnlock
 {
@@ -59,12 +61,8 @@ public sealed class LodLoginHopUnlock
 
     public void StreamCenter(double pickupX, double pickupZ, out double x, out double z)
     {
-        if (Active)
-        {
-            x = X;
-            z = Z;
-            return;
-        }
+        // Server WorldManager streams around the real IPlayer at pickup.
+        // 1.0.43 late hops moved this center to ~840 and residencyLoaded went back to 0.
         x = pickupX;
         z = pickupZ;
     }
@@ -158,12 +156,15 @@ public sealed class LodLoginHopUnlock
         if (havePrev)
             ReleasePumpAnchor();
 
+        int streamBlocks = viewBoost.LiveStreamViewDistanceBlocks;
         if (!TryPickNearAnnulusTarget(
-                capi, pickupX, pickupZ, pendingKeys, finished, prevX, prevZ, havePrev,
+                capi, pickupX, pickupZ, pendingKeys, finished, streamBlocks,
+                prevX, prevZ, havePrev,
                 out double x, out double y, out double z, out long targetKey, out int loaded,
                 out int distPickupBlocks, out double bearingRad, out int pastWarmBlocks)
             && !TryFallbackAnnulusUnlock(
-                capi, pickupX, pickupY, pickupZ, pendingKeys, finished, prevX, prevZ, havePrev,
+                capi, pickupX, pickupY, pickupZ, pendingKeys, finished, streamBlocks,
+                prevX, prevZ, havePrev,
                 out x, out y, out z, out targetKey, out loaded, out distPickupBlocks,
                 out bearingRad, out pastWarmBlocks))
             return false;
@@ -187,13 +188,14 @@ public sealed class LodLoginHopUnlock
             targetKey, loaded, usedFallback: targetKey == 0,
             distFromPickup: distPickupBlocks, pastWarmBlocks: pastWarmBlocks,
             loadedAfterDwell: loadedAfterDwell, skippedCooldown: lastSkippedCooldown,
-            residencyLoaded: LastResidencyLoaded, pumpAnchorKey: pumpAnchorKey);
+            residencyLoaded: LastResidencyLoaded, pumpAnchorKey: pumpAnchorKey,
+            streamViewBlocks: streamBlocks);
         return true;
     }
 
     /// <summary>
-    /// Force map-chunk residency: client SetChunkColumnVisible + scout-host KeepLoaded/ForceSend.
-    /// Player Pos/ServerPos synced each pump so the stream center matches unlock XYZ.
+    /// Force map-chunk residency via scout-host KeepLoaded + ForceSend at the frontier L0.
+    /// Player stays at pickup so vanilla stream matches the server IPlayer.
     /// </summary>
     public void PumpUnlockResidency(ICoreClientAPI capi, LodLoginBakeViewBoost viewBoost, bool forceHost = false)
     {
@@ -205,13 +207,6 @@ public sealed class LodLoginHopUnlock
         if (TargetKey != 0)
             LodLoginBakePlayerMove.RequestL0MapChunksVisible(capi, TargetKey, dim);
         LodLoginBakePlayerMove.RequestChunkColumnsVisible(capi, X, Z, dim, revealR);
-
-        EntityPlayer? entity = capi.World.Player.Entity;
-        if (entity != null)
-        {
-            LodLoginBakePlayerMove.WriteExactPickup(entity, X, Y, Z, entity.Pos.Yaw, entity.Pos.Pitch);
-            LodVsCompat.TryUpdatePartitioning(entity);
-        }
 
         if (!forceHost && TicksAtPoint % ResidencyPumpIntervalTicks != 0)
         {
@@ -245,7 +240,7 @@ public sealed class LodLoginHopUnlock
             waitChunksLive, captureLive, LastResidencyLoaded, X, Y, Z,
             LodScoutHostSystem.ClientInstance?.ChannelConnected ?? false,
             playerX, playerZ, cameraX, cameraZ,
-            LodLoginBakeViewBoost.SweepStreamViewDistanceBlocks);
+            LodLoginBakeViewBoost.OverlayStreamBlocks(finished));
     }
 
     public void TickAtPoint()
@@ -296,6 +291,7 @@ public sealed class LodLoginHopUnlock
         double pickupZ,
         IReadOnlyList<long> pendingKeys,
         int finished,
+        int streamBlocks,
         double prevX,
         double prevZ,
         bool havePrev,
@@ -316,10 +312,12 @@ public sealed class LodLoginHopUnlock
         pastWarmBlocks = 0;
         lastSkippedCooldown = 0;
 
-        int rHold = LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks;
-        int finishedR = LodLoginScoutFill.FinishedToRadiusBlocks(finished);
-        double pickupWarmSq = (double)rHold * rHold;
-        double spawnSq = LodLoginBake.SpawnSolidRadiusBlocks * LodLoginBake.SpawnSolidRadiusBlocks;
+        int rInner = Math.Max(
+            LodLoginScoutFill.FinishedToRadiusBlocks(finished),
+            LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks);
+        int rOuter = Math.Max(streamBlocks, rInner + LodLoginHopUnlock.MinHopDeltaBlocks);
+        double pickupWarmSq = (double)rInner * rInner;
+        double outerSq = (double)rOuter * rOuter;
         double prevWarmSq = havePrev ? pickupWarmSq * 0.64 : 0;
         double minHopSq = (double)MinHopDeltaBlocks * MinHopDeltaBlocks;
         var ba = capi.World.BlockAccessor;
@@ -351,10 +349,10 @@ public sealed class LodLoginHopUnlock
             double distPickupSq = dxPickup * dxPickup + dzPickup * dzPickup;
 
             if (distPickupSq <= pickupWarmSq) continue;
-            if (distPickupSq > spawnSq) continue;
+            if (distPickupSq > outerSq) continue;
 
             int distBlocks = (int)Math.Round(Math.Sqrt(distPickupSq));
-            int pastWarm = Math.Max(0, distBlocks - rHold);
+            int pastWarm = Math.Max(0, distBlocks - rInner);
 
             if (havePrev)
             {
@@ -367,7 +365,7 @@ public sealed class LodLoginHopUnlock
 
             long score = (long)pastWarm * 10_000_000L
                 + (long)loaded * 100_000L
-                + Math.Abs(distBlocks - Math.Max(finishedR, rHold));
+                + Math.Abs(distBlocks - rInner);
 
             if (score < bestScore)
             {
@@ -402,6 +400,7 @@ public sealed class LodLoginHopUnlock
         double pickupZ,
         IReadOnlyList<long> pendingKeys,
         int finished,
+        int streamBlocks,
         double prevX,
         double prevZ,
         bool havePrev,
@@ -414,30 +413,32 @@ public sealed class LodLoginHopUnlock
         out double bearingRad,
         out int pastWarmBlocks)
     {
-        int rHold = LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks;
-        int finishedR = LodLoginScoutFill.FinishedToRadiusBlocks(finished);
-        int maxR = (int)LodLoginBake.SpawnSolidRadiusBlocks - LodSection.SectionBlocks;
+        int rInner = Math.Max(
+            LodLoginScoutFill.FinishedToRadiusBlocks(finished),
+            LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks);
+        int maxR = Math.Max(rInner + MinHopDeltaBlocks, streamBlocks - LodSection.SectionBlocks);
 
         int nextR = havePrev
             ? Math.Max(lastFallbackRadiusBlocks + FallbackRadiusStepBlocks,
-                Math.Max(finishedR + LodSection.SectionBlocks, rHold + MinHopDeltaBlocks))
-            : Math.Max(rHold + MinHopDeltaBlocks, finishedR + LodSection.SectionBlocks);
+                rInner + LodSection.SectionBlocks)
+            : rInner + MinHopDeltaBlocks;
         nextR = Math.Min(nextR, maxR);
         if (havePrev && nextR <= lastFallbackRadiusBlocks)
             nextR = Math.Min(lastFallbackRadiusBlocks + FallbackRadiusStepBlocks, maxR);
         lastFallbackRadiusBlocks = nextR;
 
-        bearingRad = BearingTowardNearColdPending(capi, pickupX, pickupZ, pendingKeys, finishedR);
+        bearingRad = BearingTowardNearColdPending(
+            capi, pickupX, pickupZ, pendingKeys, rInner, streamBlocks);
         x = pickupX + Math.Cos(bearingRad) * nextR;
         z = pickupZ + Math.Sin(bearingRad) * nextR;
         y = pickupY;
         targetKey = 0;
         loadedChunks = 0;
         distPickupBlocks = nextR;
-        pastWarmBlocks = Math.Max(0, nextR - rHold);
+        pastWarmBlocks = Math.Max(0, nextR - rInner);
 
         if (TryPickNearAnnulusTarget(
-                capi, pickupX, pickupZ, pendingKeys, finished, prevX, prevZ, havePrev,
+                capi, pickupX, pickupZ, pendingKeys, finished, streamBlocks, prevX, prevZ, havePrev,
                 out double sx, out double sy, out double sz, out long sKey, out int sLoaded,
                 out int sDist, out _, out int sPastWarm))
         {
@@ -459,15 +460,15 @@ public sealed class LodLoginHopUnlock
         double pickupX,
         double pickupZ,
         IReadOnlyList<long> pendingKeys,
-        int finishedRadiusBlocks)
+        int innerRadiusBlocks,
+        int streamBlocks)
     {
         var ba = capi.World.BlockAccessor;
         double sumX = 0;
         double sumZ = 0;
         double weight = 0;
-        int rHold = LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks;
-        double warmSq = (double)rHold * rHold;
-        double spawnSq = LodLoginBake.SpawnSolidRadiusBlocks * LodLoginBake.SpawnSolidRadiusBlocks;
+        double warmSq = (double)innerRadiusBlocks * innerRadiusBlocks;
+        double outerSq = (double)streamBlocks * streamBlocks;
         for (int i = 0; i < pendingKeys.Count && weight < 128; i++)
         {
             long key = pendingKeys[i];
@@ -477,9 +478,9 @@ public sealed class LodLoginHopUnlock
             double dx = vx - pickupX;
             double dz = vz - pickupZ;
             double distSq = dx * dx + dz * dz;
-            if (distSq <= warmSq || distSq > spawnSq) continue;
+            if (distSq <= warmSq || distSq > outerSq) continue;
             int dist = (int)Math.Round(Math.Sqrt(distSq));
-            int pastWarm = Math.Max(1, dist - rHold);
+            int pastWarm = Math.Max(1, dist - innerRadiusBlocks);
             double w = 1.0 / pastWarm;
             sumX += dx * w;
             sumZ += dz * w;
@@ -489,7 +490,7 @@ public sealed class LodLoginHopUnlock
         if (weight > 0 && sumX * sumX + sumZ * sumZ > 1)
             return Math.Atan2(sumZ, sumX);
 
-        return finishedRadiusBlocks > 0 ? Math.PI * 0.25 : 0;
+        return innerRadiusBlocks > 0 ? Math.PI * 0.25 : 0;
     }
 
     static double DistBlocks(double ax, double az, double bx, double bz)

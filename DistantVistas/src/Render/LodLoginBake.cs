@@ -91,7 +91,6 @@ public sealed class LodLoginBake
     readonly List<double> windowMedians = new(8);
     readonly EntityPos restorePos = new();
     readonly Vec3d restoreCameraPos = new();
-    readonly Vec3d hopCameraPos = new();
     readonly Stopwatch stabilizeClock = new();
     double pickupX, pickupY, pickupZ;
     float pickupYaw, pickupPitch;
@@ -382,7 +381,7 @@ public sealed class LodLoginBake
         pipeline.DeferLegacyHeal = true;
         pipeline.FreezeCapture = false;
         pipeline.HoldUnloadedCaptures = true;
-        viewBoost.EnsureBoosted();
+        viewBoost.EnsureBoosted(finished);
         audioMute.EnsureMuted();
         timeFreeze.EnsureFrozen();
         gameMode.EnsureCreative();
@@ -784,6 +783,9 @@ public sealed class LodLoginBake
         LogTeleportBegin();
         sweepingTicks++;
 
+        viewBoost.EnsureBoosted(finished);
+        LodScoutSeqDiag.NoteStreamView(viewBoost.LiveStreamViewDistanceBlocks);
+
         if (sweepingTicks == 1 || sweepingTicks % SpawnRevealEveryTicks == 0)
             GrowRevealAroundStream();
         PinPickupPose();
@@ -793,7 +795,7 @@ public sealed class LodLoginBake
         else
             paintStarveTicks = 0;
         scoutFill.SetPaintStarving(paintStarveTicks >= 8);
-        scoutFill.SetWarmHoldBlocks(LodLoginBakeViewBoost.SweepStreamViewDistanceBlocks);
+        scoutFill.SetWarmHoldBlocks(viewBoost.LiveStreamViewDistanceBlocks);
         LodScoutSeqDiag.NotePaintStarve(paintStarveTicks);
 
         scoutFill.CountLivePhases(out int waitChunksLive, out int captureLive, out _, out _);
@@ -835,16 +837,16 @@ public sealed class LodLoginBake
             visitRevealCap,
             viewBoost.ChunkVisibleRadius,
             streamX, streamZ,
-            LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks);
+            viewBoost.LiveStreamViewDistanceBlocks);
         LodScoutSeqDiag.NoteChunkPressure(scoutFill.ChunkPressureActive);
         scoutFill.CountLivePhases(out waitChunksLive, out captureLive, out _, out _);
         LodScoutSeqDiag.MaybeWarmRingProbe(
             finished, total, capi, pipeline, pending, streamX, streamZ,
-            LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks, waitChunksLive, captureLive,
+            viewBoost.LiveStreamViewDistanceBlocks, waitChunksLive, captureLive,
             scoutFill.LiveCount, scoutReady.Count);
         LodScoutSeqDiag.MaybeStalledLiveProbe(
             finished, capi, pipeline, scoutFill, streamX, streamZ,
-            LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks, paintStarveTicks, scoutReady.Count);
+            viewBoost.LiveStreamViewDistanceBlocks, paintStarveTicks, scoutReady.Count);
         PinPickupPose();
         for (int i = 0; i < ready.Count; i++)
             scoutReady.Enqueue(ready[i]);
@@ -1845,7 +1847,7 @@ public sealed class LodLoginBake
         audioMute.EnsureMuted();
         timeFreeze.EnsureFrozen();
         gameMode.EnsureCreative();
-        viewBoost.EnsureBoosted();
+        viewBoost.EnsureBoosted(finished);
 
         // Capture pickup once. Recapturing every warmup tick locked restorePos onto hops.
         if (!restoreCaptured || LooksUnset(restorePos))
@@ -1959,26 +1961,10 @@ public sealed class LodLoginBake
         entity.Pos.Motion.Set(0, 0, 0);
         if (!restoreCaptured || LooksUnset(pickupX, pickupZ)) return;
 
-        if (hopUnlock.Active)
-        {
-            bool pumpStream = hopUnlock.TicksAtPoint <= 2 || hopUnlock.TicksAtPoint % 16 == 0;
-            LodLoginBakePlayerMove.ApplyExactPickup(
-                capi, entity, hopUnlock.X, hopUnlock.Y, hopUnlock.Z,
-                pickupYaw, pickupPitch,
-                pumpStream, hopUnlock.StreamPumpRadiusChunks(viewBoost));
-            hopCameraPos.Set(
-                hopUnlock.X + (restoreCameraPos.X - pickupX),
-                hopUnlock.Y + (restoreCameraPos.Y - pickupY),
-                hopUnlock.Z + (restoreCameraPos.Z - pickupZ));
-            LockPlayerCamera(capi, player, restorePos, hopCameraPos);
-        }
-        else
-        {
-            LodLoginBakePlayerMove.ApplyExactPickup(
-                capi, entity, pickupX, pickupY, pickupZ, pickupYaw, pickupPitch, requestChunks: false);
-            entity.Pos.SetFrom(restorePos);
-            LockPlayerCamera(capi, player, restorePos, restoreCameraPos);
-        }
+        LodLoginBakePlayerMove.ApplyExactPickup(
+            capi, entity, pickupX, pickupY, pickupZ, pickupYaw, pickupPitch, requestChunks: false);
+        entity.Pos.SetFrom(restorePos);
+        LockPlayerCamera(capi, player, restorePos, restoreCameraPos);
     }
 
     static void LockPlayerCamera(

@@ -8,7 +8,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>DistantVistas</AssemblyName>
     <RootNamespace>DistantVistas</RootNamespace>
-    <Version>1.0.43</Version>
+    <Version>1.0.44</Version>
   </PropertyGroup>
 
   <!-- No debug info in Release: the zip never ships the .pdb, and generating one
