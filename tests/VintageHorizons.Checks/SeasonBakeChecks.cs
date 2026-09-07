@@ -23,6 +23,7 @@ public static class SeasonBakeChecks
         CanopyGrayMottleDeterministic(c);
         CanopyGrayMixKeepsAutumn(c);
         SimdAfterGetColor(c);
+        ExpireMissingTexGate(c);
     }
 
     static void MultiplyRgbIdentity(Check c)
@@ -372,6 +373,27 @@ public static class SeasonBakeChecks
         LodPaletteRepair.Channels(half, out _, out _, out _, out int luma, out int chroma);
         c.True(luma < LodPaletteRepair.BrightCapLuma, "gray mix stays under bright-cap sanitize");
         c.True(chroma > 20, "gray mix keeps autumn chroma");
+    }
+
+    static void ExpireMissingTexGate(Check c)
+    {
+        Block dirt = Block("soil-medium-normal", EnumBlockMaterial.Soil);
+        c.True(LodSeasonBake.RejectExpireMissingTex(dirt, 0),
+            "expire no-map skips colour 0");
+        int missingWhite = unchecked((int)0xFFFCFCFC);
+        c.True(LodPaletteRepair.IsMissingTextureWhite(missingWhite),
+            "unknown.png white is missing-tex");
+        c.True(LodSeasonBake.RejectExpireMissingTex(dirt, missingWhite),
+            "expire no-map does not write missing-tex white onto dirt");
+        c.False(LodSeasonBake.RejectExpireMissingTex(dirt, LodSurfaceMix.Pack(92, 68, 42)),
+            "expire no-map keeps a real soil sample");
+        Block snow = Block("snowlayer-4", EnumBlockMaterial.Snow);
+        c.False(LodSeasonBake.RejectExpireMissingTex(snow, missingWhite),
+            "real snow plates may keep pale RGB without a map chunk");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSeasonBake.cs"))
+                .Contains("RejectExpireMissingTex"),
+            "visit bake gates expire no-map samples");
     }
 
     /// <summary>

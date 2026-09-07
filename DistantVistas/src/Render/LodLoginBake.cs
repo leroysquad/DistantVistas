@@ -34,6 +34,11 @@ public sealed class LodLoginBake
     /// <summary>GetColor + persist per overlay tick across all live scouts, not one stop.</summary>
     const int MaxBakePerTick = 24;
     const int MaxLeftoverBakePerTick = 16;
+    /// <summary>
+    /// Month-expire leftover GetColor queue. Large caches used to enqueue every
+    /// resident L0 (thousands) unrelated to scout progress. Nearest this many only.
+    /// </summary>
+    internal const int MaxExpireLeftoverKeys = 256;
     const int SweepRowsPerCall = 2;
     const int RevealGrowPerTick = 8;
     const int SpawnSweepEveryTicks = 4;
@@ -123,6 +128,7 @@ public sealed class LodLoginBake
     readonly List<long> stopBakeKeys = new();
     readonly List<(long DistSq, long Key)> batchBakeCandidates = new();
     readonly List<long> leftoverKeys = new();
+    readonly List<(double DistSq, long Key)> leftoverRank = new();
     readonly LodLoginScoutFill scoutFill = new();
     readonly Queue<long> scoutReady = new();
     int sweepingTicks;
@@ -278,6 +284,7 @@ public sealed class LodLoginBake
         leftoverQueued = false;
         leftoverIndex = 0;
         leftoverKeys.Clear();
+        leftoverRank.Clear();
         stopBakePrepared = false;
         stopBakeIndex = 0;
         stopBakeKeys.Clear();
@@ -1166,13 +1173,14 @@ public sealed class LodLoginBake
     }
 
     /// <summary>
-    /// After the budgeted expire hops: overwrite every resident L0 that the hops
-    /// never locked. No extra teleports. Hop count stays ~64+16. Drain is
+    /// After the budgeted expire hops: overwrite nearest resident L0 that the hops
+    /// never locked, capped at <see cref="MaxExpireLeftoverKeys"/>. Drain is
     /// MaxLeftoverBakePerTick cells per overlay tick (BakeExpireLeftovers).
     /// </summary>
     void CollectExpireLeftovers()
     {
         leftoverKeys.Clear();
+        leftoverRank.Clear();
         leftoverIndex = 0;
         leftoverBaked = 0;
         leftoverNearLeft = 0;
@@ -1199,13 +1207,21 @@ public sealed class LodLoginBake
             if (LodWorld.KeyLevel(kv.Key) != 0) continue;
             if (kv.Value == null) continue;
             if (completedKeys.Contains(kv.Key)) continue;
-            leftoverKeys.Add(kv.Key);
             double cx = LodWorld.KeySx(kv.Key) * sb + sb * 0.5 - px;
             double cz = LodWorld.KeySz(kv.Key) * sb + sb * 0.5 - pz;
-            if (cx * cx + cz * cz <= nearRsq) leftoverNearLeft++;
+            leftoverRank.Add((cx * cx + cz * cz, kv.Key));
+        }
+
+        leftoverRank.Sort((a, b) => a.DistSq.CompareTo(b.DistSq));
+        int cap = Math.Min(MaxExpireLeftoverKeys, leftoverRank.Count);
+        for (int i = 0; i < cap; i++)
+        {
+            leftoverKeys.Add(leftoverRank[i].Key);
+            if (leftoverRank[i].DistSq <= nearRsq) leftoverNearLeft++;
             else leftoverFarLeft++;
         }
         leftoverTotal = leftoverKeys.Count;
+        leftoverRank.Clear();
     }
 
     void DrainExpireLeftovers()

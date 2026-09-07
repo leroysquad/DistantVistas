@@ -146,6 +146,20 @@ public static class LodSeasonBake
     /// </summary>
     internal static bool AllowExpireNoMapSample;
 
+    /// <summary>
+    /// Expire leftover GetColor without a map chunk can sample unknown.png white.
+    /// Do not write that strip. Real snow/ice/water keep pale RGB via
+    /// <see cref="KeepVisitSnowColor"/>.
+    /// </summary>
+    public static bool RejectExpireMissingTex(Block block, int color)
+    {
+        if (color == 0) return true;
+        if (!LodPaletteRepair.IsMissingTextureWhite(color)
+            && !LodPaletteRepair.IsMissingTextureSky(color))
+            return false;
+        return !KeepVisitSnowColor(block, waterColumn: false);
+    }
+
     /// <summary>Map chunk present for a single column — visit bake is per-column, not all-or-nothing.</summary>
     public static bool IsColumnMapLoaded(IBlockAccessor blockAccessor, int x, int z)
     {
@@ -637,6 +651,11 @@ public static class LodSeasonBake
                     continue;
                 }
                 expireColor = LodSurfaceMix.MixVisitBlock(capi, block, x, y, z, expireColor);
+                if (RejectExpireMissingTex(block, expireColor))
+                {
+                    tally.Zero++;
+                    continue;
+                }
                 tops[col] = block;
                 topY[col] = y;
                 frostCol[col] = VisitColumnFrost(world, x, y, z, block, block.Code?.Path);

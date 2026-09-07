@@ -266,6 +266,13 @@ public static class LoginSweepChecks
             "successful sweep re-enables explore bake for newly discovered land");
         c.False(bake.Contains("FreezeCapture = true"),
             "successful sweep must not lock all capture until relog");
+        string terrain = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodTerrainRenderer.cs"));
+        int clearAt = terrain.IndexOf("public void ClearMeshes()", StringComparison.Ordinal);
+        c.True(clearAt >= 0, "renderer has ClearMeshes");
+        string clear = terrain.Substring(clearAt, Math.Min(900, terrain.Length - clearAt));
+        c.True(clear.Contains("MeshPressureActive = false"),
+            "leave-world ClearMeshes drops the mesh-pressure latch");
     }
 
     static void AuditMisses(Check c)
@@ -472,6 +479,10 @@ public static class LoginSweepChecks
             "expire leftover GetColor is 16/tick (research 12→16)");
         c.True(bake.Contains("CollectExpireLeftovers"),
             "expire leftovers are queued, not baked in one tick");
+        c.True(bake.Contains("MaxExpireLeftoverKeys"),
+            "expire leftover queue is capped on large caches");
+        c.Eq(256, LodLoginBake.MaxExpireLeftoverKeys,
+            "expire leftover cap is 256 nearest L0");
         c.True(bake.Contains("RequestChunkColumnRing"),
             "login bake grows the streamed ring instead of requesting the full disk at teleport");
         c.True(bake.Contains("SweepRowsPerCall"),
@@ -932,8 +943,8 @@ public static class LoginSweepChecks
             "paint revision 2 does not force login teleport");
         c.True(LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 3) == null,
             "paint revision 3 does not force login teleport");
-        c.Eq(8, LodSurfaceMix.PaintRevision,
-            "paint revision 8: empty-mesh remesh, Leaves foliage, onset sweep radius");
+        c.Eq(9, LodSurfaceMix.PaintRevision,
+            "paint revision 9: canopy GetColor at crown Y, low-ground mist / scout-fill era");
         c.True(LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 5) == null,
             "paint revision 5 does not force login teleport");
         c.True(LodLoginSweepWindow.RecaptureReason("fall", "winter", 10, 0, 0) == null,
@@ -972,7 +983,22 @@ public static class LoginSweepChecks
         c.True(gate.Contains("still incomplete"),
             "gate runs when audit finds misses and no in-window complete");
         c.True(gate.Contains("skip re-canvas"),
-            "in-window complete marker skips full re-canvas even with leftovers");
+            "in-window complete marker skips full re-canvas when leftovers are small");
+        c.True(gate.Contains("in-window skip blocked"),
+            "large FindMisses / unfilled gaps force a scout fill instead of claiming complete");
+        c.True(gate.Contains("frontier drip"),
+            "small leftover skip names deferred regions instead of implying zero gaps");
+        c.True(LodLoginSweepGate.AllowsInWindowSkip(0, 0),
+            "zero misses and gaps may skip");
+        c.True(LodLoginSweepGate.AllowsInWindowSkip(
+                LodLoginSweepGate.MaxSkipMisses, LodLoginSweepGate.MaxSkipUnfilledGaps),
+            "at-threshold leftovers stay frontier drip");
+        c.False(LodLoginSweepGate.AllowsInWindowSkip(LodLoginSweepGate.MaxSkipMisses + 1, 0),
+            "33 FindMisses blocks in-window skip");
+        c.False(LodLoginSweepGate.AllowsInWindowSkip(0, LodLoginSweepGate.MaxSkipUnfilledGaps + 1),
+            "33 unfilled gaps block in-window skip");
+        c.Eq(32, LodLoginSweepGate.MaxSkipMisses, "skip miss threshold is 32");
+        c.Eq(32, LodLoginSweepGate.MaxSkipUnfilledGaps, "skip gap threshold is 32");
         c.True(gate.Contains("no successful sweep recorded yet"),
             "gate runs when completion marker is missing");
         int idxNoComplete = gate.IndexOf("no successful sweep recorded yet for this world", StringComparison.Ordinal);
@@ -1001,6 +1027,12 @@ public static class LoginSweepChecks
             "level finalize consults sweep gate before overlay");
         c.True(mod.Contains("Login visit sweep skipped"),
             "skipped sweep logs and drops into play");
+        c.True(mod.Contains("explore pending"),
+            "skip path logs explorePending so DiscoverOnly stall is visible");
+        c.True(mod.Contains("Do not ExploreBake.Clear()"),
+            "in-window skip does not wipe load-queued explore bakes");
+        c.True(mod.Contains("LastUnfilledGaps"),
+            "gate sees renderer unfilled-gap count");
         c.True(!mod.Contains("ClearHandoverDeferral"),
             "skipped sweep does not clear a handover deferral");
         c.False(mod.Contains("LodLoginSweepComplete.RecordSuccess"),
@@ -1407,6 +1439,8 @@ public static class LoginSweepChecks
 
         string frontier = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodFrontierScout.cs"));
+        c.Eq(24, LodFrontierScout.MaxExplorePendingYield,
+            "frontier yield matches 16-scout bake parallelism, not 4");
         c.False(frontier.Contains("farCap < maxR"),
             "frontier scout does not shrink the fill ring to EffectiveFarDistance");
         c.True(frontier.Contains("HorizonDrawDistance(vd)"),

@@ -1601,7 +1601,8 @@ public class DistantVistasModSystem : ModSystem
 
         LodLoginSweepGate.Result sweepGate = LodLoginSweepGate.Decide(
             capi, pipeline.World, pipeline, capi.World.Blocks,
-            tints.PlantTintFallback, UntintedForRebake);
+            tints.PlantTintFallback, UntintedForRebake,
+            renderer.LastUnfilledGaps);
 
         if (!sweepGate.RunSweep)
         {
@@ -1610,7 +1611,8 @@ public class DistantVistasModSystem : ModSystem
             // canvas while walking — measured 50–100 ms tick spikes on discover.
             pipeline.DiscoverOnly = true;
             pipeline.DeferLegacyHeal = false;
-            pipeline.ExploreBake.Clear();
+            // Do not ExploreBake.Clear() — that dropped load-queued visit bakes and
+            // left the frontier stalled behind DiscoverOnly + a tiny pending yield.
             renderer.LoginBakeComplete = true;
             AllowLodDraws();
             try { LodLoginBakeViewBoost.RecoverPlayerViewIfNeeded(capi); } catch { }
@@ -1626,14 +1628,16 @@ public class DistantVistasModSystem : ModSystem
                     + "\",\"cachedSections\":" + pipeline.CachedSectionsLoaded
                     + ",\"meshes\":" + renderer.MeshCount
                     + ",\"discoverOnly\":true"
+                    + ",\"explorePending\":" + pipeline.ExploreBake.PendingCount
+                    + ",\"unfilledGaps\":" + renderer.LastUnfilledGaps
                     + ",\"complete\":true"
                     + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
             }
             catch { }
             // #endregion
             Mod.Logger.Notification(
-                "[DistantVistas] Login visit sweep skipped — {0}. Entering play ({1} sections in cache).",
-                sweepGate.Reason, pipeline.CachedSectionsLoaded);
+                "[DistantVistas] Login visit sweep skipped — {0}. Entering play ({1} sections in cache, {2} explore pending).",
+                sweepGate.Reason, pipeline.CachedSectionsLoaded, pipeline.ExploreBake.PendingCount);
             return;
         }
 

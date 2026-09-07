@@ -18,7 +18,7 @@ public sealed class LodFrontierScout
     public const int ChunkVisibleRadius = 2;
     public const int SweepRadiusChunks = 2;
     public const int MaxPendingYield = 48;
-    public const int MaxExplorePendingYield = 4;
+    public const int MaxExplorePendingYield = 24;
     public const int MaxCaptureResultsYield = 8;
     public const int MaxPlanCandidates = 32;
     public const float LeadConeCos = 0.9659258f; // cos(15 deg)

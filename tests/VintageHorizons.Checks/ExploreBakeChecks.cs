@@ -90,7 +90,7 @@ public static class ExploreBakeChecks
             "visit bake reads the loaded column top, not only the stored run");
         c.False(explore.Contains("if (!SectionHasLiveTint(section)) return;"),
             "explore bake queues FlagBaked L0 so live snow and canopy can overwrite");
-        c.True(explore.Contains("int remaining = pending.Count"),
+        c.True(explore.Contains("int guard = pending.Count"),
             "explore drain snapshots queue length so not-ready keys cannot livelock Tick");
         c.True(explore.Contains("readyAttempted"),
             "explore drain stops retrying a live-tint L0 that already baked with chunks loaded");
@@ -105,6 +105,10 @@ public static class ExploreBakeChecks
         c.True(ContainsBetween(pipeline, "void AfterSectionLoaded(long key, LodSection section, ref int repaired)",
                 "void AfterSectionLoaded(long key, LodSection section)", "ExploreBake.Queue"),
             "disk load queues visit bake for L0 live-tint sections");
+        c.True(pipeline.Contains("NotePaletteRepair"),
+            "load-time palette fill persists without a MarkChanged remesh storm");
+        c.Eq(2, LodPipeline.PaletteRepairRemeshPerTick,
+            "palette repair remeshes at most two sections per tick");
 
         string mesher = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Lod", "LodMesher.cs"));

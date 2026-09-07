@@ -802,6 +802,7 @@ public class LodPipeline
         long t0 = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         long mark = t0;
         AgentTickStep("tick-install-enter", t0, ref mark, storageThread?.LoadResults.Count ?? 0, ExploreBake.PendingCount);
+        paletteRemeshLeft = PaletteRepairRemeshPerTick;
         InstallLoadedSections();
         AgentTickStep("tick-install-exit", t0, ref mark, storageThread?.LoadResults.Count ?? 0, ExploreBake.PendingCount);
         ScheduleCaptures();
@@ -870,8 +871,17 @@ public class LodPipeline
 
     const int InstallsPerTick = 8;
     const double InstallBudgetMs = 2.0;
+    /// <summary>
+    /// Load-time no-colour palette fill used to MarkChanged every section (neighbor
+    /// remesh + mip). First join of a large cache (~3419 entries) stormed the mesh
+    /// queue. Persist every repair; remesh at most this many sections per tick.
+    /// First draw of unrepaired-GPU sections still reads the in-RAM palette.
+    /// </summary>
+    internal const int PaletteRepairRemeshPerTick = 2;
     static readonly long InstallBudgetTicks =
         (long)(System.Diagnostics.Stopwatch.Frequency * InstallBudgetMs / 1000.0);
+
+    int paletteRemeshLeft = PaletteRepairRemeshPerTick;
 
     /// <summary>
     /// Adopt sections the storage thread finished reading. Cheap: the decompress
@@ -906,10 +916,7 @@ public class LodPipeline
             // rest of the world's life. This is the only reason a read marks a section
             // dirty, and it stops as soon as the cache is clean.
             if (repaired > 0)
-            {
-                PaletteEntriesRepaired += repaired;
-                World.MarkChanged(result.Key);
-            }
+                NotePaletteRepair(result.Key, repaired);
             installed++;
         }
     }
@@ -966,11 +973,17 @@ public class LodPipeline
     {
         int repaired = 0;
         AfterSectionLoaded(key, section, ref repaired);
-        if (repaired > 0)
-        {
-            PaletteEntriesRepaired += repaired;
-            World.MarkChanged(key);
-        }
+        NotePaletteRepair(key, repaired);
+    }
+
+    void NotePaletteRepair(long key, int repaired)
+    {
+        if (repaired <= 0) return;
+        PaletteEntriesRepaired += repaired;
+        World.SaveDirty.Add(key);
+        if (paletteRemeshLeft <= 0) return;
+        World.RequestGpuSwap(key);
+        paletteRemeshLeft--;
     }
 
     // ---- Capture scheduling (world thread gathers refs, worker reads blocks) ----

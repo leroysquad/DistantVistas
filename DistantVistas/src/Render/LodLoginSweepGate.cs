@@ -11,13 +11,27 @@ public static class LodLoginSweepGate
 {
     public readonly record struct Result(bool RunSweep, string Reason);
 
+    /// <summary>
+    /// Leftover ThinCapture / empty-mesh drip is post-login frontier work.
+    /// More than this many FindMisses (or unfilled gaps) is not "complete":
+    /// force a scout overlay instead of skipping with a complete claim.
+    /// 122-gap playtest skips were the false-complete case.
+    /// </summary>
+    public const int MaxSkipMisses = 32;
+
+    public const int MaxSkipUnfilledGaps = 32;
+
+    public static bool AllowsInWindowSkip(int missCount, int unfilledGaps) =>
+        missCount <= MaxSkipMisses && unfilledGaps <= MaxSkipUnfilledGaps;
+
     public static Result Decide(
         ICoreClientAPI capi,
         LodWorld world,
         LodPipeline pipeline,
         IList<Block> blocks,
         Block? plantTintFallback,
-        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf)
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
+        int unfilledGaps = 0)
     {
         string worldId = LodWorldKey.For(capi.World);
         int visited = LodLoginSweep.VisitedL0Keys(world).Count();
@@ -29,7 +43,14 @@ public static class LodLoginSweepGate
             // now skip) must not re-wedge on next join. Drop the leftover pause when
             // a successful in-window complete stamp would skip the overlay.
             LodLoginSweepComplete? completeForResume = LodLoginSweepComplete.TryLoad(capi);
-            if (ShouldDropLeftoverResume(capi, completeForResume, worldId, visited))
+            int resumeMisses = 0;
+            if (completeForResume != null)
+            {
+                resumeMisses = LodLoginBakeAudit.FindMisses(
+                    world, pipeline, blocks, plantTintFallback, untintedOf).Count;
+            }
+            if (ShouldDropLeftoverResume(
+                    capi, completeForResume, worldId, visited, resumeMisses, unfilledGaps))
             {
                 LodLoginSweepResume.Delete(capi);
                 return LogDecide(capi, world, blocks, completeForResume, visited, new Result(false,
@@ -60,9 +81,13 @@ public static class LodLoginSweepGate
         if (expire != null)
             return LogDecide(capi, world, blocks, complete, visited, new Result(true, expire));
 
-        // Prefer skip when a successful sweep is still in-window and the canvas did not grow —
-        // even if FindMisses reports leftovers. User intent: do not re-canvas the same world
-        // within 30 in-game days or 30 real days of the stamped first day. Never skip across worlds (0.8.24).
+        List<LodLoginBakeAudit.Miss> misses = LodLoginBakeAudit.FindMisses(
+            world, pipeline, blocks, plantTintFallback, untintedOf);
+        int missCount = misses.Count;
+
+        // Prefer skip when a successful sweep is still in-window and the canvas did not grow.
+        // Small leftover counts stay frontier drip. Large FindMisses / unfilled gaps
+        // force a scout fill — do not claim "complete".
         if (complete.VisitedKeyCount >= visited)
         {
             if (complete.WindowStartedUtcMs <= 0)
@@ -70,15 +95,26 @@ public static class LodLoginSweepGate
                 complete.WindowStartedUtcMs = LodLoginSweepWindow.NowUtcMs();
                 complete.Save(capi);
             }
+
+            if (!AllowsInWindowSkip(missCount, unfilledGaps))
+            {
+                return LogDecide(capi, world, blocks, complete, visited, new Result(true,
+                    $"{missCount} visited region(s) still incomplete (in-window skip blocked; {unfilledGaps} unfilled gaps)"));
+            }
+
+            if (missCount > 0 || unfilledGaps > 0)
+            {
+                return LogDecide(capi, world, blocks, complete, visited, new Result(false,
+                    $"in-window skip; {missCount} deferred incomplete region(s), {unfilledGaps} unfilled gaps (frontier drip)"));
+            }
+
             return LogDecide(capi, world, blocks, complete, visited, new Result(false,
                 "visited canvas complete within 30-day window (skip re-canvas)"));
         }
 
-        List<LodLoginBakeAudit.Miss> misses = LodLoginBakeAudit.FindMisses(
-            world, pipeline, blocks, plantTintFallback, untintedOf);
-        if (misses.Count > 0)
+        if (missCount > 0)
             return LogDecide(capi, world, blocks, complete, visited,
-                new Result(true, $"{misses.Count} visited region(s) still incomplete"));
+                new Result(true, $"{missCount} visited region(s) still incomplete"));
 
         if (complete.VisitedKeyCount < visited)
             return LogDecide(capi, world, blocks, complete, visited,
@@ -91,15 +127,16 @@ public static class LodLoginSweepGate
     /// <summary>
     /// True when a leftover Esc-paused resume should be discarded instead of
     /// resumed: a successful complete stamp for this world is still in the
-    /// 30-day / month window and the visited canvas has not grown. Used so a
-    /// paint-revision teleport pause (or any pass the gate would now skip)
-    /// cannot re-wedge on the next join.
+    /// 30-day / month window, the visited canvas has not grown, and leftover
+    /// misses/gaps are under the in-window skip threshold.
     /// </summary>
     static bool ShouldDropLeftoverResume(
         ICoreClientAPI capi,
         LodLoginSweepComplete? complete,
         string worldId,
-        int visited)
+        int visited,
+        int missCount,
+        int unfilledGaps)
     {
         if (complete == null
             || string.IsNullOrEmpty(complete.WorldId)
@@ -107,7 +144,9 @@ public static class LodLoginSweepGate
             return false;
         if (LodLoginSweepWindow.RecaptureReason(capi.World, complete) != null)
             return false;
-        return complete.VisitedKeyCount >= visited;
+        if (complete.VisitedKeyCount < visited)
+            return false;
+        return AllowsInWindowSkip(missCount, unfilledGaps);
     }
 
     // #region agent log
