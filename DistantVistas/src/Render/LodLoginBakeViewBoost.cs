@@ -58,11 +58,25 @@ public sealed class LodLoginBakeViewBoost
     {
         get
         {
-            // Spawn-centered capture toward Farseer onset (gray tent + black tips),
-            // not the 750-block graphics hold and not a void band past the skyline.
+            // Capture sweep of columns scouts already streamed, out to Farseer
+            // onset (gray tent + black tips). Does not tessellate vanilla that far.
             int blocks = SweepVisitRadiusBlocks;
             int cs = GlobalConstants.ChunkSize;
             return Math.Max(4, (int)Math.Ceiling(blocks / (double)cs) + 2);
+        }
+    }
+
+    /// <summary>
+    /// Vanilla SetChunkColumnVisible around the real player during overlay.
+    /// The 750-hold disk keeps spawn-local chunks solid. The FlagBaked 4075 disk
+    /// is scout visit coverage, not a 4 km tessellation storm.
+    /// </summary>
+    public int SpawnStreamRadiusChunks
+    {
+        get
+        {
+            int cs = GlobalConstants.ChunkSize;
+            return Math.Max(4, (int)Math.Ceiling(SweepBoostViewDistanceBlocks / (double)cs) + 2);
         }
     }
 
@@ -78,9 +92,8 @@ public sealed class LodLoginBakeViewBoost
     {
         get
         {
-            // Spawn-centered stream to Farseer onset + 700. Clamping to the
-            // 750-block graphics hold left a thin ~768-block ring and a white
-            // join in front of the gray/black silhouette.
+            // Scout ring clamp / visit onset. Stream to Farseer onset + 700 so
+            // local scout rings do not grow past the silhouette into empty sky.
             int blocks = SweepVisitRadiusBlocks;
             int cs = GlobalConstants.ChunkSize;
             return Math.Max(4, (int)Math.Ceiling(blocks / (double)cs) + 2);
@@ -277,6 +290,9 @@ public sealed class LodLoginBakeViewBoost
         }
 
         ApplySavedPlayerView();
+        renderer.OverdrawStart = savedOverdrawStart;
+        renderer.FarViewDistanceCap = savedFarViewDistanceCap;
+        try { renderer.ApplyZFar(); } catch { }
     }
 
     void CapturePlayerView(IWorldPlayerData data, int clientNow, int approvedNow)

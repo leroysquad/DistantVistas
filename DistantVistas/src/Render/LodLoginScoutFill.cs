@@ -13,7 +13,7 @@ namespace DistantVistas;
 /// </summary>
 public sealed class LodLoginScoutFill
 {
-    public const int MaxConcurrent = 16;
+    public const int MaxConcurrent = 6;
     public const int MaxWaitTicks = 400;
     public const int MaxCaptureWaitTicks = 80;
     public const int MaxMeshWaitTicks = 120;
@@ -23,11 +23,10 @@ public sealed class LodLoginScoutFill
     public const int RevealGrowPerTick = 4;
     /// <summary>
     /// Local streamed neighbourhood around a scout/visit cell (chunks).
-    /// Spawn-centered grow covers HorizonDrawDistance (Farseer gray tent +
-    /// black tips). Growing this to the full onset disk would request columns
-    /// past that skyline into empty sky.
+    /// Spawn-centered vanilla stream stays at the 750-hold so FPS does not
+    /// tessellate 4 km of real chunks. FlagBaked coverage is the visit disk.
     /// </summary>
-    public const int LocalVisitRevealChunks = 16;
+    public const int LocalVisitRevealChunks = 8;
 
     readonly LodScoutEntity?[] slots = new LodScoutEntity[MaxConcurrent];
     int liveCount;
@@ -78,7 +77,9 @@ public sealed class LodLoginScoutFill
         FinishedThisTick = 0;
         LastFinishedKey = null;
         var ready = new List<long>(MaxConcurrent);
-        int targetCap = Math.Max(ChunkVisibleRadius, chunkVisibleTarget);
+        int targetCap = Math.Min(
+            LocalVisitRevealChunks,
+            Math.Max(ChunkVisibleRadius, chunkVisibleTarget));
 
         for (int i = 0; i < slots.Length; i++)
         {
@@ -101,7 +102,7 @@ public sealed class LodLoginScoutFill
             HoldViewer(scout);
 
             int dim = capi.World.Player.Entity.Pos.Dimension;
-            int target = ClampReveal(scout, pickupX, pickupZ, onsetChunks, targetCap);
+            int target = Math.Min(LocalVisitRevealChunks, ClampReveal(scout, pickupX, pickupZ, onsetChunks, targetCap));
             GrowReveal(capi, scout, dim, target);
 
             if (scout.Current == LodScoutEntity.Phase.WaitChunks)
@@ -109,7 +110,9 @@ public sealed class LodLoginScoutFill
                 int cx = scout.Cx;
                 int cz = scout.Cz;
                 if (scout.Ticks % 2 == 0)
-                    pipeline.SweepLoadedColumns(cx, cz, SweepRadiusChunks, forceRecapture: true, rowsPerCall: SweepRowsPerCall);
+                    pipeline.SweepLoadedColumns(
+                        cx, cz, SweepRadiusChunks, forceRecapture: false,
+                        rowsPerCall: SweepRowsPerCall, lane: LodPipeline.SweepLaneScout);
 
                 bool loaded = LodLoginSweep.AllMapChunksLoaded(capi.World.BlockAccessor, key);
                 if (!loaded)
@@ -121,7 +124,9 @@ public sealed class LodLoginScoutFill
                     continue;
                 }
 
-                pipeline.SweepLoadedColumns(cx, cz, SweepRadiusChunks, forceRecapture: true, rowsPerCall: SweepRowsPerCall);
+                pipeline.SweepLoadedColumns(
+                    cx, cz, SweepRadiusChunks, forceRecapture: false,
+                    rowsPerCall: SweepRowsPerCall, lane: LodPipeline.SweepLaneScout);
                 pipeline.QueueL0SectionForce(key);
                 scout.Current = LodScoutEntity.Phase.Capture;
                 scout.Ticks = 0;
@@ -133,7 +138,9 @@ public sealed class LodLoginScoutFill
                 int cx = scout.Cx;
                 int cz = scout.Cz;
                 if (scout.Ticks % 2 == 0)
-                    pipeline.SweepLoadedColumns(cx, cz, SweepRadiusChunks, forceRecapture: true, rowsPerCall: SweepRowsPerCall);
+                    pipeline.SweepLoadedColumns(
+                        cx, cz, SweepRadiusChunks, forceRecapture: false,
+                        rowsPerCall: SweepRowsPerCall, lane: LodPipeline.SweepLaneScout);
 
                 if (!pipeline.IsL0SectionCaptureIdle(key)
                     && scout.Ticks < MaxCaptureWaitTicks)
@@ -232,7 +239,9 @@ public sealed class LodLoginScoutFill
         slots[index] = scout;
         liveCount = CountLive();
         int dim = capi.World.Player.Entity.Pos.Dimension;
-        int radius = ClampReveal(scout, pickupX, pickupZ, onsetChunks, targetCap);
+        int radius = Math.Min(
+            LocalVisitRevealChunks,
+            ClampReveal(scout, pickupX, pickupZ, onsetChunks, targetCap));
         LodLoginBakePlayerMove.RequestChunkColumnsVisible(capi, x, z, dim, ChunkVisibleRadius);
         LodScoutHostSystem.ClientInstance?.RequestUp(key, scout.Cx, scout.Cz, radius, dim, x, y, z);
     }

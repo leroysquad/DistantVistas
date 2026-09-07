@@ -478,7 +478,9 @@ public static class LoginSweepChecks
         c.True(bake.Contains("GrowRevealAround(key)"),
             "login bake grows SetChunkColumnVisible rings at the scout stop (player stays)");
         c.True(bake.Contains("GrowRevealAroundSpawn()"),
-            "login bake grows a spawn-centered ring to Farseer onset + 700");
+            "login bake grows a spawn-centered vanilla stream for spawn-solid land");
+        c.True(bake.Contains("viewBoost.SpawnStreamRadiusChunks"),
+            "spawn vanilla stream stays at the 750-hold, not a 4 km tessellation disk");
         c.True(bake.Contains("SweepColumnsAroundSpawn()"),
             "login bake captures loaded columns across the onset disk, not only the current stop");
         c.True(bake.Contains("SweepColumnsAround(key)"),
@@ -525,6 +527,10 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginScoutFill.cs"));
         c.True(scoutFill.Contains("RequestChunkColumnRing"),
             "scouts grow streamed rings without moving the player");
+        c.True(!scoutFill.Contains("forceRecapture: true"),
+            "scouts do not force-recapture every tick (remesh storm)");
+        c.True(scoutFill.Contains("LodPipeline.SweepLaneScout"),
+            "scout neighbourhood sweep does not share the spawn-disk row cursor");
         c.True(scoutFill.Contains("RevealGrowPerTick"),
             "scout ring growth is staggered");
         c.True(scoutFill.Contains("Do not bake missing-tex white"),
@@ -557,9 +563,13 @@ public static class LoginSweepChecks
             "LOD renderer exposes drawable-mesh wait so scouts do not despawn on a hole");
         c.True(scoutFill.Contains("RequestUp(key, scout.Cx, scout.Cz, radius, dim, x, y, z)"),
             "client sends visit-cell XYZ so the server spawns the viewer on that column");
-        c.Eq(16, LodLoginScoutFill.MaxConcurrent, "more scouts fill the onset disk without hopping the player");
-        c.Eq(16, LodLoginScoutFill.LocalVisitRevealChunks,
+        c.Eq(6, LodLoginScoutFill.MaxConcurrent, "a handful of scouts cover more than hops without 16 far tessellation centers");
+        c.Eq(8, LodLoginScoutFill.LocalVisitRevealChunks,
             "scouts stream a local neighbourhood around visit cells");
+        c.Eq(LodLoginScoutFill.LocalVisitRevealChunks, LodScoutHostSystem.MaxHoldRadiusChunks,
+            "server KeepLoaded radius matches the local scout neighbourhood");
+        c.True(LodScoutHostSystem.MaxConcurrentHolds >= LodLoginScoutFill.MaxConcurrent,
+            "server hold cap is at least client concurrent scouts");
 
         string scoutViewer = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutViewerEntity.cs"));
@@ -600,8 +610,10 @@ public static class LoginSweepChecks
             "server teardown DespawnEntity-s leftover viewers");
         c.True(scoutHost.Contains("> 160"),
             "server rejects KeepLoaded anchors beyond the onset disk");
-        c.True(scoutHost.Contains("holds.Count >= 24"),
+        c.True(scoutHost.Contains("holds.Count >= MaxConcurrentHolds"),
             "server caps concurrent scout holds so a client cannot pin the world");
+        c.True(scoutHost.Contains("Math.Clamp(msg.Radius, 1, MaxHoldRadiusChunks)"),
+            "server KeepLoaded radius is the local neighbourhood, not the onset disk");
         string scoutJson = Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "assets", "distantvistas", "entities", "scoutviewer.json");
         c.True(File.Exists(scoutJson), "scout viewer entity json is packaged");
@@ -897,7 +909,17 @@ public static class LoginSweepChecks
         c.True(bake.Contains("PlanSeasonExpired"),
             "expired window plans a season revisit, not leftover hops only");
         c.True(bake.Contains("forceRecapture: true"),
-            "season hops recapture streamed columns");
+            "visit-cell neighbourhood recaptures streamed columns");
+        c.True(bake.Contains("forceRecapture: false"),
+            "spawn-disk sweep does not force-recapture every loaded column");
+        c.True(bake.Contains("LodPipeline.SweepLaneSpawn"),
+            "spawn-disk capture keeps its own row cursor so scout rings cannot skip spawn-local rows");
+        c.True(bake.Contains("LodPipeline.SweepLaneVisit"),
+            "visit-cell recapture is a third lane, not a reset of the spawn disk");
+        c.True(!bake.Contains("InvalidateGpuMesh"),
+            "login bake does not drop GPU meshes before swap-in");
+        c.True(bake.Contains("InvalidateMipAncestors(l0Key)"),
+            "visit paint remeshes parents without disposing the live mesh");
         c.True(bake.Contains("visitBakeChanged"),
             "visit bake treats FlagBaked RGB deltas as a completed stop");
 
@@ -963,7 +985,7 @@ public static class LoginSweepChecks
             "750-block hold × 4.5 + 700 is 4075 blocks (Farseer onset, not a void band)");
         c.Eq(16384, LodLoginSweepBootstrap.MaxBootstrapClassifyCells,
             "classify ceiling covers the ~12k L0 onset disk");
-        c.Eq(16, LodLoginScoutFill.LocalVisitRevealChunks,
+        c.Eq(8, LodLoginScoutFill.LocalVisitRevealChunks,
             "scouts stream a local neighbourhood around visit cells");
         c.Eq(1024, LodLoginSweepBootstrap.SpawnPriorityRadiusBlocks,
             "bootstrap visits a 1024-block spawn neighbourhood before the rim");
@@ -1188,10 +1210,14 @@ public static class LoginSweepChecks
             "visit radius is wider than the thin graphics hold");
         c.True(viewBoost.Contains("SweepVisitRadiusBlocks"),
             "ChunkSweepRadiusChunks uses SweepVisitRadiusBlocks toward onset");
+        c.True(viewBoost.Contains("SpawnStreamRadiusChunks"),
+            "vanilla stream around the player is the 750-hold disk");
         c.False(viewBoost.Contains("Math.Min(vd, SweepBoostViewDistanceBlocks)"),
-            "login chunk-visible radius is not clamped to the 750 graphics hold");
+            "visit/scout clamp is not a leftover 750 Math.Min");
         c.True(viewBoost.Contains("Stream to Farseer onset + 700"),
-            "login SetChunkColumnVisible radius is the onset disk");
+            "scout ring clamp still uses the FlagBaked onset disk");
+        c.True(viewBoost.Contains("renderer.OverdrawStart = savedOverdrawStart"),
+            "reassert restores overlay overdraw, not only the slider");
         c.Eq(1000, LodLoginBakeViewBoost.LegacySweepHoldBlocks,
             "old 1000-block hold is leftover, never a restore target");
         c.True(LodLoginBakeViewBoost.IsSweepHoldValue(750), "750 is the scan hold");

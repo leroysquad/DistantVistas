@@ -25,6 +25,11 @@ public sealed class LodScoutHostSystem : ModSystem
 
     public static LodScoutHostSystem? ClientInstance { get; private set; }
 
+    /// <summary>Client MaxConcurrent plus a retry slot. Far KeepLoaded spam is refused past this.</summary>
+    public const int MaxConcurrentHolds = 8;
+    /// <summary>KeepLoaded Chebyshev radius. Matches scout local visit neighbourhood, not the 4075 disk.</summary>
+    public const int MaxHoldRadiusChunks = 8;
+
     public override double ExecuteOrder() => 0.05;
 
     public override bool ShouldLoad(EnumAppSide forSide) => true;
@@ -136,7 +141,7 @@ public sealed class LodScoutHostSystem : ModSystem
     void HoldAnchor(IServerPlayer player, ScoutAnchorUp msg)
     {
         if (sapi == null) return;
-        int radius = Math.Clamp(msg.Radius, 1, 24);
+        int radius = Math.Clamp(msg.Radius, 1, MaxHoldRadiusChunks);
         int dim = msg.Dimension;
         try
         {
@@ -155,7 +160,7 @@ public sealed class LodScoutHostSystem : ModSystem
             holdsByPlayer[player.PlayerUID] = holds;
         }
 
-        if (holds.Count >= 24 && !holds.ContainsKey(msg.Key))
+        if (holds.Count >= MaxConcurrentHolds && !holds.ContainsKey(msg.Key))
             return;
 
         var hold = new ScoutHold { Key = msg.Key, Cx = msg.Cx, Cz = msg.Cz, Radius = radius, Dimension = dim };
@@ -247,7 +252,7 @@ public sealed class LodScoutHostSystem : ModSystem
     void ReleaseHoldColumns(IServerPlayer player, ScoutHold hold, Dictionary<long, ScoutHold>? stillNeeded)
     {
         if (sapi == null) return;
-        int pcx = 0, pcz = 0, keepR = 8;
+        int pcx = 0, pcz = 0, keepR = MaxHoldRadiusChunks;
         try
         {
             EntityPos pos = player.Entity.Pos;
@@ -260,7 +265,7 @@ public sealed class LodScoutHostSystem : ModSystem
                 try { vd = player.WorldData.DesiredViewDistance; } catch { }
             }
             if (vd <= 0) vd = 256;
-            keepR = Math.Max(8, (int)Math.Ceiling(vd / (double)GlobalConstants.ChunkSize) + 2);
+            keepR = Math.Max(MaxHoldRadiusChunks, (int)Math.Ceiling(vd / (double)GlobalConstants.ChunkSize) + 2);
         }
         catch { }
 

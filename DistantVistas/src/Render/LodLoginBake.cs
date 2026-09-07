@@ -943,7 +943,8 @@ public sealed class LodLoginBake
         int cx = (int)Math.Floor(x / GlobalConstants.ChunkSize);
         int cz = (int)Math.Floor(z / GlobalConstants.ChunkSize);
         pipeline.SweepLoadedColumns(
-            cx, cz, LodLoginScoutFill.SweepRadiusChunks, forceRecapture: true, rowsPerCall: SweepRowsPerCall);
+            cx, cz, LodLoginScoutFill.SweepRadiusChunks, forceRecapture: true,
+            rowsPerCall: SweepRowsPerCall, lane: LodPipeline.SweepLaneVisit);
     }
 
     /// <summary>
@@ -979,8 +980,7 @@ public sealed class LodLoginBake
         seasonSamples.RecordSection(l0Key, section);
 
         world.MarkChanged(l0Key);
-        pipeline.InvalidateGpuMesh?.Invoke(l0Key);
-        world.RenderDirty.Add(l0Key);
+        pipeline.InvalidateMipAncestors(l0Key);
         pipeline.DrainLoginPersistence(1);
     }
 
@@ -1092,7 +1092,7 @@ public sealed class LodLoginBake
     void GrowRevealAroundSpawn()
     {
         if (!restoreCaptured) return;
-        int target = viewBoost.ChunkVisibleRadius;
+        int target = viewBoost.SpawnStreamRadiusChunks;
         if (spawnRevealRadius >= target) return;
         int before = spawnRevealRadius;
         spawnRevealRadius = Math.Min(target, spawnRevealRadius + RevealGrowPerTick);
@@ -1106,7 +1106,9 @@ public sealed class LodLoginBake
         if (!restoreCaptured) return;
         int cx = (int)Math.Floor(restorePos.X / GlobalConstants.ChunkSize);
         int cz = (int)Math.Floor(restorePos.Z / GlobalConstants.ChunkSize);
-        pipeline.SweepLoadedColumns(cx, cz, viewBoost.ChunkSweepRadiusChunks, forceRecapture: true, rowsPerCall: SweepRowsPerCall);
+        pipeline.SweepLoadedColumns(
+            cx, cz, viewBoost.ChunkSweepRadiusChunks, forceRecapture: false,
+            rowsPerCall: SweepRowsPerCall, lane: LodPipeline.SweepLaneSpawn);
     }
 
     List<long> CollectBatchBakeKeys(long primaryKey)

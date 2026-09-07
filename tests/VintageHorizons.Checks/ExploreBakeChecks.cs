@@ -38,6 +38,10 @@ public static class ExploreBakeChecks
             "visit bake still walks parent keys after L0 bake");
         c.True(pipeline.Contains("ProcessPropagation(propagationBudget, World.RequestGpuSwap)"),
             "play remip keeps the old GPU mesh until the new one uploads");
+        c.True(pipeline.Contains("ProcessPropagation(budget, World.RequestGpuSwap)"),
+            "login mip drain keeps GPU meshes until swap-in (does not punch holes)");
+        c.True(pipeline.Contains("SweepLaneSpawn") && pipeline.Contains("SweepLaneScout"),
+            "overlay spawn-disk sweep and scout rings keep separate row cursors");
         c.True(pipeline.Contains("World.RequestGpuSwap"),
             "walk-time bake swaps GPU meshes instead of disposing first");
 

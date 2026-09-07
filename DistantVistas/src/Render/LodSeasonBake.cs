@@ -1345,7 +1345,6 @@ public static class LodSeasonBake
             paletteChanges += n;
             changedSections++;
             world.MarkChanged(key);
-            pipeline.InvalidateGpuMesh?.Invoke(key);
             pipeline.InvalidateMipAncestors(key);
             world.RenderDirty.Add(key);
         }
