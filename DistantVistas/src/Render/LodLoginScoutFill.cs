@@ -45,6 +45,8 @@ public sealed class LodLoginScoutFill
     public const int MapChunksPerL0 = 4;
     /// <summary>Max scouts on cold-near annulus keys while paint starves (half the fleet).</summary>
     public static int MaxColdNearLiveWhenStarving(int maxConcurrent) => maxConcurrent / 2;
+    /// <summary>While paint starves, only one cold-near scout may stream map chunks at a time.</summary>
+    public const int MaxColdNearWaitChunksWhenStarving = 1;
     public const int ChunkVisibleRadius = 2;
     public const int SweepRadiusChunks = 2;
     public const int SweepRowsPerCall = 1;
@@ -74,6 +76,8 @@ public sealed class LodLoginScoutFill
     bool chunkPressure;
     int warmHoldBlocks = LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks;
     int liveCount;
+    double tickPickupX;
+    double tickPickupZ;
 
     public void SetPaintStarving(bool starving) => paintStarving = starving;
 
@@ -179,6 +183,8 @@ public sealed class LodLoginScoutFill
         int warmHoldRadiusBlocks)
     {
         warmHoldBlocks = Math.Max(LodSection.SectionBlocks, warmHoldRadiusBlocks);
+        tickPickupX = pickupX;
+        tickPickupZ = pickupZ;
         FinishedThisTick = 0;
         LastFinishedKey = null;
         readyScratch.Clear();
@@ -522,6 +528,18 @@ public sealed class LodLoginScoutFill
                 continue;
             }
 
+            if (paintStarving && coldNear
+                && CountColdNearWaitChunks(capi, pipeline, pickupX, pickupZ, warmHoldRadiusBlocks)
+                    >= MaxColdNearWaitChunksWhenStarving)
+            {
+                if (fallback < 0 || score > fallbackScore)
+                {
+                    fallback = i;
+                    fallbackScore = score;
+                }
+                continue;
+            }
+
             if (!paintStarving && !chunkPressure)
             {
                 if (nearWaitChunksLive >= MaxNearWaitChunksLive && near)
@@ -578,6 +596,16 @@ public sealed class LodLoginScoutFill
     static int CaptureStallCooldownTicks(int captureRetries) =>
         Math.Min(32, MaxWaitHotKeyCooldown + captureRetries * captureRetries * 2);
 
+    public static bool IsColdNearVisitPublic(
+        ICoreClientAPI capi,
+        long key,
+        double pickupX,
+        double pickupZ,
+        int warmHoldRadiusBlocks,
+        int loadedChunks,
+        int residentCols) =>
+        IsColdNearVisit(capi, key, pickupX, pickupZ, warmHoldRadiusBlocks, loadedChunks, residentCols);
+
     static bool IsColdNearVisit(
         ICoreClientAPI capi,
         long key,
@@ -616,6 +644,33 @@ public sealed class LodLoginScoutFill
                 n++;
         }
         return n;
+    }
+
+    int CountColdNearWaitChunks(
+        ICoreClientAPI capi,
+        LodPipeline pipeline,
+        double pickupX,
+        double pickupZ,
+        int warmHoldRadiusBlocks)
+    {
+        var ba = capi.World.BlockAccessor;
+        int n = 0;
+        for (int i = 0; i < slots.Length; i++)
+        {
+            LodScoutEntity? scout = slots[i];
+            if (scout is not { Live: true, Current: LodScoutEntity.Phase.WaitChunks }) continue;
+            int loaded = CountLoadedMapChunks(ba, scout.Key);
+            int resident = ResidentCaptureCols(pipeline, scout.Key);
+            if (IsColdNearVisit(capi, scout.Key, pickupX, pickupZ, warmHoldRadiusBlocks, loaded, resident))
+                n++;
+        }
+        return n;
+    }
+
+    public bool TryGetLiveSlot(int index, out LodScoutEntity? scout)
+    {
+        scout = index >= 0 && index < slots.Length ? slots[index] : null;
+        return scout is { Live: true };
     }
 
     /// <summary>L0 cells in a filled disk at the overlay stream-hold radius.</summary>
@@ -917,6 +972,12 @@ public sealed class LodLoginScoutFill
         bool near = scout.WaitForMesh;
         int ticks = scout.Ticks;
         long key = scout.Key;
+        if (reason is "captureStall" or "maxWait")
+        {
+            LodScoutSeqDiag.LogStallForensics(
+                index, key, reason, scout, capi, pipeline,
+                tickPickupX, tickPickupZ, warmHoldBlocks, renderer);
+        }
         LodScoutSeqDiag.LogRelease(index, key, reason, ticks, near, scout.WaitForMesh, renderer, pipeline);
         LodScoutHostSystem.ClientInstance?.RequestDown(scout.Key);
         LodScoutViewerEntity.DespawnOne(capi.World, scout.Viewer);

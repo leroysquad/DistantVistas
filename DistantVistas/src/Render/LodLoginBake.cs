@@ -804,6 +804,9 @@ public sealed class LodLoginBake
             finished, total, capi, pipeline, pending, pickupX, pickupZ,
             viewBoost.SweepBoostViewDistanceBlocks, waitChunksLive, captureLive,
             scoutFill.LiveCount, scoutReady.Count);
+        LodScoutSeqDiag.MaybeStalledLiveProbe(
+            finished, capi, pipeline, scoutFill, pickupX, pickupZ,
+            viewBoost.SweepBoostViewDistanceBlocks, paintStarveTicks, scoutReady.Count);
         PinPickupPose();
         for (int i = 0; i < ready.Count; i++)
             scoutReady.Enqueue(ready[i]);

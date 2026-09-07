@@ -38,6 +38,8 @@ public static class LodScoutSeqDiag
     static readonly Dictionary<long, long> lastReleaseMsByKey = new();
     static readonly Dictionary<int, (LodScoutEntity.Phase Phase, long Ms)> lastPhaseLogBySlot = new();
     static readonly Dictionary<long, long> lastHostUpMsByKey = new();
+    static readonly Dictionary<long, string> lastHostOutcomeByKey = new();
+    static readonly Dictionary<long, int> stallCountByKey = new();
 
     static readonly CultureInfo Inv = CultureInfo.InvariantCulture;
 
@@ -60,6 +62,9 @@ public static class LodScoutSeqDiag
         lastReleaseMsByKey.Clear();
         lastPhaseLogBySlot.Clear();
         lastHostUpMsByKey.Clear();
+        lastHostOutcomeByKey.Clear();
+        stallCountByKey.Clear();
+        lastStalledLiveMs = 0;
     }
 
     public static void SetOverlayActive(bool active) => overlayActive = active;
@@ -181,6 +186,137 @@ public static class LodScoutSeqDiag
             LogThrash(slot, key, "short-lived", ticksLived, near, waitForMesh,
                 "{\"ticksLived\":" + ticksLived + ",\"reason\":\"" + reason + "\"}");
         }
+
+        if (reason is "captureStall" or "maxWait")
+        {
+            stallCountByKey.TryGetValue(key, out int prior);
+            stallCountByKey[key] = prior + 1;
+            if (prior >= 2)
+            {
+                LogThrash(slot, key, "key-thrash", ticksLived, near, waitForMesh,
+                    "{\"stallCount\":" + (prior + 1) + ",\"reason\":\"" + reason + "\"}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Per-slot stall forensics: distance, map residency, reveal, host outcome (H-SCOUT-SEQ).
+    /// </summary>
+    public static void LogStallForensics(
+        int slot,
+        long key,
+        string reason,
+        LodScoutEntity scout,
+        ICoreClientAPI capi,
+        LodPipeline pipeline,
+        double pickupX,
+        double pickupZ,
+        int warmHoldBlocks,
+        LodTerrainRenderer? renderer)
+    {
+        var (vx, _, vz) = LodLoginSweep.VisitPosition(capi.World, key);
+        double dx = vx - pickupX;
+        double dz = vz - pickupZ;
+        int distBlocks = (int)Math.Round(Math.Sqrt(dx * dx + dz * dz));
+        int loaded = LodLoginSweep.CountLoadedMapChunks(capi.World.BlockAccessor, key);
+        int resident = pipeline.World.HasDataSet.Contains(key)
+            ? LodLoginScoutFill.ResidentFastHandoffCols
+            : 0;
+        bool coldNear = LodLoginScoutFill.IsColdNearVisitPublic(
+            capi, key, pickupX, pickupZ, warmHoldBlocks, loaded, resident);
+        stallCountByKey.TryGetValue(key, out int stallCount);
+        lastHostOutcomeByKey.TryGetValue(key, out string? hostOutcome);
+        if (hostOutcome == null) hostOutcome = "none";
+
+        Write("LodLoginScoutFill.ReleaseSlot", "stall-forensics",
+            "{\"slot\":" + slot
+            + ",\"key\":" + key
+            + ",\"reason\":\"" + reason + "\""
+            + ",\"distBlocks\":" + distBlocks
+            + ",\"loadedMapChunks\":" + loaded
+            + ",\"residentCols\":" + resident
+            + ",\"coldNear\":" + Bool(coldNear)
+            + ",\"revealRadius\":" + scout.RevealRadius
+            + ",\"holdRadius\":" + scout.HoldRadius
+            + ",\"phase\":\"" + PhaseName(scout.Current) + "\""
+            + ",\"ticksInPhase\":" + scout.Ticks
+            + ",\"hostOutcome\":\"" + hostOutcome + "\""
+            + ",\"stallCount\":" + stallCount
+            + ",\"waitForMesh\":" + Bool(scout.WaitForMesh)
+            + ",\"warmHoldBlocks\":" + warmHoldBlocks
+            + "}");
+    }
+
+    static long lastStalledLiveMs;
+
+    /// <summary>
+    /// Aggregate live scouts in cliff band when paint starves — proves "can't enter next square".
+    /// </summary>
+    public static void MaybeStalledLiveProbe(
+        int finished,
+        ICoreClientAPI capi,
+        LodPipeline pipeline,
+        LodLoginScoutFill scoutFill,
+        double pickupX,
+        double pickupZ,
+        int warmHoldBlocks,
+        int paintStarveTicks,
+        int scoutReady)
+    {
+        if (!overlayActive) return;
+        if (finished < 320 || finished > 400) return;
+        if (paintStarveTicks < 8) return;
+        long now = NowMs();
+        if (lastStalledLiveMs != 0 && now - lastStalledLiveMs < 5000) return;
+        lastStalledLiveMs = now;
+
+        var ba = capi.World.BlockAccessor;
+        var sb = new StringBuilder(512);
+        sb.Append("{\"finished\":").Append(finished)
+            .Append(",\"paintStarveTicks\":").Append(paintStarveTicks)
+            .Append(",\"scoutReady\":").Append(scoutReady)
+            .Append(",\"slots\":[");
+        bool first = true;
+        int coldNearLive = 0;
+        int zeroLoadedLive = 0;
+        for (int i = 0; i < LodLoginScoutFill.MaxConcurrent; i++)
+        {
+            if (!scoutFill.TryGetLiveSlot(i, out LodScoutEntity? scout) || scout == null)
+                continue;
+            int loaded = LodLoginSweep.CountLoadedMapChunks(ba, scout.Key);
+            int resident = pipeline.World.HasDataSet.Contains(scout.Key)
+                ? LodLoginScoutFill.ResidentFastHandoffCols
+                : 0;
+            bool coldNear = LodLoginScoutFill.IsColdNearVisitPublic(
+                capi, scout.Key, pickupX, pickupZ, warmHoldBlocks, loaded, resident);
+            if (coldNear) coldNearLive++;
+            if (loaded == 0) zeroLoadedLive++;
+            lastHostOutcomeByKey.TryGetValue(scout.Key, out string? hostOutcome);
+            var (vx, _, vz) = LodLoginSweep.VisitPosition(capi.World, scout.Key);
+            double dx = vx - pickupX;
+            double dz = vz - pickupZ;
+            int distBlocks = (int)Math.Round(Math.Sqrt(dx * dx + dz * dz));
+            stallCountByKey.TryGetValue(scout.Key, out int stallCount);
+            if (!first) sb.Append(',');
+            first = false;
+            sb.Append("{\"slot\":").Append(i)
+                .Append(",\"key\":").Append(scout.Key)
+                .Append(",\"phase\":\"").Append(PhaseName(scout.Current)).Append('"')
+                .Append(",\"ticks\":").Append(scout.Ticks)
+                .Append(",\"distBlocks\":").Append(distBlocks)
+                .Append(",\"loadedMapChunks\":").Append(loaded)
+                .Append(",\"revealRadius\":").Append(scout.RevealRadius)
+                .Append(",\"holdRadius\":").Append(scout.HoldRadius)
+                .Append(",\"coldNear\":").Append(Bool(coldNear))
+                .Append(",\"hostOutcome\":\"").Append(hostOutcome ?? "none").Append('"')
+                .Append(",\"stallCount\":").Append(stallCount)
+                .Append('}');
+        }
+        sb.Append("],\"coldNearLive\":").Append(coldNearLive)
+            .Append(",\"zeroLoadedLive\":").Append(zeroLoadedLive)
+            .Append('}');
+
+        Write("LodLoginScoutFill.Tick", "stalled-live-probe", sb.ToString());
     }
 
     public static void MaybeBudget(
@@ -330,6 +466,7 @@ public static class LodScoutSeqDiag
             && now - lastUp < 2000)
             return;
         lastHostUpMsByKey[key] = now;
+        lastHostOutcomeByKey[key] = capped ? "capped" : pending ? "pending" : "sent";
 
         Write("LodScoutHostSystem.RequestUp", "scout-host-up",
             "{\"key\":" + key
@@ -349,6 +486,7 @@ public static class LodScoutSeqDiag
 
     public static void LogHostHold(long key, int holdCount, int pendingUps, int forceSendQueued)
     {
+        lastHostOutcomeByKey[key] = "held";
         if (!overlayActive) return;
         long now = NowMs();
         if (lastBudgetMs != 0 && now - lastBudgetMs < BudgetIntervalMs)

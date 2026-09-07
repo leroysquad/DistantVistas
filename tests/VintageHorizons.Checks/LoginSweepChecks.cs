@@ -721,6 +721,20 @@ public static class LoginSweepChecks
                 GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
                 .Contains("warm-ring-probe"),
             "warm-ring telemetry proves cliff geometry near finished~358");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
+                .Contains("stall-forensics"),
+            "stall forensics logs distance, loaded chunks, reveal, host on captureStall/maxWait");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
+                .Contains("stalled-live-probe"),
+            "stalled-live-probe aggregates live scouts in cliff band when paint starves");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
+                .Contains("can't enter the next huge square"),
+            "walltime plan documents user hypothesis verdict");
+        c.Eq(1, LodLoginScoutFill.MaxColdNearWaitChunksWhenStarving,
+            "one cold-near WaitChunks streamer while paint starves");
         c.True(scoutFill.Contains("PendingPickScore"),
             "pending pick scores chunk residency before cold rim keys");
         c.True(scoutFill.Contains("spawnCooldown"),

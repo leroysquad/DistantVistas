@@ -253,7 +253,7 @@ Invariants unchanged: no teleports; scout viewers; exact pickup; spawn-solid 102
 | **A1** | GetColor dedup | **`BeginOverlayGetColorCache`**: cross-L0 tile+blockId+Y reuse (bit-identical to section cache); H-PAINT **`getColorHits` / `getColorMisses`** |
 | **A3** | GC hygiene | **`resumePendingScratch` / `resumeCompletedScratch`** reuse in `SaveResumeSnapshot`; overlay cache scoped lifecycle |
 
-**Optional next:** **A4** residency-ordered visit in `BudgetBootstrapVisitStops` (same stop count).
+**Optional next:** soft-release overlay (Plan B) — threshold from **N(R_hold)×f_w**, not ~600; fade cosmetic only. **Not in 1.0.38.**
 
 **Expect after 1.0.37:**
 
@@ -307,6 +307,8 @@ Filled-disk L0 count at radius R (64-block cells): **N(R) ≈ π (R/64)²**
 | **chunkPressure** | `paintStarve ∧ liveScouts>0` — any phase |
 | **A4 residency visit order** | `OrderVisitKeysByResidency` in bootstrap + pending resort every 32 starve ticks |
 | **Telemetry** | `warm-ring-probe` at finished 320–400: pending residency, annulus counts, `finishedRadiusBlocks` vs `warmHoldBlocks` |
+| **Stall forensics** | `stall-forensics` + `stalled-live-probe`: per-slot distance, loaded 0–4, reveal, host outcome, key thrash |
+| **One cold frontier** | `MaxColdNearWaitChunksWhenStarving=1` — single annulus streamer while paint starves |
 
 **Expect after 1.0.38:**
 
@@ -319,6 +321,41 @@ Filled-disk L0 count at radius R (64-block cells): **N(R) ≈ π (R/64)²**
 | `warm-ring-probe` | n/a | pending **loaded1Plus** rises; **coldNear** throttled |
 
 **Not in 1.0.38:** overlay fade / soft-release-at-N — cliff fix only. See Plan B below.
+
+### User hypothesis — “can’t enter the next huge square” (verify hard)
+
+**User intuition:** scout paints a big square, then seems unable to advance to the next one — stuck at the rim of progress.
+
+**DV mapping (not discarded — confirmed by 1.0.37):**
+
+| User sees | DV reality |
+|-----------|------------|
+| “Next huge square” | **L0 section** = 64×64 columns (4 underlying **map chunks**), not one mega-chunk |
+| “Can’t get in / load it” | Pending keys in **cold-near annulus** (750–1024 blocks): still near scouts, **0 warm map chunks** |
+| Stuck at ~358 | Warm halo exhausted at **~683 block** radius; next stops need **cold IO** the fleet never successfully resident |
+| `paintReadyQueued=0` | Slots **`captureStall`**-loop on zero-column Capture (733× in 1.0.37), not entity blocked from entering a cell |
+
+**Hypothesis verdict:** **PROVEN** (geometry + scheduling), not a scout-entity pathing bug. The scout **can** spawn at the visit cell; Capture fails because **map chunks are not loaded** for that L0 footprint while paint starves and the fleet thrashes forced Capture.
+
+**Telemetry added (runId 1038):**
+
+| Event | Fields |
+|-------|--------|
+| `stall-forensics` | On `captureStall` / `maxWait`: `distBlocks`, `loadedMapChunks` 0–4, `revealRadius`, `holdRadius`, `hostOutcome` (sent/capped/pending/held/none), `stallCount`, `coldNear` |
+| `stalled-live-probe` | Every 5s @ finished 320–400 + paintStarve≥8: per-slot phase, distance, loaded, reveal, host, `coldNearLive`, `zeroLoadedLive` |
+| `scout-thrash` / `key-thrash` | Same key respawn &lt;2s; same key ≥3 stall releases |
+| `warm-ring-probe` | Pending residency vs `finishedRadiusBlocks` vs `warmHoldBlocks` |
+| `scout-host-up` | `capped` / `pending` when server hold cap blocks KeepLoaded |
+
+**Fixes targeting this hypothesis (1.0.38):**
+
+1. Never Capture cold keys without `loadedMapChunks≥1` or resident section (stops zero-column stall)
+2. Resident handoff in Capture before stall
+3. Escalating `captureStall` cooldown + key thrash defer
+4. Cold-near fleet cap (half fleet) + **one cold-near WaitChunks streamer** (`MaxColdNearWaitChunksWhenStarving=1`)
+5. Residency-ordered pending (A4) + `chunkPressure` on any live scout while paint starves
+
+**Playtest pass criteria:** `finished` past 358; `stalled-live-probe` shows `zeroLoadedLive` falling as `loadedMapChunks` rises on annulus keys; `captureStall` ≪ `painted`; same-key `key-thrash` rare.
 
 ## Plan B — soft-release threshold (geometry, not ~600)
 
