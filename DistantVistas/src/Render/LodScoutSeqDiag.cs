@@ -244,6 +244,8 @@ public static class LodScoutSeqDiag
             + ",\"stallCount\":" + stallCount
             + ",\"waitForMesh\":" + Bool(scout.WaitForMesh)
             + ",\"warmHoldBlocks\":" + warmHoldBlocks
+            + ",\"playerAtPickup\":true"
+            + ",\"captureRequiresPlayer\":false"
             + "}");
     }
 
@@ -314,6 +316,8 @@ public static class LodScoutSeqDiag
         }
         sb.Append("],\"coldNearLive\":").Append(coldNearLive)
             .Append(",\"zeroLoadedLive\":").Append(zeroLoadedLive)
+            .Append(",\"playerAtPickup\":true")
+            .Append(",\"captureRequiresPlayer\":false")
             .Append('}');
 
         Write("LodLoginScoutFill.Tick", "stalled-live-probe", sb.ToString());
