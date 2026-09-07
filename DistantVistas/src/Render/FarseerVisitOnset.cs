@@ -7,11 +7,9 @@ using Vintagestory.API.MathTools;
 namespace DistantVistas;
 
 /// <summary>
-/// Visit-aware Farseer silhouette onset. Undiscovered land fades in near vanilla
-/// view distance (fills the sky gap at the discovery frontier). Visited / swept
-/// land stays late (HorizonDrawScale) so DV midground is not replaced by a
-/// floating rim that follows the player across land already in the capture
-/// envelope.
+/// Late-only Farseer silhouette onset. Early and late uniforms both use
+/// HorizonDrawScale so midground stays Distant Vistas. LodFrontierScout grows
+/// capture toward that rim; the visit mask remains for enrich / diagnostics.
 ///
 /// Uploads a coarse L0-section visit mask and injects uniforms into Farseer's
 /// region program after it sets farViewDistance each frame.
@@ -24,9 +22,9 @@ public static class FarseerVisitOnset
 
     /// <summary>
     /// Extra blocks past the farthest captured L0 so sparse visit stops still
-    /// suppress early onset between hops (about half a login chunk-sweep ring).
+    /// count as swept between hops (about one login chunk-sweep ring).
     /// </summary>
-    public const double EnvelopePadBlocks = 400.0;
+    public const double EnvelopePadBlocks = 1024.0;
 
     static Harmony? harmony;
     static LodWorld? world;
@@ -39,6 +37,36 @@ public static class FarseerVisitOnset
     static int lastEnvelopeBlocks = -1;
     static bool inFarseerFrame;
     static bool loggedBind;
+    // #region agent log
+    static float lastFarViewDistanceLogged;
+    static long lastGapLogMs;
+    static int gapLogCount;
+    static double debugMeshedDist;
+    static double debugCapturedDist;
+    static double debugEffFar;
+    static int lastRimDrawCount;
+
+    /// <summary>Called from LodTerrainRenderer each frame for gap diagnostics.</summary>
+    public static void DebugSetMeshDistances(double meshed, double captured, double effectiveFar)
+    {
+        debugMeshedDist = meshed;
+        debugCapturedDist = captured;
+        debugEffFar = effectiveFar;
+    }
+
+    /// <summary>DV draw-list size this frame — rim thrash probe for flicker.</summary>
+    public static void DebugSetRimDrawCount(int drawCount) => lastRimDrawCount = drawCount;
+
+    /// <summary>
+    /// Renderer-side handoff probe (does not need Farseer UniformFloat). Uses live VD.
+    /// </summary>
+    public static void LogHandoffFromRenderer(float liveVd, float desiredVd, float approvedVd)
+    {
+        if (capi == null || world == null) return;
+        Vec3d cam = capi.World.Player.Entity.CameraPos;
+        LogHandoffGap(cam, liveVd, desiredVd, approvedVd, "renderer");
+    }
+    // #endregion
 
     public static bool Active => harmony != null;
 
@@ -46,7 +74,18 @@ public static class FarseerVisitOnset
     {
         capi = api;
         world = lodWorld;
-        if (!api.ModLoader.IsModEnabled("farseer")) return;
+        // #region agent log
+        gapLogCount = 0;
+        lastGapLogMs = 0;
+        FarseerFlickerDiag.ResetSession();
+        // #endregion
+        if (!api.ModLoader.IsModEnabled("farseer"))
+        {
+            // #region agent log
+            LogBindOutcome("farseer-disabled", false);
+            // #endregion
+            return;
+        }
         if (harmony != null) return;
 
         Type? rendererType = AccessTools.TypeByName("Farseer.Client.FarRegionRenderer");
@@ -54,6 +93,9 @@ public static class FarseerVisitOnset
         if (rendererType == null || shaderBase == null)
         {
             api.Logger.Warning("Farseer visit-onset: renderer or ShaderProgramBase missing");
+            // #region agent log
+            LogBindOutcome("missing-types", false);
+            // #endregion
             return;
         }
 
@@ -64,6 +106,9 @@ public static class FarseerVisitOnset
         if (onRender == null || uniformFloat == null)
         {
             api.Logger.Warning("Farseer visit-onset: OnRenderFrame / Uniform not found");
+            // #region agent log
+            LogBindOutcome("missing-methods", false);
+            // #endregion
             return;
         }
 
@@ -77,9 +122,30 @@ public static class FarseerVisitOnset
         maskTex = new LoadedTexture(api) { Width = MaskTexels, Height = MaskTexels };
         pixels = new int[MaskTexels * MaskTexels];
         api.Logger.Notification(
-            "Farseer visit-onset on: late-only ({0:0.#}x VD); scout fills midground",
+            "Farseer visit-onset on: silhouette {0:0.#}x VD (empty-stop {1:0.#}x); scout fills midground",
+            LodCoveragePolicy.FarseerSilhouetteOnsetScale,
             LodCoveragePolicy.HorizonDrawScale);
+        // #region agent log
+        LogBindOutcome("ok", true);
+        // #endregion
     }
+
+    // #region agent log
+    static void LogBindOutcome(string reason, bool ok)
+    {
+        try
+        {
+            long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            System.IO.File.AppendAllText(
+                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                "{\"sessionId\":\"40cccb\",\"runId\":\"gap-2\",\"hypothesisId\":\"H-F\",\"location\":\"FarseerVisitOnset.Bind\",\"message\":\"visit-onset-bind\",\"data\":{\"ok\":"
+                + (ok ? "true" : "false") + ",\"reason\":\"" + reason
+                + "\",\"active\":" + (Active ? "true" : "false")
+                + "},\"timestamp\":" + now + "}\n");
+        }
+        catch { }
+    }
+    // #endregion
 
     public static void Unbind()
     {
@@ -164,6 +230,9 @@ public static class FarseerVisitOnset
         if (!inFarseerFrame) return;
         if (uniformName != "farViewDistance") return;
         if (__instance is not IShaderProgram prog) return;
+        // #region agent log
+        lastFarViewDistanceLogged = value;
+        // #endregion
         BindUniforms(prog);
     }
 
@@ -181,8 +250,12 @@ public static class FarseerVisitOnset
             prog.BindTexture2D("visitMask", maskTex.TextureId, TextureUnit);
 
         prog.Uniform("visitMaskReady", ready);
-        prog.Uniform("visitOnsetEarly", LodCoveragePolicy.UnvisitedFarseerOnsetScale);
-        prog.Uniform("visitOnsetLate", LodCoveragePolicy.HorizonDrawScale);
+        float vd = 0f;
+        try { vd = capi.World.Player.WorldData.DesiredViewDistance; } catch { }
+        if (vd <= 0f) vd = 512f;
+        float onsetScale = LodCoveragePolicy.FarseerSilhouetteOnsetScaleForView(vd);
+        prog.Uniform("visitOnsetEarly", onsetScale);
+        prog.Uniform("visitOnsetLate", onsetScale);
         prog.Uniform("camWorldXZ", (float)cam.X, (float)cam.Z);
 
         int sectionBlocks = LodSection.SectionBlocks;
@@ -197,7 +270,116 @@ public static class FarseerVisitOnset
             loggedBind = true;
             capi.Logger.Notification("Farseer visit-onset uniforms bound (mask {0}x{0})", MaskTexels);
         }
+
+        // #region agent log
+        float liveVd = 0f;
+        try
+        {
+            if (capi.World.Player?.Entity != null)
+                liveVd = capi.World.Player.WorldData.DesiredViewDistance;
+        }
+        catch { }
+        FarseerFlickerDiag.NoteFarseerFrame(
+            capi, lastFarViewDistanceLogged, liveVd, lastRimDrawCount);
+
+        float desired = 0f, approved = 0f;
+        try
+        {
+            desired = capi.World.Player.WorldData.DesiredViewDistance;
+            approved = capi.World.Player.WorldData.LastApprovedViewDistance;
+        }
+        catch { }
+        LogHandoffGap(cam, desired, desired, approved, "farseer-uniform");
+        // #endregion
     }
+
+    // #region agent log
+    /// <summary>
+    /// NDJSON handoff metrics: capture envelope vs Farseer onset vs Far View.
+    /// H-A envelope short of onset; H-B FarView clamps onset; H-C zero overlap;
+    /// H-D envelope from stamp not live mesh; H-E mesh short of rim; H-F visit-onset dead.
+    /// </summary>
+    static void LogHandoffGap(
+        Vec3d cam, float liveVd, float desiredVd, float approvedVd, string source)
+    {
+        if (capi == null || world == null) return;
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (gapLogCount >= 40) return;
+        if (now - lastGapLogMs < 1500) return;
+        lastGapLogMs = now;
+        gapLogCount++;
+
+        float vd = liveVd > 0 ? liveVd : desiredVd;
+
+        ResolveEnvelopeOrigin(out double envX, out double envZ, out double envRadius);
+        double liveEnv = CaptureEnvelopeRadiusBlocks(world, envX, envZ);
+        double onsetScale = LodCoveragePolicy.FarseerSilhouetteOnsetScale;
+        double horizonScale = LodCoveragePolicy.HorizonDrawScale;
+        double onsetBlocks = vd * onsetScale;
+        double horizonBlocks = vd * horizonScale;
+        double farVd = lastFarViewDistanceLogged;
+        double distStart = onsetBlocks;
+        if (farVd > 0 && distStart > farVd) distStart = farVd;
+        if (vd > 0 && distStart < vd * 0.5) distStart = vd * 0.5;
+        double bandThickness = farVd > 0 ? farVd - distStart : -1;
+        double gapEnvToOnset = onsetBlocks - envRadius;
+        double gapLiveToOnset = onsetBlocks - liveEnv;
+        double gapMeshToOnset = onsetBlocks - debugMeshedDist;
+        double gapCapToOnset = onsetBlocks - debugCapturedDist;
+        double camToEnvOrigin = Math.Sqrt(
+            (cam.X - envX) * (cam.X - envX) + (cam.Z - envZ) * (cam.Z - envZ));
+
+        int l0 = 0;
+        foreach (long k in world.HasDataSet)
+            if (LodWorld.KeyLevel(k) == 0) l0++;
+
+        string hyp = gapEnvToOnset > 256 ? "H-A"
+            : (farVd > 0 && farVd + 64 < onsetBlocks ? "H-B"
+            : (bandThickness >= 0 && bandThickness < 128 ? "H-B"
+            : (Math.Abs(onsetBlocks - horizonBlocks) < 1 && gapMeshToOnset > 128 ? "H-C"
+            : (liveEnv + 256 < envRadius ? "H-D"
+            : (gapMeshToOnset > 256 || gapCapToOnset > 256 ? "H-E" : "ok")))));
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        try
+        {
+            System.IO.File.AppendAllText(
+                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                "{\"sessionId\":\"40cccb\",\"runId\":\"gap-2\",\"hypothesisId\":\"" + hyp
+                + "\",\"location\":\"FarseerVisitOnset.LogHandoffGap\",\"message\":\"handoff-gap\",\"data\":{"
+                + "\"source\":\"" + source + "\""
+                + ",\"liveVd\":" + liveVd.ToString("0.#", inv)
+                + ",\"desiredVd\":" + desiredVd.ToString("0.#", inv)
+                + ",\"approvedVd\":" + approvedVd.ToString("0.#", inv)
+                + ",\"vd\":" + vd.ToString("0.#", inv)
+                + ",\"farView\":" + farVd.ToString("0.#", inv)
+                + ",\"bandThickness\":" + bandThickness.ToString("0.#", inv)
+                + ",\"onsetScale\":" + onsetScale.ToString("0.##", inv)
+                + ",\"horizonScale\":" + horizonScale.ToString("0.##", inv)
+                + ",\"onsetBlocks\":" + onsetBlocks.ToString("0.#", inv)
+                + ",\"horizonBlocks\":" + horizonBlocks.ToString("0.#", inv)
+                + ",\"distStart\":" + distStart.ToString("0.#", inv)
+                + ",\"envRadius\":" + envRadius.ToString("0.#", inv)
+                + ",\"liveEnv\":" + liveEnv.ToString("0.#", inv)
+                + ",\"meshedDist\":" + debugMeshedDist.ToString("0.#", inv)
+                + ",\"capturedDist\":" + debugCapturedDist.ToString("0.#", inv)
+                + ",\"effFar\":" + debugEffFar.ToString("0.#", inv)
+                + ",\"gapEnvToOnset\":" + gapEnvToOnset.ToString("0.#", inv)
+                + ",\"gapLiveToOnset\":" + gapLiveToOnset.ToString("0.#", inv)
+                + ",\"gapMeshToOnset\":" + gapMeshToOnset.ToString("0.#", inv)
+                + ",\"gapCapToOnset\":" + gapCapToOnset.ToString("0.#", inv)
+                + ",\"camToEnvOrigin\":" + camToEnvOrigin.ToString("0.#", inv)
+                + ",\"pad\":" + EnvelopePadBlocks.ToString("0.#", inv)
+                + ",\"l0Count\":" + l0
+                + ",\"hasData\":" + world.HasDataSet.Count
+                + ",\"visitOnsetActive\":" + (Active ? "true" : "false")
+                + ",\"maskReady\":" + (maskTex != null && maskTex.TextureId > 0 ? "true" : "false")
+                + ",\"n\":" + gapLogCount
+                + "},\"timestamp\":" + now + "}\n");
+        }
+        catch { }
+    }
+    // #endregion
 
     static void EnsureMaskUploaded()
     {
@@ -225,6 +407,10 @@ public static class FarseerVisitOnset
         lastOriginSz = originSz;
         lastVisitCount = visitCount;
         lastEnvelopeBlocks = envBlocks;
+
+        // #region agent log
+        FarseerFlickerDiag.NoteMaskUpload(originSx, originSz, visitCount, envBlocks);
+        // #endregion
 
         Array.Clear(pixels, 0, pixels.Length);
         const int white = unchecked((int)0xFFFFFFFFu);

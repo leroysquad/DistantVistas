@@ -370,6 +370,12 @@ public class LodWorld
     }
 
     /// <summary>
+    /// Clears a sticky empty-mesh claim so remesh can run after new columns land.
+    /// Wired to the renderer; never dispose resident meshes here.
+    /// </summary>
+    public Action<long>? ClearEmptyMeshClaim;
+
+    /// <summary>
     /// Keep the current GPU mesh and remesh on top of it. Walk-time visit bake
     /// must not dispose first — that punched holes every quadrant capture.
     /// </summary>
@@ -377,6 +383,7 @@ public class LodWorld
     {
         RenderDirty.Add(key);
         ForceRemesh.Add(key);
+        ClearEmptyMeshClaim?.Invoke(key);
     }
 
     public void MarkChanged(long key)
@@ -384,6 +391,8 @@ public class LodWorld
         if (Sections.TryGetValue(key, out LodSection? changed))
             changed.RefreshSurfaceBounds();
         RenderDirty.Add(key);
+        ForceRemesh.Add(key);
+        ClearEmptyMeshClaim?.Invoke(key);
         SaveDirty.Add(key);
         if (KeyLevel(key) < MaxLevel) MipDirty.Add(key);
 

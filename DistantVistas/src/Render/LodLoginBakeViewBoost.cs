@@ -58,12 +58,20 @@ public sealed class LodLoginBakeViewBoost
     {
         get
         {
-            int vd = applied ? boostedViewDistance : (int)renderer.LiveViewDistance;
-            vd = Math.Min(vd, SweepBoostViewDistanceBlocks);
+            // Visit/paint toward Farseer onset (HorizonDrawScale × hold), not just the
+            // 750-block graphics hold. Thin hold still loads chunks; radius walks the rim.
+            int blocks = SweepVisitRadiusBlocks;
             int cs = GlobalConstants.ChunkSize;
-            return Math.Max(4, (int)Math.Ceiling(vd / (double)cs) + 2);
+            return Math.Max(4, (int)Math.Ceiling(blocks / (double)cs) + 2);
         }
     }
+
+    /// <summary>
+    /// Login visit disk in blocks: graphics hold × horizon onset so land meets
+    /// Farseer (~4.5× VD) instead of stopping at the thin 750 bootstrap.
+    /// </summary>
+    public static int SweepVisitRadiusBlocks =>
+        (int)Math.Ceiling(LodCoveragePolicy.HorizonDrawDistance(SweepBoostViewDistanceBlocks));
 
     public int ChunkVisibleRadius
     {

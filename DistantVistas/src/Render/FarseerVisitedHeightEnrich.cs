@@ -114,6 +114,10 @@ public static class FarseerVisitedHeightEnrich
             if (sourceData != null) sources.Add(sourceData);
         }
 
+        // #region agent log
+        FarseerFlickerDiag.NoteEnrichRebuild(stamp, sources.Count);
+        // #endregion
+
         int rebuilt = 0;
         for (int i = 0; i < sources.Count; i++)
         {

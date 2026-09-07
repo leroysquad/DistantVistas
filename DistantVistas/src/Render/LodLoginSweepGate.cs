@@ -20,15 +20,27 @@ public static class LodLoginSweepGate
         System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf)
     {
         string worldId = LodWorldKey.For(capi.World);
+        int visited = LodLoginSweep.VisitedL0Keys(world).Count();
 
         LodLoginSweepResume? resume = LodLoginSweepResume.TryLoad(capi);
         if (resume != null && resume.IsEligible(capi.World))
-            return LogDecide(capi, world, blocks, null, -1, new Result(true, "resuming cancelled mid-sweep checkpoint"));
+        {
+            // Esc mid paint-revision teleport (or any in-window pass the gate would
+            // now skip) must not re-wedge on next join. Drop the leftover pause when
+            // a successful in-window complete stamp would skip the overlay.
+            LodLoginSweepComplete? completeForResume = LodLoginSweepComplete.TryLoad(capi);
+            if (ShouldDropLeftoverResume(capi, completeForResume, worldId, visited))
+            {
+                LodLoginSweepResume.Delete(capi);
+                return LogDecide(capi, world, blocks, completeForResume, visited, new Result(false,
+                    "dropped leftover mid-sweep resume (in-window complete; paint-rev no longer teleports)"));
+            }
+            return LogDecide(capi, world, blocks, completeForResume, visited, new Result(true, "resuming cancelled mid-sweep checkpoint"));
+        }
 
         if (resume != null)
             LodLoginSweepResume.Delete(capi);
 
-        int visited = LodLoginSweep.VisitedL0Keys(world).Count();
         if (visited == 0)
             return LogDecide(capi, world, blocks, null, visited, new Result(true, "empty canvas needs bootstrap sweep"));
 
@@ -41,8 +53,9 @@ public static class LodLoginSweepGate
             || !string.Equals(complete.WorldId, worldId, StringComparison.Ordinal))
             return LogDecide(capi, world, blocks, complete, visited, new Result(true, "no successful sweep recorded yet for this world"));
 
-        // Expire (30 in-game days, 30 real days, stale paint, or calendar month) before
+        // Expire (30 in-game days, 30 real days, or calendar month) before
         // miss-repair so leftovers cannot hide a recapture behind "still incomplete".
+        // Paint revision bumps alone do not expire (1.0.24).
         string? expire = LodLoginSweepWindow.RecaptureReason(capi.World, complete);
         if (expire != null)
             return LogDecide(capi, world, blocks, complete, visited, new Result(true, expire));
@@ -72,6 +85,29 @@ public static class LodLoginSweepGate
                 new Result(true, "visited canvas grew since last successful sweep"));
 
         return LogDecide(capi, world, blocks, complete, visited, new Result(false, "visited canvas complete within 30-day window"));
+    }
+
+
+    /// <summary>
+    /// True when a leftover Esc-paused resume should be discarded instead of
+    /// resumed: a successful complete stamp for this world is still in the
+    /// 30-day / month window and the visited canvas has not grown. Used so a
+    /// paint-revision teleport pause (or any pass the gate would now skip)
+    /// cannot re-wedge on the next join.
+    /// </summary>
+    static bool ShouldDropLeftoverResume(
+        ICoreClientAPI capi,
+        LodLoginSweepComplete? complete,
+        string worldId,
+        int visited)
+    {
+        if (complete == null
+            || string.IsNullOrEmpty(complete.WorldId)
+            || !string.Equals(complete.WorldId, worldId, StringComparison.Ordinal))
+            return false;
+        if (LodLoginSweepWindow.RecaptureReason(capi.World, complete) != null)
+            return false;
+        return complete.VisitedKeyCount >= visited;
     }
 
     // #region agent log

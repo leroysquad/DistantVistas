@@ -159,8 +159,8 @@ public static class LoginSweepChecks
 
         string csproj = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "DistantVistas.csproj"));
-        c.True(!csproj.Contains("0Harmony"),
-            "mod project no longer references Harmony");
+        c.True(csproj.Contains("0Harmony"),
+            "mod still references Harmony for Farseer visit-onset and cloud horizon");
     }
 
     static void AudioMuteKeys(Check c)
@@ -603,25 +603,24 @@ public static class LoginSweepChecks
             "season change alone has no expire reason");
         c.True(LodLoginSweepWindow.ExpireReason("spring", "spring", 10, 0) == null,
             "in-window same season has no expire reason");
-        c.Eq(LodLoginSweepWindow.StalePaintRevisionReason,
-            LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 0),
-            "stale paint revision recaptures even inside the 30-day window");
-        c.Eq(LodLoginSweepWindow.StalePaintRevisionReason,
-            LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 1),
-            "0.8.70 markers recapture so the streamed ring is persisted");
+        c.True(LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 0) == null,
+            "stale paint revision does not force login teleport inside the 30-day window");
+        c.True(LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 1) == null,
+            "older paint markers stay skipped when the day window holds");
         c.True(LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, LodSurfaceMix.PaintRevision) == null,
             "current paint revision stays skipped when the window holds");
-        c.Eq(LodLoginSweepWindow.StalePaintRevisionReason,
-            LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 2),
-            "paint revision 2 recaptures so 0.8.85 season ground runs once");
-        c.Eq(LodLoginSweepWindow.StalePaintRevisionReason,
-            LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 3),
-            "paint revision 3 recaptures so frosted canopy and frost ground run once");
-        c.Eq(5, LodSurfaceMix.PaintRevision,
-            "paint revision 5 keeps live GetColor through autumn");
-        c.Eq(LodLoginSweepWindow.StalePaintRevisionReason,
-            LodLoginSweepWindow.RecaptureReason("fall", "winter", 10, 0, 0),
-            "stale paint revision still recaptures after a season change");
+        c.True(LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 2) == null,
+            "paint revision 2 does not force login teleport");
+        c.True(LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 3) == null,
+            "paint revision 3 does not force login teleport");
+        c.Eq(8, LodSurfaceMix.PaintRevision,
+            "paint revision 8: empty-mesh remesh, Leaves foliage, onset sweep radius");
+        c.True(LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 5) == null,
+            "paint revision 5 does not force login teleport");
+        c.True(LodLoginSweepWindow.RecaptureReason("fall", "winter", 10, 0, 0) == null,
+            "stale paint + season slug change still does not expire (month/day window only)");
+        c.True(LodLoginSweepWindow.StalePaintRevisionReason.Contains("paint revision"),
+            "legacy stale-paint reason string retained for log compatibility");
 
         string window = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepWindow.cs"));
@@ -646,7 +645,9 @@ public static class LoginSweepChecks
         string gate = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepGate.cs"));
         c.True(gate.Contains("resuming cancelled mid-sweep checkpoint"),
-            "gate always runs when an eligible resume exists");
+            "gate runs when an eligible resume exists and skip would not apply");
+        c.True(gate.Contains("ShouldDropLeftoverResume") || gate.Contains("dropped leftover mid-sweep resume"),
+            "gate drops leftover Esc pause when in-window complete would skip");
         c.True(gate.Contains("empty canvas needs bootstrap sweep"),
             "gate runs bootstrap on empty visited canvas");
         c.True(gate.Contains("still incomplete"),
@@ -671,7 +672,7 @@ public static class LoginSweepChecks
         c.True(gate.Contains("visited canvas complete within 30-day window"),
             "gate skips when canvas is complete and in window");
         c.True(gate.Contains("LodLoginSweepWindow.RecaptureReason"),
-            "gate expires on day gap, wall-clock gap, stale paint revision, or calendar month");
+            "gate expires on day gap, wall-clock gap, or calendar month (not paint revision alone)");
         c.True(gate.Contains("WindowStartedUtcMs <= 0"),
             "in-window skip adopts a wall-clock stamp on legacy markers");
 
@@ -763,10 +764,10 @@ public static class LoginSweepChecks
         c.Eq(180.0, LodLoginSweepTiming.BootstrapTargetMaxSec, "bootstrap target max seconds");
         c.Eq(48.0, LodLoginSweepTiming.RetryTargetSec, "retry pass wall seconds");
         c.Eq(1.0, LodLoginSweepTiming.InitialSecPerStop, "fallback per-stop when this PC has no samples");
-        c.Eq(216000, LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks,
-            "empty-canvas bootstrap probe radius default (~216 km, 1.5x prior 144 km)");
-        c.Eq(3375, LodLoginSweepBootstrap.BootstrapCellRadius(),
-            "216000 blocks is 3375 L0 cells radius at 64-block footprint");
+        c.Eq(288000, LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks,
+            "empty-canvas bootstrap probe radius default (~288 km, meets Farseer onset)");
+        c.Eq(4500, LodLoginSweepBootstrap.BootstrapCellRadius(),
+            "288000 blocks is 4500 L0 cells radius at 64-block footprint");
         c.Eq(9216, LodLoginSweepBootstrap.MaxBootstrapClassifyCells,
             "classify ceiling scales with the 1.5x radius (~2.25x area)");
         c.Eq(96, LodLoginSweepTiming.MinVisitStops, "first-pass floor densifies the 216 km disk");
@@ -914,6 +915,14 @@ public static class LoginSweepChecks
         c.Eq(2048, LodLoginBakeViewBoost.MaxVanillaViewDistance, "engine view-distance ceiling");
         c.Eq(750, LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks,
             "sweep holds vanilla view at 750 blocks then restores");
+        c.Eq(
+            (int)Math.Ceiling(750 * LodCoveragePolicy.HorizonDrawScale),
+            LodLoginBakeViewBoost.SweepVisitRadiusBlocks,
+            "visit disk reaches Farseer onset (hold × HorizonDrawScale)");
+        c.True(LodLoginBakeViewBoost.SweepVisitRadiusBlocks > LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks,
+            "visit radius is wider than the thin graphics hold");
+        c.True(viewBoost.Contains("SweepVisitRadiusBlocks"),
+            "ChunkSweepRadiusChunks uses SweepVisitRadiusBlocks toward onset");
         c.Eq(1000, LodLoginBakeViewBoost.LegacySweepHoldBlocks,
             "old 1000-block hold is leftover, never a restore target");
         c.True(LodLoginBakeViewBoost.IsSweepHoldValue(750), "750 is the scan hold");

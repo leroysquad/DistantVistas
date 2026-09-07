@@ -167,13 +167,27 @@ public static class LodSeasonBake
             int color = block.GetColor(capi, pos);
             if (color != 0)
             {
-                color = ApplyVisitFrost(capi.World, block, pos, color);
+                // Pure GetColor. FlagFrost + mesher apply the wash so early-spring
+                // remesh thaws walls and crowns without rebaking every column.
+                _ = ApplyVisitFrost(capi.World, block, pos, color);
+                // #region agent log
+                if (LodCanopyGray.IsSeasonFoliage(block))
+                    FarCoverageDiag.NoteCanopySample(getColor: true, zero: false);
+                // #endregion
                 return color;
             }
+            // #region agent log
+            if (LodCanopyGray.IsSeasonFoliage(block))
+                FarCoverageDiag.NoteCanopySample(getColor: false, zero: true);
+            // #endregion
         }
         catch
         {
             // Fall back to manual tint reproduction.
+            // #region agent log
+            if (LodCanopyGray.IsSeasonFoliage(block))
+                FarCoverageDiag.NoteCanopySample(getColor: false, zero: true);
+            // #endregion
         }
         return 0;
     }
@@ -236,17 +250,19 @@ public static class LodSeasonBake
     /// </summary>
     public static float LiveWinterAmount;
 
-    /// <summary>Below this, no FlagFrost bake and no mesher top-white wash.</summary>
-    public const float FrostSeasonMin = 0.20f;
+    /// <summary>
+    /// Below this, no FlagFrost bake and no mesher frost wash. 0.75 ≈ late autumn
+    /// (WinterAmount ramp ends near calendar winter). Mid-autumn stays GetColor only.
+    /// </summary>
+    public const float FrostSeasonMin = 0.75f;
 
     public static bool SeasonAllowsFrost => LiveWinterAmount >= FrostSeasonMin;
 
     /// <summary>
-    /// Vanilla frost is shader-only (colormap.fsh). GetColor is climate+season
-    /// without that overlay, so far LOD would keep autumn leaves in December.
-    /// Leaves are EnumBlockMaterial.Leaves, not Plant — the Plant-only gate
-    /// dropped every tree. Stored RGB is the side colour; UP faces extra-whiten
-    /// in the mesher. Calendar winter gates the wash so May stays green.
+    /// Visit bake no longer mixes frost into stored RGB (PaintRevision 6+).
+    /// FlagFrost marks climate frost; <see cref="LodMesher.FrostFaceColor"/>
+    /// applies side + UP wash scaled by live winter so thaw remesh clears it.
+    /// Kept as a probe hook so diagnostics still exercise the frost gate.
     /// </summary>
     public static int ApplyVisitFrost(IClientWorldAccessor world, Block block, BlockPos pos, int seasonRgb)
     {
@@ -254,25 +270,29 @@ public static class LodSeasonBake
         if (seasonRgb == 0 || !IsFrostableCanopy(block)) return seasonRgb;
         if (!TryVisitFrostWeight(world, pos, out float w, out _, out _)) return seasonRgb;
         if (w <= 0f) return seasonRgb;
-        return MixTowardWhite(seasonRgb, w * SideFrostAlpha * LiveWinterAmount);
+        return seasonRgb;
     }
 
     public static bool IsFrostableCanopy(Block? block)
     {
         if (block == null || !block.Frostable) return false;
-        return LodCanopyGray.IsVanillaTreeCanopy(block);
+        return LodCanopyGray.IsSeasonFoliage(block);
     }
 
     /// <summary>
-    /// Walk capture may store soil while the live top is canopy. Path is the
+    /// Walk capture may store soil while the live top is canopy/bush. Path is the
     /// visual top from <see cref="LodSurfaceMix.ProbeTopPath"/>.
     /// </summary>
     public static bool ShouldFlagFrost(float frostW, Block? block, string? path)
     {
-        if (!SeasonAllowsFrost) return false;
-        if (frostW < FrostFlagMin) return false;
-        if (IsFrostableCanopy(block)) return true;
-        return LodCanopyGray.IsVanillaTreeCanopyPath(path);
+        bool allows = SeasonAllowsFrost;
+        bool flagged = allows
+            && frostW >= FrostFlagMin
+            && (IsFrostableCanopy(block) || LodCanopyGray.IsSeasonFoliagePath(path));
+        // #region agent log
+        ColorPathDiag.NoteBakeFrostGate(LiveWinterAmount, allows, flagged);
+        // #endregion
+        return flagged;
     }
 
     public static byte MixVisitBakeFlags(byte flags, bool frost)

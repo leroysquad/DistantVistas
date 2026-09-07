@@ -38,27 +38,50 @@ public static class LodMesher
     const byte BakedBase = LodTintRegistry.MaxSlots * 3;
 
     /// <summary>
-    /// Stored colour is the frosted side. Horizontal UP faces extra-mix toward
-    /// frost white. Walls and bottoms keep the stored RGB. Mid/far levels use a
-    /// lighter wash so autumn chroma under frost survives (near band already looks right).
+    /// Upper wall band (blocks) that inherits the UP/crown face colour so frost
+    /// white and autumn canopy read from the side, not only on flat tops.
+    /// </summary>
+    public const int CrownSideBlocks = 2;
+
+    /// <summary>
+    /// FlagFrost columns store pure GetColor. Walls get side frost; UP faces add
+    /// an extra crown wash. Both scale by live calendar winter so early-spring
+    /// remesh drops December white without rebaking. Mid/far levels use a lighter
+    /// wash so autumn chroma under frost survives.
     /// </summary>
     public static int FrostFaceColor(int stored, byte flags, bool upFace, int level = 0)
     {
-        if (stored == 0 || !upFace) return stored;
+        if (stored == 0) return stored;
         if ((flags & LodPaletteEntry.FlagFrost) == 0) return stored;
-        // Old winter FlagFrost bits stay on disk. Scale the white wash by live
-        // calendar winter so May remesh drops the fake snow sheet.
         float w = LodSeasonBake.LiveWinterAmount;
         if (w < LodSeasonBake.FrostSeasonMin) return stored;
-        float mix = LodSeasonBake.TopFrostExtra * w;
-        if (level >= 2) mix *= 0.35f;
-        else if (level >= 1) mix *= 0.55f;
-        // Keep autumn leaf chroma under frost instead of washing the whole UP face white.
-        LodPaletteRepair.Channels(stored, out _, out _, out _, out _, out int chroma);
-        if (chroma > 40) mix *= 0.45f;
+
+        float sideMix = LodSeasonBake.SideFrostAlpha * w;
+        float mix = sideMix;
+        if (upFace)
+        {
+            float topExtra = LodSeasonBake.TopFrostExtra * w;
+            if (level >= 2) topExtra *= 0.35f;
+            else if (level >= 1) topExtra *= 0.55f;
+            mix = sideMix + (1f - sideMix) * topExtra;
+            LodPaletteRepair.Channels(stored, out _, out _, out _, out _, out int chroma);
+            if (chroma > 40) mix = sideMix + (mix - sideMix) * 0.45f;
+        }
+        else if (level >= 1)
+        {
+            mix *= level >= 2 ? 0.55f : 0.75f;
+        }
+
         if (mix <= 0.02f) return stored;
         return LodSeasonBake.MixTowardWhite(stored, mix);
     }
+
+    /// <summary>
+    /// Wall colour for the upper <see cref="CrownSideBlocks"/> of a run: same as UP
+    /// so far LOD shows frost/canopy from the side. Below that, side frost only.
+    /// </summary>
+    public static int FrostWallColor(int stored, byte flags, bool crownBand, int level = 0) =>
+        FrostFaceColor(stored, flags, upFace: crownBand, level);
 
     static byte AlphaFor(byte paletteFlags, byte tintSlot, int color)
     {
@@ -192,8 +215,9 @@ public static class LodMesher
                         bool supported = r < runs.Length - 1
                             && LodSection.RunYTop(runs[r + 1]) >= yBottom - 1;
                         if (!supported) supported = yBottom <= 2;
-                        // Surface run of the column is never scrap.
-                        if (!supported && runH <= 4 && r > 0) continue;
+                        // Floating tinted scraps only (FlagBaked/FlagFrost already
+                        // exempted). Surface leaf pixels after mip are the usual case.
+                        if (!supported && runH <= 4) continue;
                     }
 
                     bool topCovered = r > 0
@@ -231,7 +255,7 @@ public static class LodMesher
         // ---- Phase 2: greedy-merge and emit ----
 
         EmitHorizontalGreedy(hf, self, opaque, water, step, level);
-        EmitVerticalMerged(vf, self, opaque, water, step);
+        EmitVerticalMerged(vf, self, opaque, water, step, level);
 
         return new MeshResult
         {
@@ -385,7 +409,7 @@ public static class LodMesher
 
     // ---- Vertical faces: merge along the strip axis ----
 
-    static void EmitVerticalMerged(List<VFace> faces, SectionSnapshot self, Buffers opaque, Buffers water, int step)
+    static void EmitVerticalMerged(List<VFace> faces, SectionSnapshot self, Buffers opaque, Buffers water, int step, int level)
     {
         if (faces.Count == 0) return;
 
@@ -422,9 +446,9 @@ public static class LodMesher
             }
 
             Buffers buf = seg.Water ? water : opaque;
-            int color = self.PaletteColors[seg.Pid];
-            if (seg.Water) color = LodPaletteRepair.WaterDrawColor(color);
-            byte alpha = AlphaFor(self.PaletteFlags[seg.Pid], self.PaletteTintSlots[seg.Pid], color);
+            int stored = self.PaletteColors[seg.Pid];
+            byte flags = self.PaletteFlags[seg.Pid];
+            byte tint = self.PaletteTintSlots[seg.Pid];
 
             // W/E walls run along Z at fixed X; N/S walls run along X at fixed Z.
             bool xWall = seg.Dir is W or E;
@@ -438,18 +462,37 @@ public static class LodMesher
             float a0 = seg.Along * step;
             float a1 = alongEnd * step;
 
-            if (xWall)
+            int yBottom = seg.YBottom;
+            int yTop = seg.YTop;
+            int height = yTop - yBottom;
+            int crownCut = height <= CrownSideBlocks
+                ? yBottom
+                : Math.Max(yBottom, yTop - CrownSideBlocks);
+
+            void EmitWallBand(int y0, int y1, bool crown)
             {
-                AddQuad(buf, color, alpha,
-                    fixedCoord, seg.YBottom, a0, fixedCoord, seg.YBottom, a1,
-                    fixedCoord, seg.YTop, a1, fixedCoord, seg.YTop, a0);
+                if (y1 <= y0) return;
+                int color = FrostWallColor(stored, flags, crown, level);
+                if (seg.Water) color = LodPaletteRepair.WaterDrawColor(color);
+                byte alpha = AlphaFor(flags, tint, color);
+                if (xWall)
+                {
+                    AddQuad(buf, color, alpha,
+                        fixedCoord, y0, a0, fixedCoord, y0, a1,
+                        fixedCoord, y1, a1, fixedCoord, y1, a0);
+                }
+                else
+                {
+                    AddQuad(buf, color, alpha,
+                        a0, y0, fixedCoord, a1, y0, fixedCoord,
+                        a1, y1, fixedCoord, a0, y1, fixedCoord);
+                }
             }
-            else
-            {
-                AddQuad(buf, color, alpha,
-                    a0, seg.YBottom, fixedCoord, a1, seg.YBottom, fixedCoord,
-                    a1, seg.YTop, fixedCoord, a0, seg.YTop, fixedCoord);
-            }
+
+            // Lower wall: side frost. Upper band: UP/crown wash so frost and
+            // canopy colour read from the side at far LOD.
+            EmitWallBand(yBottom, crownCut, crown: false);
+            EmitWallBand(crownCut, yTop, crown: true);
 
             i = j;
         }

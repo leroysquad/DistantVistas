@@ -141,6 +141,16 @@ void main()
     terraColor.rgb *= shade * rgbaAmbientIn;
     terraColor.rgb = clamp(terraColor.rgb, 0.0, 1.0);
 
+    // Subtle low-ground mist on valleys/flats only (1.0.25). Height gate keeps
+    // mountains clear; soft fog/sky wash, not a blanket.
+    {
+        float lowH = clamp(1.0 - (yLevel - 55.0) / 55.0, 0.0, 1.0);
+        float flatness = clamp(upness, 0.0, 1.0);
+        float lowMist = lowH * lowH * flatness * 0.16;
+        lowMist *= mix(1.0, 0.35, clamp(disableLodFog, 0.0, 1.0));
+        terraColor.rgb = mix(terraColor.rgb, rgbaFog.rgb, lowMist);
+    }
+
     // Same applyFog path as vanilla chunks. Skip applySpheresFog (height fog punches
     // mountain faces). DisableLodFog only skipped extra pastViewHaze in the vsh.
     if (fogAmount > 0.001) {

@@ -19,7 +19,8 @@ public static class LodLoginSweepWindow
 
     public const string OutsideDayWindowReason = "outside 30-day window since last sweep";
     public const string OutsideWallWindowReason = "outside 30-day wall-clock window since last sweep";
-    public const string StalePaintRevisionReason = "paint revision recapture (frosted canopy, season ground)";
+    /// <summary>Legacy reason string (1.0.23). Paint revision no longer arms RecaptureReason / login teleport.</summary>
+    public const string StalePaintRevisionReason = "paint revision recapture (empty-mesh remesh, foliage Leaves, onset sweep)";
     public const string MonthChangedReason = "calendar month changed since last sweep";
 
     /// <summary>Diagnostic only. Season slug is not an expire trigger. Calendar month is.</summary>
@@ -85,11 +86,12 @@ public static class LodLoginSweepWindow
         long savedUtcMs,
         int paintRevision)
     {
-        string? expire = ExpireReason(nowTotalDays, savedTotalDays, nowUtcMs, savedUtcMs);
-        if (expire != null) return expire;
-        if (paintRevision < LodSurfaceMix.PaintRevision)
-            return StalePaintRevisionReason;
-        return null;
+        // paintRevision kept for call-site back-compat. Paint bumps (empty-mesh
+        // remesh, foliage Leaves, onset) must NOT force a login visit-teleport;
+        // idle remesh / discover bake handle those. Season refresh stays on the
+        // ~30-day / PlanSeasonExpired path only.
+        _ = paintRevision;
+        return ExpireReason(nowTotalDays, savedTotalDays, nowUtcMs, savedUtcMs);
     }
 
     public static bool TryReadSavedMonth(string calendarToken, out int month)

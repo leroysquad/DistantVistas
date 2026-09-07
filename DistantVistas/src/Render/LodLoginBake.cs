@@ -103,6 +103,7 @@ public sealed class LodLoginBake
     bool loggedTeleportBegin;
     bool loggedWarmupComplete;
     bool escWasDown;
+    int escGraceLeft;
     readonly List<long> oceanSampleKeys = new();
     readonly List<long> openOceanFillKeys = new();
     readonly List<long> stopBakeKeys = new();
@@ -215,6 +216,12 @@ public sealed class LodLoginBake
     public void PollCancelFromRender()
     {
         if (phase == Phase.Done || released) return;
+        if (escGraceLeft > 0)
+        {
+            escGraceLeft--;
+            escWasDown = true;
+            return;
+        }
         try
         {
             bool raw = capi.Input.KeyboardKeyStateRaw[(int)GlKeys.Escape];
@@ -314,7 +321,9 @@ public sealed class LodLoginBake
         loggedTeleportBegin = false;
         loggedWarmupComplete = false;
         escWasDown = false;
+        escGraceLeft = 40;
         progressUi.Reset();
+        try { if (capi.IsGamePaused) capi.PauseGame(false); } catch { }
         stabilizeWindow.Clear();
         windowMedians.Clear();
 
@@ -943,7 +952,7 @@ public sealed class LodLoginBake
             if (completedKeys.Contains(key)) continue;
 
             currentKey = key;
-            stopPhase = StopPhase.Teleport;
+            stopPhase = StopPhase.WaitChunks;
             stopTicks = 0;
             stopBakePrepared = false;
             stopBakeIndex = 0;
@@ -951,11 +960,12 @@ public sealed class LodLoginBake
             revealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
 
             (double x, double y, double z) = LodLoginSweep.VisitPosition(capi.World, key);
-            TeleportPlayer(x, y, z, requestChunks: false);
+            // 1.0.25: stream chunks without hopping the player (Pause-on-Start / AFK).
             LodLoginBakePlayerMove.RequestChunkColumnsVisible(
                 capi, x, z, capi.World.Player.Entity.Pos.Dimension, revealRadius);
+            stopPhase = StopPhase.WaitChunks;
             UpdateProgress(Progress,
-                StatusWithEta($"{VisitPrefix()}moving to region… ({Pct(finished, total)})"));
+                StatusWithEta($"{VisitPrefix()}scouting region… ({Pct(finished, total)})"));
             return;
         }
     }
@@ -1566,6 +1576,7 @@ public sealed class LodLoginBake
     void HoldPlayerControls()
     {
         overlay.EnsureInputBlocked();
+        try { if (capi.IsGamePaused) capi.PauseGame(false); } catch { }
         CloseBlockingDialogs();
 
         IClientPlayer player = capi.World.Player;

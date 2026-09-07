@@ -14,11 +14,13 @@ namespace DistantVistas;
 public static class LodSurfaceMix
 {
     /// <summary>
-    /// Bump when stored FlagBaked RGB must be recaptured. Old complete markers
-    /// with a lower revision run one overlay even inside the 30-day window.
-    /// 5 = keep live GetColor through autumn (no early texture-camouflage pull).
+    /// Paint pipeline generation for diagnostics / complete stamps.
+    /// 9 = canopy GetColor at crown Y + low-ground mist / scout-fill era.
+    /// From 1.0.24 a bump does NOT force a login visit-teleport; idle remesh
+    /// and discover bake handle sticky empty-mesh / foliage. Season refresh
+    /// stays on the ~30-day PlanSeasonExpired path.
     /// </summary>
-    public const int PaintRevision = 5;
+    public const int PaintRevision = 9;
 
     public const int BlurRadius = 0;
     public const int QuantizeStep = 12;
@@ -95,6 +97,7 @@ public static class LodSurfaceMix
                 return Kind.Plant;
         }
 
+        if (block.BlockMaterial == EnumBlockMaterial.Leaves) return Kind.Plant;
         if (block.BlockMaterial == EnumBlockMaterial.Plant) return Kind.Plant;
         if (block.BlockMaterial is EnumBlockMaterial.Stone or EnumBlockMaterial.Ore
             or EnumBlockMaterial.Brick or EnumBlockMaterial.Ceramic or EnumBlockMaterial.Metal)
@@ -159,8 +162,11 @@ public static class LodSurfaceMix
         if (IsActualSnowTop(topKind, topPath) && topRgb != 0)
             return topRgb;
 
-        // Tree crowns: exact GetColor (season orange/red + visit frost). Never camouflage.
-        if (LodCanopyGray.IsVanillaTreeCanopyPath(topPath) && topRgb != 0)
+        // Tree / bush crowns: exact GetColor (season orange/red). Frost wash is mesher-only.
+        if (topRgb != 0 && LodCanopyGray.IsSeasonFoliagePath(topPath))
+            return topRgb;
+        if (topRgb != 0 && topKind == Kind.Plant
+            && (topPath == null || LodCanopyGray.IsCanopyPath(topPath) || LodCanopyGray.IsBushPath(topPath)))
             return topRgb;
 
         // Other plants (tallgrass, ferns): keep live GetColor until deep winter.
@@ -184,7 +190,8 @@ public static class LodSurfaceMix
         Kind k = Classify(block);
         if (k == Kind.Water) return liveRgb;
         if (IsActualSnowTop(k, path) && liveRgb != 0) return liveRgb;
-        if (LodCanopyGray.IsVanillaTreeCanopyPath(path) && liveRgb != 0) return liveRgb;
+        // Prefer material-aware foliage (Leaves) over path-only — crown vs ground.
+        if (LodCanopyGray.IsSeasonFoliage(block) && liveRgb != 0) return liveRgb;
         float winter = WinterAmount(ReadSeasonRel(capi, x, y, z));
         if (k == Kind.Plant && winter < DeepWinterCamouflageStart) return liveRgb;
         int tex = LodSeasonBake.SampleTextureMean(capi, block, x, y, z);
@@ -314,9 +321,10 @@ public static class LodSurfaceMix
             SeasonGroundWeights(winter, out float gw, out float pw);
             mixed = Weighted(0, 0f, ground, gw, plant, pw);
         }
-        if (frost > 0f && mixed != 0 && LodSeasonBake.SeasonAllowsFrost)
-            mixed = LodSeasonBake.MixTowardWhite(
-                mixed, frost * LodSeasonBake.GroundFrostAlpha * LodSeasonBake.LiveWinterAmount);
+        // frost weight is already season-gated at TryVisitFrostWeight; do not
+        // also require LiveWinterAmount here (unit tests and bake pass frost:1).
+        if (frost > 0f && mixed != 0)
+            mixed = LodSeasonBake.MixTowardWhite(mixed, frost * LodSeasonBake.GroundFrostAlpha);
         return mixed;
     }
 
@@ -343,7 +351,7 @@ public static class LodSurfaceMix
     }
 
     public static bool IsCanopyPlant(Kind k, string? path) =>
-        k == Kind.Plant && LodCanopyGray.IsVanillaTreeCanopyPath(path);
+        k == Kind.Plant && LodCanopyGray.IsSeasonFoliagePath(path);
 
     public static float ReadSeasonRel(ICoreClientAPI capi, int x, int y, int z)
     {

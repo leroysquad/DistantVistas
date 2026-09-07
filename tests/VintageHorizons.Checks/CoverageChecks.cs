@@ -78,8 +78,11 @@ public static class CoverageChecks
             "no data is not visited");
         c.True(LodCoveragePolicy.IsDrawFullDetail(NearTrail, TrailAnchor),
             "inside vanilla view distance is full-detail draw");
-        c.False(LodCoveragePolicy.IsDrawFullDetail(TrailAnchor, TrailAnchor),
-            "the 1.0x ring is exclusive of the far edge");
+        c.True(LodCoveragePolicy.IsDrawFullDetail(TrailAnchor, TrailAnchor),
+            "at 1.0x still full-detail (DrawFullDetailScale 1.2)");
+        c.False(LodCoveragePolicy.IsDrawFullDetail(
+                TrailAnchor * LodCoveragePolicy.DrawFullDetailScale, TrailAnchor),
+            "the full-detail ring is exclusive of its far edge");
         c.True(LodCoveragePolicy.RequestVisitedKeepMesh(0, false, true, false, NearTrail, TrailAnchor),
             "unmeshed visited L0 inside the 1.0x draw ring still requests mesh");
         c.False(LodCoveragePolicy.RequestVisitedKeepMesh(0, false, true, false, FarTrail, TrailAnchor),
@@ -187,8 +190,14 @@ public static class CoverageChecks
         int fullCols = LodSection.GridSize * LodSection.GridSize;
         c.Eq(1.5f, LodCoveragePolicy.LeadConeFineScale,
             "lead-cone L0/L1 preference ends at 1.5x view distance");
-        c.Eq(3f, LodCoveragePolicy.HorizonDrawScale,
-            "horizon submit stops at 3x view distance");
+        c.Eq(4.5f, LodCoveragePolicy.HorizonDrawScale,
+            "horizon submit stops at 4.5x view distance");
+        c.Eq(4.5f, LodCoveragePolicy.FarseerSilhouetteOnsetScale,
+            "Farseer onset matches horizon (1.0.18 late-only rim)");
+        c.Eq(LodCoveragePolicy.FarseerSilhouetteOnsetScale, LodCoveragePolicy.UnvisitedFarseerOnsetScale,
+            "unvisited onset matches silhouette onset");
+        c.Eq(LodCoveragePolicy.HorizonDrawScale, LodCoveragePolicy.FarseerSilhouetteOnsetScale,
+            "horizon draw and Farseer onset share the same late rim");
         c.True(LodCoveragePolicy.HorizonLeadConeFine(true, 0f, 400, 512),
             "inside 1.5x the horizon still wants L0/L1");
         c.False(LodCoveragePolicy.HorizonLeadConeFine(true, 0f, 800, 512),
@@ -198,13 +207,13 @@ public static class CoverageChecks
         c.True(LodCoveragePolicy.StopDescentAtAvailableRung(2, 2, false, true, true, true, 0f, 800, 512),
             "past 1.5x a land-like L2 in the cone may stop so turning is not sky");
         c.False(LodCoveragePolicy.PastHorizonDraw(400, 512),
-            "inside 3x is still the horizon band");
-        c.True(LodCoveragePolicy.PastHorizonDraw(1600, 512),
-            "past 3x is past the horizon band");
-        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, true, 0f, true, false, 1600, 512),
-            "past 3x do not walk L0");
-        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(1, 2, false, true, true, true, 0f, true, false, 1600, 512),
-            "Farseer off: still walk L1 past 3x so that band is not sky");
+            "inside 4.5x is still the horizon band");
+        c.True(LodCoveragePolicy.PastHorizonDraw(2400, 512),
+            "past 4.5x is past the horizon band");
+        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, true, 0f, true, false, 2400, 512),
+            "past 4.5x do not walk L0");
+        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(1, 2, false, true, true, true, 0f, true, false, 2400, 512),
+            "Farseer off: still walk L1 past 4.5x so that band is not sky");
         c.Eq(1, LodCoveragePolicy.LeadConeMaxDrawLevel, "in-cone max draw level is L1");
         c.Eq(2, LodCoveragePolicy.LeadConeMaxCoverLevel, "in-cone whole cover caps at L2");
         c.False(LodCoveragePolicy.MayLeadConeCoarseCover(3, true, true, 0f, 400, 512, true),

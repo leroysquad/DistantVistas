@@ -3,12 +3,9 @@
 
 // DV_FARSEER_OVERLAY
 // Distant Vistas overlay of Farseer's region.vsh (MIT, Badgerson).
-// Visit-aware onset (FarseerVisitOnset uniforms):
-//   unvisited -> UnvisitedFarseerOnsetScale (1.0x VD) so silhouettes sit on the
-//     discovery frontier instead of floating in empty sky past a late circle
-//   visited/swept envelope -> HorizonDrawScale (4.5x VD); sparse login hops
-//     still count as swept via continuous capture-envelope mask fill
-// Cap onset at FarViewDistance itself when Far View is shorter than the pick.
+// Late-only onset (FarseerVisitOnset uniforms): early and late both use
+// HorizonDrawScale (4.5x VD). Midground stays Distant Vistas; LodFrontierScout
+// fills capture toward this rim. Cap onset at FarViewDistance when shorter.
 // No stock Y-sink trench. ASCII-only comments (NVIDIA GLSL).
 
 layout(location = 0) in vec3 vertexPositionIn;

@@ -129,7 +129,8 @@ public static class SeasonBakeChecks
             LodSurfaceMix.Kind.Plant, "tallgrass-tall", olive,
             snow: 0, snowW: 0f, ground: dirt, groundW: 1f, plant: olive, plantW: 1f,
             winter: 0f);
-        c.Eq(LodSurfaceMix.MixSeasonGround(olive, dirt, 0, 0, 0f), summer,
+        // Tallgrass keeps live GetColor until DeepWinterCamouflageStart (not soil blend).
+        c.Eq(olive, summer,
             "summer mix is live GetColor plant and ground");
         LodPaletteRepair.Channels(summer, out int sr, out int sg, out _, out _, out _);
         c.True(sg >= sr, "summer mix stays green-leaning");
@@ -216,16 +217,31 @@ public static class SeasonBakeChecks
             LodSurfaceMix.Kind.Plant, "leaves-grown-oak", autumn,
             0, 0f, dirt, 1f, autumn, 1f);
         c.Eq(autumn, keptLeaf, "tree canopy keeps live leaf colour");
+
+        int bush = LodSurfaceMix.Pack(180, 90, 50);
+        int keptBush = LodSurfaceMix.FinishColumnPaint(
+            LodSurfaceMix.Kind.Plant, "berrybush-blueberry-ripe", bush,
+            0, 0f, dirt, 1f, bush, 1f, winter: 0.5f);
+        c.Eq(bush, keptBush, "berry bush keeps live GetColor through autumn");
     }
 
     static void VisitFrostCanopyAndGround(Check c)
     {
+        LodSeasonBake.LiveWinterAmount = 1f;
+
         Block pine = Block("leaves-grown-pine", EnumBlockMaterial.Leaves, frostable: true);
         c.True(LodSeasonBake.IsFrostableCanopy(pine),
             "pine Leaves + Frostable is frostable canopy");
         Block oak = Block("leaves-grown-oak", EnumBlockMaterial.Leaves, frostable: true);
         c.True(LodSeasonBake.IsFrostableCanopy(oak),
             "oak Leaves + Frostable is frostable canopy");
+        Block bush = Block("berrybush-blueberry-flowering", EnumBlockMaterial.Plant, frostable: true);
+        c.True(LodSeasonBake.IsFrostableCanopy(bush),
+            "frostable berry bush is season foliage canopy");
+        c.True(LodCanopyGray.IsSeasonFoliagePath("berrybush-blueberry-flowering"),
+            "berrybush path is season foliage");
+        c.False(LodCanopyGray.IsVanillaTreeCanopyPath("berrybush-blueberry-flowering"),
+            "bushes stay out of tree-crown gray path");
         Block grass = Block("tallgrass-tall", EnumBlockMaterial.Plant, frostable: true);
         c.False(LodSeasonBake.IsFrostableCanopy(grass),
             "tallgrass Plant is not frostable canopy");
@@ -242,6 +258,16 @@ public static class SeasonBakeChecks
         c.True(LodSeasonBake.ShouldFlagFrost(1f, Block("soil-medium-normal", EnumBlockMaterial.Soil),
                 "leaves-grown-oak"),
             "stored soil with a canopy visual top still flags frost");
+        c.True(LodSeasonBake.ShouldFlagFrost(1f, Block("soil-medium-normal", EnumBlockMaterial.Soil),
+                "berrybush-blueberry-ripe"),
+            "stored soil with a bush visual top still flags frost");
+
+        LodSeasonBake.LiveWinterAmount = 0.5f;
+        c.False(LodSeasonBake.SeasonAllowsFrost,
+            "mid-autumn WinterAmount below FrostSeasonMin blocks frost");
+        c.False(LodSeasonBake.ShouldFlagFrost(1f, pine, "leaves-grown-pine"),
+            "mid-autumn does not FlagFrost");
+        LodSeasonBake.LiveWinterAmount = 1f;
 
         byte mixed = LodSeasonBake.MixVisitBakeFlags(0, frost: true);
         c.Eq((byte)(LodPaletteEntry.FlagBaked | LodPaletteEntry.FlagFrost), mixed,
@@ -264,6 +290,13 @@ public static class SeasonBakeChecks
         int top = LodSeasonBake.MixTowardWhite(side, LodSeasonBake.TopFrostExtra);
         LodPaletteRepair.Channels(top, out _, out _, out _, out int topLuma, out _);
         c.True(topLuma > sideLuma + 40, "mesher UP extra-white is paler than the stored side");
+
+        float midAutumn = 0.50f + LodSurfaceMix.SeasonEnumOffset + 0.10f;
+        c.True(LodSurfaceMix.WinterAmount(midAutumn) < LodSeasonBake.FrostSeasonMin,
+            "mid-autumn WinterAmount stays under frost gate");
+        float lateAutumn = 0.50f + LodSurfaceMix.SeasonEnumOffset + 0.20f;
+        c.True(LodSurfaceMix.WinterAmount(lateAutumn) >= LodSeasonBake.FrostSeasonMin,
+            "late autumn reaches frost gate");
     }
 
     static LodSurfaceMix.Kind Classify(string path, EnumBlockMaterial material) =>

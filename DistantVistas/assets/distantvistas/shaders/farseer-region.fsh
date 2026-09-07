@@ -7,6 +7,7 @@
 // paints the heightmap as sky, so the silhouette vanishes and clouds get cut.
 // Clamp tint, skip sphere fog, only dissolve at the far rim. ColorTint alpha
 // is also clamped so a 0.4 slate wash cannot hide relief.
+// Mist veil: grayish smoke (more gray near/low, little black far/top).
 
 in vec4 worldPos;
 in float yLevel;
@@ -71,13 +72,28 @@ void main()
     skyColor.rgb = applyUnderwaterEffects(skyColor.rgb, murkiness);
     skyGlow.y *= clamp((dayLight - 0.05) * 2.0 - 50.0 * murkiness, 0.0, 1.0);
 
-    terraColor.rgb = mix(terraColor.rgb, colorTint.rgb, min(colorTint.a, 0.12));
+    // Slate ColorTint as atmosphere, not terrain paint. Cap below stock 0.4 bleach.
+    terraColor.rgb = mix(terraColor.rgb, colorTint.rgb, min(colorTint.a, 0.28));
     terraColor.rgb *= bias(clamp(sunColor * dayLight, 0.0, 1.0), lightLevelBias);
-    terraColor.rgb *= 0.78;
+    // Grayish smoke silhouette (1.0.25): more gray near/low rim, only a little
+    // black toward the far/top. Soft haze, not a hard ink wall.
+    vec3 smokeGray = mix(rgbaFog.rgb, vec3(0.62, 0.64, 0.67), 0.55);
+    float height01 = clamp((yLevel - float(seaLevel)) / 90.0, 0.0, 1.0);
+    float nearRim = 1.0 - smoothstep(0.35, 0.85, dist);
+    float smokeAmt = clamp(0.22 + nearRim * 0.38 + (1.0 - height01) * 0.20, 0.0, 0.72);
+    float inkAmt = clamp(smoothstep(0.70, 1.0, dist) * 0.10 * height01, 0.0, 0.12);
+    terraColor.rgb = mix(terraColor.rgb, smokeGray, smokeAmt);
+    terraColor.rgb *= 1.0 - inkAmt;
+
+    // Distance mist: fog colour + a little sky, keep enough relief to read as hills.
+    float mist = clamp(fogAmount * 0.45 + smoothstep(0.55, 0.95, dist) * 0.32, 0.0, 0.62);
+    terraColor.rgb = mix(terraColor.rgb, rgbaFog.rgb, mist);
+    terraColor.rgb = mix(terraColor.rgb, skyColor.rgb, mist * 0.34);
+
     terraColor = applyFog(terraColor, fogAmount);
     terraGlow *= dist;
 
-    float fade = smoothstep(0.88, 1.0, dist);
+    float fade = smoothstep(0.82, 1.0, dist);
     fade *= step(0.0, fadeBias + 1.0);
     outColor = mix(terraColor, skyColor, fade);
     outGlow = mix(vec4(0.0), skyGlow, fade);

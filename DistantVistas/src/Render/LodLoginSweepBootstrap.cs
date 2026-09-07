@@ -59,10 +59,11 @@ public readonly struct LodLoginSweepPlan
 public static class LodLoginSweepBootstrap
 {
     /// <summary>
-    /// Season-expired / first-join disk around the player. 216000 = 1.5× the prior
-    /// 144 km radius. Canvas outside this disk is kept, never wiped.
+    /// Season-expired / first-join disk around the player. 288000 = 2× the original
+    /// 144 km radius so FlagBaked land meets the Farseer silhouette rim.
+    /// Canvas outside this disk is kept, never wiped.
     /// </summary>
-    public const int EmptyCanvasBootstrapRadiusBlocks = 216000;
+    public const int EmptyCanvasBootstrapRadiusBlocks = 288000;
 
     /// <summary>
     /// Hard cap on bootstrap visit stops at this PC's measured stop rate.

@@ -1,21 +1,21 @@
-{
-    "type": "code",
-    "modid": "distantvistas",
-    "name": "Distant Vistas",
-    "version": "1.0.16",
-    "side": "Universal",
-    "requiredOnClient": true,
-    "requiredOnServer": false,
-    "description": "Official 1.0.16. Swept and traveled land keep Farseer silhouettes off until 4.5x view. Faster login sweep. Far LOD seasons. Clouds to horizon. Vintage Horizons fork.",
-    "authors": [
-        "IllLeroySquad"
-    ],
-    "contributors": [
-        "AliasFactory",
-        "Badgerson"
-    ],
-    "website": "https://github.com/leroysquad/DistantVistas",
-    "dependencies": {
-        "game": "1.22.5"
-    }
+﻿{
+    "type":  "code",
+    "modid":  "distantvistas",
+    "name":  "Distant Vistas",
+    "version":  "1.0.26",
+    "side":  "Universal",
+    "requiredOnClient":  true,
+    "requiredOnServer":  false,
+    "description":  "Official 1.0.26. Fix lodterrain.fsh GLSL reserved-word crash (float flat -> flatness); keep low-ground mist. Scout-fill login overlay, Pause-on-Start compat, Farseer +700 gray smoke, canopy GetColor. Vintage Horizons fork.",
+    "authors":  [
+                    "IllLeroySquad"
+                ],
+    "contributors":  [
+                         "AliasFactory",
+                         "Badgerson"
+                     ],
+    "website":  "https://github.com/leroysquad/DistantVistas",
+    "dependencies":  {
+                         "game":  "1.22.5"
+                     }
 }

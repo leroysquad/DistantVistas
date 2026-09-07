@@ -359,21 +359,39 @@ public static class LodCoveragePolicy
     public const float LeadConeFineScale = 1.5f;
 
     /// <summary>
-    /// Farseer onset as a multiple of view distance (visited and unvisited).
-    /// Past this DV empty-stops in the lead cone when a companion is drawing.
+    /// Where Distant Vistas empty-stops in the lead cone when a companion draws.
     /// Midground stays ours; LodFrontierScout fills capture toward this rim.
-    /// Early 1x onset was retired — it put a close silhouette on midground.
     /// </summary>
     public const float HorizonDrawScale = 4.5f;
 
     /// <summary>
-    /// Same as <see cref="HorizonDrawScale"/>. Kept as a named alias so
-    /// FarseerVisitOnset / shaders stay late-only (no early unvisited ring).
+    /// Extra blocks past scale*VD for Farseer onset and DV horizon empty-stop
+    /// (1.0.25: ~700 so silhouettes sit farther behind swept FlagBaked land).
     /// </summary>
-    public const float UnvisitedFarseerOnsetScale = HorizonDrawScale;
+    public const float FarseerOnsetExtraBlocks = 700f;
+
+    /// <summary>
+    /// Farseer silhouette onset scale (visited and unvisited). Combined with
+    /// <see cref="FarseerOnsetExtraBlocks"/> via <see cref="FarseerSilhouetteOnsetDistance"/>.
+    /// </summary>
+    public const float FarseerSilhouetteOnsetScale = HorizonDrawScale;
+
+    /// <summary>
+    /// Alias for <see cref="FarseerSilhouetteOnsetScale"/> (late-only; no 1x ring).
+    /// </summary>
+    public const float UnvisitedFarseerOnsetScale = FarseerSilhouetteOnsetScale;
 
     public static double HorizonDrawDistance(double viewDistance) =>
-        viewDistance <= 0 ? 0 : viewDistance * HorizonDrawScale;
+        viewDistance <= 0 ? 0 : viewDistance * HorizonDrawScale + FarseerOnsetExtraBlocks;
+
+    public static double FarseerSilhouetteOnsetDistance(double viewDistance) =>
+        viewDistance <= 0 ? 0 : viewDistance * FarseerSilhouetteOnsetScale + FarseerOnsetExtraBlocks;
+
+    /// <summary>Uniform scale for Farseer shaders: (scale*VD + extra) / VD.</summary>
+    public static float FarseerSilhouetteOnsetScaleForView(float viewDistance) =>
+        viewDistance <= 1f
+            ? FarseerSilhouetteOnsetScale
+            : (float)(FarseerSilhouetteOnsetDistance(viewDistance) / viewDistance);
 
     public static bool PastHorizonDraw(double nearDist, double viewDistance) =>
         viewDistance > 0 && nearDist > HorizonDrawDistance(viewDistance);

@@ -13,16 +13,16 @@ public sealed class LodLoginSweepTiming
     public const double TargetMinSec = 30.0;
 
     /// <summary>
-    /// First-pass wall-clock cap. 1.0.15: 180s with a faster stop rate so the
-    /// 216 km disk gets denser hops before Farseer takes the rim.
+    /// First-pass wall-clock cap. 1.0.25: ~7 minutes so scout streams paint
+    /// FlagBaked land out toward the Farseer rim (measured MachineSecPerStop).
     /// </summary>
-    public const double TargetMaxSec = 180.0;
+    public const double TargetMaxSec = 420.0;
 
     /// <summary>First-join bootstrap uses the same first-pass wall cap.</summary>
     public const double BootstrapTargetMaxSec = TargetMaxSec;
 
     /// <summary>Retry pass wall cap — denser gap-fill after the first hop.</summary>
-    public const double RetryTargetSec = 48.0;
+    public const double RetryTargetSec = 90.0;
 
     /// <summary>
     /// Fallback per-stop seconds only when this machine has no measured samples yet.
@@ -30,10 +30,10 @@ public sealed class LodLoginSweepTiming
     /// </summary>
     public const double InitialSecPerStop = 1.0;
 
-    public const int MinVisitStops = 96;
-    public const int MaxVisitStops = 240;
-    public const int MinRetryStops = 24;
-    public const int MaxRetryStops = 48;
+    public const int MinVisitStops = 180;
+    public const int MaxVisitStops = 520;
+    public const int MinRetryStops = 36;
+    public const int MaxRetryStops = 96;
 
     /// <summary>This PC's measured (or fallback) seconds per visit stop.</summary>
     public static double MachineSecPerStop { get; private set; } = InitialSecPerStop;

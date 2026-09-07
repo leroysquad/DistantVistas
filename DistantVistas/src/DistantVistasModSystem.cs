@@ -140,6 +140,7 @@ public class DistantVistasModSystem : ModSystem
     LodLoginBakeOverlay? loginBakeOverlay;
     LodLoginBakePulse? loginBakePulse;
     LodLoginBake? loginBake;
+    LodFrontierScout? frontierScout;
     // #region agent log
     static int creamDiscoverLogs;
     static int grayTexLogs;
@@ -243,15 +244,31 @@ public class DistantVistasModSystem : ModSystem
         renderer.HeightOcclusion.PeekMarginBlocks = config.FovOcclusionPeekMargin;
         renderer.HeightOcclusion.MaxTestsPerFrame = config.FovOcclusionMaxTestsPerFrame;
         pipeline.InvalidateGpuMesh = renderer.InvalidateGpuMesh;
+        pipeline.World.ClearEmptyMeshClaim = renderer.ClearEmptyMeshClaim;
         LodCloudHorizon.Bind(capi);
         LodCloudHorizon.AttachRenderer(renderer);
         if (farseerCompanion)
         {
             FarseerVisitedHeightEnrich.Bind(capi, pipeline.World);
             FarseerVisitOnset.Bind(capi, pipeline.World);
+            FarCoverageDiag.ResetSession();
+            // #region agent log
+            try
+            {
+                System.IO.File.AppendAllText(
+                    @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                    "{\"sessionId\":\"40cccb\",\"runId\":\"far-1\",\"hypothesisId\":\"H-S1\",\"location\":\"DistantVistasModSystem.StartClientSide\",\"message\":\"far-diag-armed\",\"data\":{\"version\":\""
+                    + (Mod.Info.Version ?? "")
+                    + "\",\"boostCap\":" + LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks
+                    + ",\"bootstrapRadius\":" + LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks
+                    + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+            }
+            catch { }
+            // #endregion
         }
         loginBakePulse = new LodLoginBakePulse();
         loginBakeOverlay = new LodLoginBakeOverlay(capi);
+        frontierScout = new LodFrontierScout();
         // Real holes (captured land with no mesh at any rung) are reported with
         // the state of the keys involved, so a screenshot of sky has a log line.
         renderer.SetHoleLogger(msg => Mod.Logger.Notification(msg));
@@ -524,6 +541,7 @@ public class DistantVistasModSystem : ModSystem
         pipeline.DebugPlayTick = playTickCount;
         pipeline.Tick();
         pipeline.DebugPlayTick = 0;
+        if (renderer != null) renderer.LastDiscoverOnly = pipeline.DiscoverOnly;
         long afterPipelineMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - playTickEnter;
         // #region agent log
         if (logPlay || afterPipelineMs > 80)
@@ -549,6 +567,8 @@ public class DistantVistasModSystem : ModSystem
         pipeline.NotePlayerColumn(sweepCx, sweepCz);
         pipeline.SweepLoadedColumns(sweepCx, sweepCz, sweepRadius);
         QueueExploreBakeNearPlayer();
+        if (loginBake?.Active != true)
+            frontierScout?.Tick(capi, pipeline, renderer, LoginVisitSweepAllowedHere());
         // #region agent log
         if (logPlay) AgentPlayTickLog("after-sweep", playTickCount, playTickEnter,
             "\"ok\":true,\"frozen\":" + (pipeline.FreezeCapture ? "true" : "false"));
@@ -1922,6 +1942,7 @@ public class DistantVistasModSystem : ModSystem
         CancelLoginSweepDefer();
         loginBake?.Dispose();
         loginBake = null;
+        frontierScout?.Reset();
         loginBakePulse?.Bind(null, PumpLoginBakeWhileSweeping);
         // Kick / leave mid-overlay can leave 750 view or silent audio stuck for the next
         // world in this process. LevelFinalize + defer reopen pipeline/renderer; this
