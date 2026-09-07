@@ -270,9 +270,11 @@ public static class StaticAssetChecks
         c.True(fsh.Contains("height01 * height01"),
             "farseer overlay darkens mountain tips so ridges read against sky");
         c.True(fsh.Contains("smokeGray"),
-            "farseer overlay uses grayish smoke (gray bottom, slight black top)");
+            "farseer overlay uses grayish smoke (gray tent body, black tips)");
         c.True(fsh.Contains("inkAmt"),
             "farseer overlay keeps a little far/top ink, not a hard wall");
+        c.True(fsh.Contains("0.0, 0.24)"),
+            "1.0.28 ridge-ink cap kept -- coverage must not flatten the silhouette to empty black");
         c.False(fsh.Contains("onsetMist"),
             "farseer overlay is the 1.0.18 mist wash (no onsetMist lean cloud)");
         c.False(vsh.Contains("nearBand"),

@@ -58,8 +58,8 @@ public sealed class LodLoginBakeViewBoost
     {
         get
         {
-            // Visit/paint toward Farseer onset (HorizonDrawScale × hold), not just the
-            // 750-block graphics hold. Thin hold still loads chunks; radius walks the rim.
+            // Spawn-centered capture toward Farseer onset (gray tent + black tips),
+            // not the 750-block graphics hold and not a void band past the skyline.
             int blocks = SweepVisitRadiusBlocks;
             int cs = GlobalConstants.ChunkSize;
             return Math.Max(4, (int)Math.Ceiling(blocks / (double)cs) + 2);
@@ -67,8 +67,9 @@ public sealed class LodLoginBakeViewBoost
     }
 
     /// <summary>
-    /// Login visit disk in blocks: graphics hold × horizon onset so land meets
-    /// Farseer (~4.5× VD) instead of stopping at the thin 750 bootstrap.
+    /// Login visit disk in blocks: graphics hold × horizon onset so FlagBaked
+    /// land meets the Farseer silhouette (~4.5× VD + 700), not a thin 750 ring
+    /// and not empty sky past that rim.
     /// </summary>
     public static int SweepVisitRadiusBlocks =>
         (int)Math.Ceiling(LodCoveragePolicy.HorizonDrawDistance(SweepBoostViewDistanceBlocks));
@@ -77,8 +78,9 @@ public sealed class LodLoginBakeViewBoost
     {
         get
         {
-            // Stream to Farseer onset + 700, not the 750-block graphics hold.
-            // Clamping to SweepBoostViewDistanceBlocks left a thin ~768-block ring.
+            // Spawn-centered stream to Farseer onset + 700. Clamping to the
+            // 750-block graphics hold left a thin ~768-block ring and a white
+            // join in front of the gray/black silhouette.
             int blocks = SweepVisitRadiusBlocks;
             int cs = GlobalConstants.ChunkSize;
             return Math.Max(4, (int)Math.Ceiling(blocks / (double)cs) + 2);

@@ -21,6 +21,13 @@ public sealed class LodLoginScoutFill
     public const int SweepRadiusChunks = 3;
     public const int SweepRowsPerCall = 2;
     public const int RevealGrowPerTick = 4;
+    /// <summary>
+    /// Local streamed neighbourhood around a scout/visit cell (chunks).
+    /// Spawn-centered grow covers HorizonDrawDistance (Farseer gray tent +
+    /// black tips). Growing this to the full onset disk would request columns
+    /// past that skyline into empty sky.
+    /// </summary>
+    public const int LocalVisitRevealChunks = 24;
 
     readonly LodScoutEntity?[] slots = new LodScoutEntity[MaxConcurrent];
     int liveCount;

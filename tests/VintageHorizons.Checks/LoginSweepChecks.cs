@@ -496,8 +496,12 @@ public static class LoginSweepChecks
             "scouts skip GetColor bake when map chunks never arrived");
         c.True(bake.Contains("AllMapChunksLoaded(capi.World.BlockAccessor, primaryKey)"),
             "login bake does not force-paint a stop with missing-tex white when maps are absent");
-        c.True(scoutFill.Contains("viewBoost.ChunkVisibleRadius") || bake.Contains("viewBoost.ChunkVisibleRadius"),
-            "scout ring target follows the login view-boost visible radius");
+        c.True(bake.Contains("LodLoginScoutFill.LocalVisitRevealChunks"),
+            "visit/scout rings stay local; they do not grow past the silhouette into empty sky");
+        c.True(scoutFill.Contains("LocalVisitRevealChunks"),
+            "scout grow cap is the local visit neighbourhood");
+        c.True(LodLoginScoutFill.LocalVisitRevealChunks < 40,
+            "local scout reveal is a neighbourhood, not the ~130-chunk onset disk");
         c.Eq(6, LodLoginScoutFill.MaxConcurrent, "scout concurrency stays capped");
         c.True(bake.Contains("stopBakeSkipIdle++") && bake.Contains("idleQueued"),
             "batch bake counts queued neighbours but still paints them");
@@ -826,9 +830,11 @@ public static class LoginSweepChecks
             LodLoginSweepBootstrap.BootstrapCellRadius(),
             "bootstrap cell radius matches the onset disk");
         c.Eq(4075, LodLoginBakeViewBoost.SweepVisitRadiusBlocks,
-            "750-block hold × 4.5 + 700 is 4075 blocks");
+            "750-block hold × 4.5 + 700 is 4075 blocks (Farseer onset, not a void band)");
         c.Eq(16384, LodLoginSweepBootstrap.MaxBootstrapClassifyCells,
             "classify ceiling covers the ~12k L0 onset disk");
+        c.Eq(24, LodLoginScoutFill.LocalVisitRevealChunks,
+            "scouts stream a local neighbourhood around visit cells");
         c.Eq(180, LodLoginSweepTiming.MinVisitStops, "first-pass floor densifies the disk");
         c.Eq(520, LodLoginSweepTiming.MaxVisitStops, "first-pass ceiling for fast machines");
         c.Eq(36, LodLoginSweepTiming.MinRetryStops, "retry floor stays shorter than first pass");

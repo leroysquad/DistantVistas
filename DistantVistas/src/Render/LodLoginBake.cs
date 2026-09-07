@@ -460,10 +460,10 @@ public sealed class LodLoginBake
         LodWorld world = pipeline.World;
         int visitedCount = LodLoginSweep.VisitedL0Keys(world).Count();
 
-        // First successful sweep for this world: always bootstrap the ~216 km player disk
-        // (coast guard / radius), even if the player already walked some land. Revisit/
-        // refresh of VisitedL0Keys would only re-cover the tiny walked frontier and leave
-        // vistas beyond it as sky (0.8.26).
+        // First successful sweep for this world: always bootstrap the Farseer-onset
+        // disk (coast guard / radius), even if the player already walked some land.
+        // Revisit of VisitedL0Keys would only re-cover the walked frontier and leave
+        // a white/empty strip in front of the gray/black silhouette.
         if (LodLoginSweepComplete.TryLoad(capi) == null)
         {
             ApplyBootstrapPlan(PlanBootstrap(), visitedCount, "first sweep → bootstrap");
@@ -690,10 +690,9 @@ public sealed class LodLoginBake
         LogTeleportBegin();
 
         GrowRevealAroundSpawn();
-        SweepColumnsAroundSpawn();
 
         List<long> ready = scoutFill.Tick(
-            capi, pipeline, pending, completedKeys, viewBoost.ChunkVisibleRadius);
+            capi, pipeline, pending, completedKeys, LodLoginScoutFill.LocalVisitRevealChunks);
         for (int i = 0; i < ready.Count; i++)
             scoutReady.Enqueue(ready[i]);
 
@@ -713,6 +712,7 @@ public sealed class LodLoginBake
             SweepColumnsAround(key);
             if (!BakeBatchAtStop(key))
             {
+                SweepColumnsAroundSpawn();
                 UpdateProgress(Progress,
                     StatusWithEta($"{VisitPrefix()}painting streamed ring… ({stopBakeIndex}/{Math.Max(1, stopBakeKeys.Count)})"));
                 return;
@@ -723,6 +723,8 @@ public sealed class LodLoginBake
             statusWriter.TouchAdvance($"region-{finished}-of-{total}");
             currentKey = null;
         }
+
+        SweepColumnsAroundSpawn();
 
         int inFlight = scoutFill.LiveCount + scoutReady.Count + (currentKey != null ? 1 : 0);
         if (inFlight == 0 && pending.Count == 0)
@@ -928,7 +930,8 @@ public sealed class LodLoginBake
         (double x, _, double z) = LodLoginSweep.VisitPosition(capi.World, l0Key);
         int cx = (int)Math.Floor(x / GlobalConstants.ChunkSize);
         int cz = (int)Math.Floor(z / GlobalConstants.ChunkSize);
-        pipeline.SweepLoadedColumns(cx, cz, viewBoost.ChunkSweepRadiusChunks, forceRecapture: true, rowsPerCall: SweepRowsPerCall);
+        pipeline.SweepLoadedColumns(
+            cx, cz, LodLoginScoutFill.SweepRadiusChunks, forceRecapture: true, rowsPerCall: SweepRowsPerCall);
     }
 
     /// <summary>
@@ -1068,7 +1071,7 @@ public sealed class LodLoginBake
 
     void GrowRevealAround(long l0Key)
     {
-        int target = viewBoost.ChunkVisibleRadius;
+        int target = LodLoginScoutFill.LocalVisitRevealChunks;
         if (revealRadius >= target) return;
         int before = revealRadius;
         revealRadius = Math.Min(target, revealRadius + RevealGrowPerTick);

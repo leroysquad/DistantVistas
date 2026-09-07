@@ -6,7 +6,7 @@
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.29. Login canvas fills to Farseer onset + 700 (not a thin 750-hold ring). 1.0.28 skyline look kept. Vintage Horizons fork.",
+    "description":  "Official 1.0.29. FlagBaked disk to Farseer gray tent + black tips (onset + 700). 1.0.28 look kept. Vintage Horizons fork.",
     "authors":  [
                     "IllLeroySquad"
                 ],
