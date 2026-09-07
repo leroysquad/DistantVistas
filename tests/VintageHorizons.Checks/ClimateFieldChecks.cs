@@ -61,9 +61,9 @@ public static class ClimateFieldChecks
             keep.LowR, keep.LowG, keep.LowB,
             Mountain.LowR, Mountain.LowG, Mountain.LowB,
             out float lR, out float lG, out float lB);
-        c.Near(gR / 0.62f, lR / 0.48f, 0.0001, "grass and leaf share the same red climate ratio");
-        c.Near(gG / 0.58f, lG / 0.70f, 0.0001, "grass and leaf share the same green climate ratio");
-        c.Near(gB / 0.28f, lB / 0.16f, 0.0001, "grass and leaf share the same blue climate ratio");
+        c.Near(gR / 0.62f, lR / 0.48f, 0.0001, "grass and leaf share the same luminance climate scale");
+        c.Near(gG / 0.58f, lG / 0.70f, 0.0001, "grass and leaf share the same luminance climate scale (green)");
+        c.Near(gB / 0.28f, lB / 0.16f, 0.0001, "grass and leaf share the same luminance climate scale (blue)");
     }
 
     static void WalkDoesNotRecolorFar(Check c)
@@ -80,8 +80,9 @@ public static class ClimateFieldChecks
         c.Eq(before.LowG, after.LowG, "walk does not rewrite far green");
         c.Eq(before.LowB, after.LowB, "walk does not rewrite far blue");
         c.Eq(before.LowTemp, after.LowTemp, "walk does not rewrite far temperature");
+        c.Eq(40, LodClimateField.CellBlocks, "climate lattice is 40 blocks (0.8.46 / 40-4 field)");
         c.True(field.TryGet(10000 + 10, 8000 + 10, out _),
-            "a point inside the same 64-block cell hits the same sample");
+            "a point inside the same 40-block cell hits the same sample");
         c.False(field.TryGet(10000 + LodClimateField.CellBlocks, 8000, out _),
             "the next cell is not filled by a neighbour write");
     }

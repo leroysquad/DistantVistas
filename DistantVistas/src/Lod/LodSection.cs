@@ -11,7 +11,9 @@ public struct LodPaletteEntry
 {
     public int BlockId;
 
-    /// <summary>Untinted base color; seasonal/climate tint is applied live in the shader.</summary>
+    /// <summary>
+    /// Base colour for live-tint sections; final baked RGB when <see cref="FlagBaked"/>.
+    /// </summary>
     public int Color;
 
     public byte Flags;
@@ -24,7 +26,14 @@ public struct LodPaletteEntry
     public byte TintSlot;
 
     public const byte FlagWater = 1;
-    // Bits 2 and 4 are free: they held tint classes, now superseded by TintSlot.
+
+    /// <summary>
+    /// Visit-baked canopy whose stored RGB is the frosted side colour. The mesher
+    /// extra-mixes UP faces toward frost white; walls keep <see cref="Color"/>.
+    /// Bit 2 is free of tint-class history (TintSlot superseded those).
+    /// </summary>
+    public const byte FlagFrost = 2;
+    // Bit 4 is free: it held a tint class, now superseded by TintSlot.
 
     /// <summary>
     /// Not terrain at all (fire, meta markers): dropped at capture so it never becomes
@@ -38,6 +47,15 @@ public struct LodPaletteEntry
     /// and the ground shows through it.
     /// </summary>
     public const byte FlagThin = 16;
+
+    /// <summary>
+    /// Palette colour already includes climate + season maps from login bake.
+    /// Tint slot 0; shader must not multiply live tints again.
+    /// </summary>
+    public const byte FlagBaked = 32;
+
+    /// <summary>Visit paint bits Reclassify must keep; live policy flags are OR'd on.</summary>
+    public const byte VisitKeepMask = FlagBaked | FlagFrost;
 }
 
 /// <summary>
@@ -217,6 +235,22 @@ public class LodSection
     }
 
     /// <summary>
+    /// True when every captured column in this L0 came from a peek / sweep /
+    /// foreign cache. Mixed tiles (a real visit next to a peek) are not peek-only:
+    /// Distant Vistas still owns the visited half.
+    /// </summary>
+    public bool IsPeekOnly()
+    {
+        if (ProvisionalQuadrants == 0) return false;
+        for (int q = 0; q < QuadrantCount; q++)
+        {
+            if (IsProvisionalQuadrant(q)) continue;
+            if (QuadrantCapturedCount(q) > 0) return false;
+        }
+        return true;
+    }
+
+    /// <summary>
     /// Flag every quadrant that holds a captured column, for a section that arrived
     /// from somewhere other than local capture. Empty quadrants stay clear: there is
     /// nothing in them for a real capture to correct, and QueueColumn already treats
@@ -292,7 +326,9 @@ public class LodSection
     {
         for (int i = 0; i < Palette.Count; i++)
         {
-            if (Palette[i].BlockId == blockId) return i;
+            LodPaletteEntry e = Palette[i];
+            if (e.BlockId == blockId && e.Color == color && e.Flags == flags && e.TintSlot == tintSlot)
+                return i;
         }
         Palette.Add(new LodPaletteEntry
         {
@@ -303,6 +339,24 @@ public class LodSection
         });
         snapPaletteCount = -1;
         return Palette.Count - 1;
+    }
+
+    /// <summary>Top run of a captured column (runs are stored top-down).</summary>
+    public bool TryGetTopRun(int col, out ulong run)
+    {
+        if (col < 0 || col >= Captured.Length || !Captured[col]) { run = 0; return false; }
+        int from = ColumnStart[col];
+        if (ColumnStart[col + 1] <= from) { run = 0; return false; }
+        run = Runs[from];
+        return true;
+    }
+
+    /// <summary>Point a column's top run at another palette row (per-column colour splits).</summary>
+    public bool TrySetTopRunPaletteId(int col, int newPaletteId)
+    {
+        if (!TryGetTopRun(col, out ulong run)) return false;
+        Runs[ColumnStart[col]] = PackRun(newPaletteId, RunYTop(run), RunYBottom(run));
+        return true;
     }
 
     /// <summary>
@@ -333,6 +387,28 @@ public class LodSection
         snapPaletteFlags = flags;
         snapPaletteTintSlots = slots;
         snapPaletteCount = n;
+    }
+
+    public void InvalidatePaletteSnapshot() => snapPaletteCount = -1;
+
+    /// <summary>
+    /// World position of the top block of the first run that uses <paramref name="paletteId"/>.
+    /// </summary>
+    public bool TryFindPaletteTop(long sectionKey, int paletteId, out int x, out int y, out int z)
+    {
+        int cols = GridSize * GridSize;
+        for (int col = 0; col < cols; col++)
+        {
+            if (!Captured[col]) continue;
+            foreach (ulong run in ColumnRuns(col))
+            {
+                if (RunPaletteId(run) != paletteId) continue;
+                (x, y, z) = LodPipeline.CaptureBlockPos(sectionKey, col, run);
+                return true;
+            }
+        }
+        x = y = z = 0;
+        return false;
     }
 
     /// <summary>

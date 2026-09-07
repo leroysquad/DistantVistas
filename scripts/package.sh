@@ -17,6 +17,7 @@ rm -f "$ZIP"
 
 # ModDB zips contain the mod files at the archive root (no wrapping folder),
 # and never the game's own DLLs (all references are Private=false).
+# Always use forward-slash zip entry names (Linux / unzip / VS asset loader).
 python3 - "$MOD_DIR" "$ZIP" <<'EOF'
 import os, sys, zipfile
 mod_dir, zip_path = sys.argv[1], sys.argv[2]
@@ -26,7 +27,9 @@ with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as z:
             if f.endswith(".pdb"):
                 continue
             full = os.path.join(root, f)
-            z.write(full, os.path.relpath(full, mod_dir))
+            # Windows os.path.relpath uses '\'; zip entries must use '/'.
+            arcname = os.path.relpath(full, mod_dir).replace("\\", "/")
+            z.write(full, arcname)
     print("packaged:", zip_path)
     for info in z.infolist():
         print(f"  {info.file_size:>9}  {info.filename}")

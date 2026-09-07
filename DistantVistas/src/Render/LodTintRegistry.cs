@@ -76,6 +76,13 @@ public static class LodTopSoil
 
     /// <summary>The diluted tint a slot holds, from the sampled tint and the share.</summary>
     public static float Dilute(float share, float tint) => share + (1f - share) * tint;
+
+    /// <summary>
+    /// Slight coverage boost for legacy stable topsoil composites only. Visit-sweep
+    /// capture uses raw coverage and stores exact GetColor instead.
+    /// </summary>
+    public static float GreenerCoverage(float coverage) =>
+        Math.Min(1f, coverage * 1.06f + 0.03f);
 }
 
 public class LodTintRegistry

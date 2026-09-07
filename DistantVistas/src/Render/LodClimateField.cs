@@ -4,12 +4,13 @@ namespace DistantVistas;
 /// Coarse climate at XZ. Vanilla paints grass, leaves, and bushes from
 /// GetClimateAt at that vertex. One keep-origin table painted the whole far
 /// field, so the fade snapped green and mountain canopies stayed lime on
-/// olive grass. Same sample for every vegetation slot on one hill; the slot
+/// olive grass. Cells are 40 blocks on XZ with four-corner bilinear upload per
+/// section draw. Same sample for every vegetation slot on one hill; the slot
 /// table still holds dirt-share dilution and per-species season maps.
 /// </summary>
 public sealed class LodClimateField
 {
-    public const int CellBlocks = 64;
+    public const int CellBlocks = 40;
     public const int MaxCells = 8192;
 
     public struct Sample
@@ -85,8 +86,8 @@ public sealed class LodClimateField
     }
 
     /// <summary>
-    /// Shift a keep-origin slot colour by the local/keep climate ratio.
-    /// Grass and leaves at the same XZ share this sample.
+    /// Shift a keep-origin slot colour toward local climate. Uses luminance scale
+    /// (matches lodterrain.vsh) — per-channel local/keep on Dilute(share,·) skews grass lavender.
     /// </summary>
     public static void ApplyLocalClimate(
         float slotR, float slotG, float slotB,
@@ -94,9 +95,21 @@ public sealed class LodClimateField
         float localR, float localG, float localB,
         out float r, out float g, out float b)
     {
-        r = slotR * SafeRatio(localR, keepR);
-        g = slotG * SafeRatio(localG, keepG);
-        b = slotB * SafeRatio(localB, keepB);
+        float keepLum = 0.299f * keepR + 0.587f * keepG + 0.114f * keepB;
+        float localLum = 0.299f * localR + 0.587f * localG + 0.114f * localB;
+        float scale = LuminanceScale(localLum, keepLum);
+        r = slotR * scale;
+        g = slotG * scale;
+        b = slotB * scale;
+    }
+
+    public static float LuminanceScale(float localLum, float keepLum)
+    {
+        if (keepLum < 0.04f) return 1f;
+        float t = localLum / keepLum;
+        if (t < 0.5f) return 0.5f;
+        if (t > 2f) return 2f;
+        return t;
     }
 
     public static float SafeRatio(float local, float keep)

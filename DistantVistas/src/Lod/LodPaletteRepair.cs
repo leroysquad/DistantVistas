@@ -141,6 +141,11 @@ public static class LodPaletteRepair
         for (int i = 0; i < section.Palette.Count; i++)
         {
             LodPaletteEntry entry = section.Palette[i];
+            // Discover-baked palettes store final climate+season RGB. RefreshStable
+            // used StableColorOf (atlas mean / dirt-heavy topsoil composite) and
+            // overwrote them on every disk load while FlagBaked stayed set, so the
+            // shader skipped live tint and walked land snapped to brown rectangles.
+            if ((entry.Flags & LodPaletteEntry.FlagBaked) != 0) continue;
             int? provided = colorOf(entry.BlockId);
             if (!provided.HasValue) continue;
 

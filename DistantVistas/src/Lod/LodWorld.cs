@@ -56,6 +56,12 @@ public class LodWorld
     /// <summary>Sections whose mesh is stale.</summary>
     public readonly HashSet<long> RenderDirty = new();
 
+    /// <summary>
+    /// Remesh even while idle. The resident GPU mesh stays until the new one
+    /// uploads — do not dispose first.
+    /// </summary>
+    public readonly HashSet<long> ForceRemesh = new();
+
     /// <summary>Sections whose DB row is stale.</summary>
     public readonly HashSet<long> SaveDirty = new();
 
@@ -363,6 +369,16 @@ public class LodWorld
         }
     }
 
+    /// <summary>
+    /// Keep the current GPU mesh and remesh on top of it. Walk-time visit bake
+    /// must not dispose first — that punched holes every quadrant capture.
+    /// </summary>
+    public void RequestGpuSwap(long key)
+    {
+        RenderDirty.Add(key);
+        ForceRemesh.Add(key);
+    }
+
     public void MarkChanged(long key)
     {
         if (Sections.TryGetValue(key, out LodSection? changed))
@@ -396,7 +412,7 @@ public class LodWorld
 
     // ---- Mip propagation (child â†’ parent), main thread, budgeted ----
 
-    public void ProcessPropagation(int maxSections)
+    public void ProcessPropagation(int maxSections, Action<long>? onParentRemipped = null)
     {
         if (MipDirty.Count == 0) return;
 
@@ -442,6 +458,7 @@ public class LodWorld
             if (LodMip.DownsampleIntoParent(child, parent, KeySx(childKey) & 1, KeySz(childKey) & 1))
             {
                 MarkChanged(parentKey);
+                onParentRemipped?.Invoke(parentKey);
             }
         }
     }
@@ -470,6 +487,7 @@ public class LodWorld
     {
         Sections.Clear();
         RenderDirty.Clear();
+        ForceRemesh.Clear();
         SaveDirty.Clear();
         MipDirty.Clear();
         HasDataSet.Clear();
