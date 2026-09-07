@@ -591,12 +591,12 @@ public static class LoginSweepChecks
             "scouts spawn a real viewer entity at the visit cell");
         c.True(scoutFill.Contains("DespawnOne") && scoutFill.Contains("DespawnAll"),
             "scouts despawn each viewer and wipe leftovers on reset");
-        c.True(scoutFill.Contains("HasDrawableMesh"),
-            "near scouts wait for a LOD mesh before despawn");
-        c.True(scoutFill.Contains("HasEmptyMeshClaim"),
-            "sticky empty tessellation claims do not hold scout slots");
+        c.True(scoutFill.Contains("TryHandoffPaint"),
+            "capture hands off to scoutReady paint queue before slot release");
+        c.True(scoutFill.Contains("RunSpawnDiskSweep"),
+            "spawn-disk column sweep is optional; mesh gate is overlay end only");
         c.True(scoutFill.Contains("WaitForMesh"),
-            "far scouts skip the mesh-wait gate after FlagBaked paint");
+            "near/far band kept for telemetry only");
         c.True(scoutFill.Contains("PartitioningEveryTicks"),
             "pinned scouts re-partition every 8 ticks, not every overlay tick");
         c.Eq(8, LodLoginScoutFill.PartitioningEveryTicks,
