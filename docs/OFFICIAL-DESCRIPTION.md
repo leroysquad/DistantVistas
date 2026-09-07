@@ -33,65 +33,16 @@ draw on **Farseer** (Badgerson, MIT). Author: **IllLeroySquad**.
 
 Counts use `wc -l` on each source file. Authorship uses `git blame` on surviving lines.
 Git records AI-assisted commits under `Cursor Agent`; those count as **IllLeroySquad**
-directed work (22,850 lines across the repo). Largest single file: `LodTerrainRenderer.cs`
-at 3,458 lines.
-
-### Authorship — full repository graph
-
-| Category | Files | Lines | **IllLeroySquad** | **AliasFactory** |
-| --- | ---: | ---: | ---: | ---: |
-| Mod C# | 89 | 30,920 | 21,786 | 9,134 |
-| Tests (C#) | 34 | 8,846 | 4,612 | 4,234 |
-| Shaders (GLSL) | 10 | 1,285 | 535 | 750 |
-| Scripts | 16 | 2,732 | 6 | 2,726 |
-| Documentation | 16 | 3,195 | 1,535 | 1,660 |
-| Mod metadata (json, csproj) | 4 | 148 | 77 | 71 |
-| Canvases | 2 | 301 | 301 | 0 |
-| **Total** | **171** | **47,427** | **28,852** | **18,575** |
-
-**Plain summary**
+directed work. Full graph: **[CODEBASE-AUTHORSHIP.md](CODEBASE-AUTHORSHIP.md)**.
 
 | | Lines |
 | --- | ---: |
-| **You (IllLeroySquad, including all Cursor Agent commits)** | **28,852** |
-| **Original creator (AliasFactory)** | **18,575** |
-| **Total repository** | **47,427** |
+| **IllLeroySquad** (including all Cursor Agent commits) | **28,852** |
+| **AliasFactory** | **18,575** |
+| **Total repository** (171 files) | **47,427** |
 
-AliasFactory's Horizons foundation in mod source alone: **9,134 lines of C#** (~9,000).
-
-**IllLeroySquad breakdown (direct vs Cursor Agent in git history)**
-
-| Git author | Lines |
-| --- | ---: |
-| IllLeroySquad / leroysquad / Private Citizen (direct) | 6,002 |
-| Cursor Agent (directed — counted as yours) | 22,850 |
-| **IllLeroySquad total** | **28,852** |
-
-**Shaders by file (surviving lines)**
-
-| File | Lines | IllLeroySquad | AliasFactory |
-| --- | ---: | ---: | ---: |
-| `lodterrain.fsh` / `.vsh` | 417 | 153 | 264 |
-| `farseer-region.fsh` / `.vsh` | 191 | 191 | 0 |
-| `region.fsh` / `.vsh` (Farseer) | 191 | 191 | 0 |
-| Vanilla chunk shader overrides (`chunk*.vsh`) | 486 | 0 | 486 |
-| **Shader total** | **1,285** | **535** | **750** |
-
-**Documentation by file (surviving lines)**
-
-| File | Lines | IllLeroySquad | AliasFactory |
-| --- | ---: | ---: | ---: |
-| `CHANGELOG.md` | 1,050 | 690 | 360 |
-| `DESIGN.md` | 938 | 0 | 938 |
-| `README.md` | 266 | 47 | 219 |
-| `docs/OFFICIAL-DESCRIPTION.md` | 148 | 148 | 0 |
-| `docs/RELEASING.md` | 129 | 7 | 122 |
-| ModDB / community docs (`docs/community/`, plans, audits) | 664 | 643 | 21 |
-| `LICENSE` | 21 | 0 | 21 |
-| **Documentation total** | **3,195** | **1,535** | **1,660** |
-
-Blame line counts may differ from `wc -l` by a few lines per file; category totals above
-use blame for authorship and `wc -l` for file/line inventory where noted in the first table.
+AliasFactory mod C# foundation: **9,134 lines** (~9,000). Largest single file:
+`LodTerrainRenderer.cs` at 3,458 lines.
 
 ---
 
