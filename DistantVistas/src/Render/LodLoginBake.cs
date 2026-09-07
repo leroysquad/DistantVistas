@@ -603,6 +603,7 @@ public sealed class LodLoginBake
             catch { }
             // #endregion
             LogPlannedStops("PlanSeasonExpired");
+            ReorderPendingByPaintReadiness();
             return;
         }
 
@@ -660,6 +661,21 @@ public sealed class LodLoginBake
         LodLoginSweepBootstrap.PlanBootstrap(
             pipeline.World, capi.World, pipeline, capi.World.Blocks, plantTintFallback, untintedOf, capi);
 
+    void ReorderPendingByPaintReadiness()
+    {
+        if (pending.Count <= 1) return;
+        int footprint = LodSection.SectionBlocks;
+        int centerSx = (int)Math.Floor(pickupX / footprint);
+        int centerSz = (int)Math.Floor(pickupZ / footprint);
+        paintOrderScratch.Clear();
+        while (pending.Count > 0)
+            paintOrderScratch.Add(pending.Dequeue());
+        LodLoginSweepBootstrap.OrderVisitKeysByResidency(
+            paintOrderScratch, capi.World.BlockAccessor, centerSx, centerSz);
+        for (int i = 0; i < paintOrderScratch.Count; i++)
+            pending.Enqueue(paintOrderScratch[i]);
+    }
+
     void ApplyBootstrapPlan(LodLoginSweepPlan plan, int visitedCount, string reason)
     {
         sweepMode = plan.Mode;
@@ -676,6 +692,7 @@ public sealed class LodLoginBake
             "[DistantVistas] Login visit sweep: {0} ({1} visited in cache; {2}).",
             sweepModeLabel, visitedCount, reason);
         LogPlannedStops("ApplyBootstrapPlan");
+        ReorderPendingByPaintReadiness();
     }
 
     public void Tick(float dt)
@@ -769,14 +786,24 @@ public sealed class LodLoginBake
         else
             paintStarveTicks = 0;
         scoutFill.SetPaintStarving(paintStarveTicks >= 8);
+        scoutFill.SetWarmHoldBlocks(viewBoost.SweepBoostViewDistanceBlocks);
         LodScoutSeqDiag.NotePaintStarve(paintStarveTicks);
+
+        if (paintStarveTicks >= 8 && paintStarveTicks % 32 == 0)
+            ReorderPendingByPaintReadiness();
 
         List<long> ready = scoutFill.Tick(
             capi, pipeline, renderer, pending, completedKeys,
             LodLoginScoutFill.LocalVisitRevealChunks,
             viewBoost.ChunkVisibleRadius,
-            pickupX, pickupZ);
+            pickupX, pickupZ,
+            viewBoost.SweepBoostViewDistanceBlocks);
         LodScoutSeqDiag.NoteChunkPressure(scoutFill.ChunkPressureActive);
+        scoutFill.CountLivePhases(out int waitChunksLive, out int captureLive, out _, out _);
+        LodScoutSeqDiag.MaybeWarmRingProbe(
+            finished, total, capi, pipeline, pending, pickupX, pickupZ,
+            viewBoost.SweepBoostViewDistanceBlocks, waitChunksLive, captureLive,
+            scoutFill.LiveCount, scoutReady.Count);
         PinPickupPose();
         for (int i = 0; i < ready.Count; i++)
             scoutReady.Enqueue(ready[i]);
@@ -786,7 +813,8 @@ public sealed class LodLoginBake
         LodScoutSeqDiag.NotePaintBudget(MaxBakePerTick, MaxPaintWallMsPerTick, scoutReady.Count);
         scoutFill.CountLiveBands(out int nearLive, out int farLive);
         LodScoutSeqDiag.MaybeBudget(
-            nearLive, farLive, scoutFill.HeldNearCount, scoutFill.HeldFarCount, scoutReady.Count);
+            nearLive, farLive, scoutFill.HeldNearCount, scoutFill.HeldFarCount, scoutReady.Count,
+            waitChunksLive, captureLive);
 
         if (sweepingTicks % SpawnSweepEveryTicks == 0)
             SweepColumnsAroundSpawn();
@@ -1682,7 +1710,7 @@ public sealed class LodLoginBake
         {
             System.IO.File.AppendAllText(
                 @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
-                "{\"sessionId\":\"40cccb\",\"runId\":\"1037\",\"hypothesisId\":\"H-PAINT\",\"location\":\"LodLoginBake.PaintReadyScouts\",\"message\":\"paint-scout-batch\",\"data\":{"
+                "{\"sessionId\":\"40cccb\",\"runId\":\"1038\",\"hypothesisId\":\"H-PAINT\",\"location\":\"LodLoginBake.PaintReadyScouts\",\"message\":\"paint-scout-batch\",\"data\":{"
                 + "\"completed\":" + completed
                 + ",\"attempted\":" + attempted
                 + ",\"getColorCalls\":" + getColorCalls

@@ -216,8 +216,13 @@ public static class LodLoginSweepBootstrap
 
         if (planned.Count > maxVisitStops)
         {
-            planned = BudgetBootstrapVisitStops(planned, centerSx, centerSz, maxVisitStops);
+            planned = BudgetBootstrapVisitStops(
+                planned, centerSx, centerSz, maxVisitStops, clientWorld.BlockAccessor);
             LogBudget(capi, visitedTotal, planned.Count, "Revisit");
+        }
+        else if (planned.Count > 0)
+        {
+            OrderVisitKeysByResidency(planned, clientWorld.BlockAccessor, centerSx, centerSz);
         }
 
         string label = LabelForBudgetedRevisit(visitedTotal, planned.Count, gapCount, seasonRefresh);
@@ -274,7 +279,8 @@ public static class LodLoginSweepBootstrap
 
         int diskCount = visited.Count;
         int maxVisitStops = RevisitMaxVisitStops;
-        List<long> planned = BudgetBootstrapVisitStops(visited, centerSx, centerSz, maxVisitStops);
+        List<long> planned = BudgetBootstrapVisitStops(
+            visited, centerSx, centerSz, maxVisitStops, clientWorld.BlockAccessor);
         int interiorBudget = RetryMaxVisitStops;
         List<long> interior = InteriorGapsBetweenStops(visited, planned, interiorBudget);
         if (interior.Count > 0)
@@ -340,7 +346,8 @@ public static class LodLoginSweepBootstrap
                 centerSx = (int)Math.Floor(clientWorld.Player.Entity.Pos.X / footprint);
                 centerSz = (int)Math.Floor(clientWorld.Player.Entity.Pos.Z / footprint);
             }
-            keys = BudgetBootstrapVisitStops(keys, centerSx, centerSz, maxVisitStops);
+            keys = BudgetBootstrapVisitStops(
+                keys, centerSx, centerSz, maxVisitStops, clientWorld?.BlockAccessor);
         }
         string label = gapCount == 1
             ? "Repairing 1 incomplete region"
@@ -454,7 +461,7 @@ public static class LodLoginSweepBootstrap
         }
 
         List<long> landBudgeted = BudgetBootstrapVisitStops(
-            landVisit, centerSx, centerSz, BootstrapMaxVisitStops);
+            landVisit, centerSx, centerSz, BootstrapMaxVisitStops, clientWorld.BlockAccessor);
 
         var visitKeys = new List<long>(landBudgeted);
         foreach (long key in oceanSamples)
@@ -468,7 +475,7 @@ public static class LodLoginSweepBootstrap
 
         LogOceanPlan(capi, openOceanNeeding.Count, oceanSamples.Count, openOceanFill.Count, landBudgeted.Count);
         LogBudget(capi, plannedForLabel, landBudgeted.Count);
-        OrderVisitKeysFromCenter(visitKeys, centerSx, centerSz);
+        OrderVisitKeysByResidency(visitKeys, clientWorld.BlockAccessor, centerSx, centerSz);
 
         return new LodLoginSweepPlan(
             mode,
@@ -592,10 +599,16 @@ public static class LodLoginSweepBootstrap
         List<long> keys,
         int centerSx,
         int centerSz,
-        int max)
+        int max,
+        IBlockAccessor? blockAccessor = null)
     {
         if (keys.Count <= max)
-            return OrderVisitKeysFromCenter(keys, centerSx, centerSz);
+        {
+            List<long> ordered = OrderVisitKeysFromCenter(keys, centerSx, centerSz);
+            return blockAccessor != null
+                ? OrderVisitKeysByResidency(ordered, blockAccessor, centerSx, centerSz)
+                : ordered;
+        }
 
         OrderVisitKeysFromCenter(keys, centerSx, centerSz);
 
@@ -634,7 +647,30 @@ public static class LodLoginSweepBootstrap
                 result.Add(inner[i]);
         }
 
-        return OrderVisitKeysFromCenter(result, centerSx, centerSz);
+        List<long> centered = OrderVisitKeysFromCenter(result, centerSx, centerSz);
+        return blockAccessor != null
+            ? OrderVisitKeysByResidency(centered, blockAccessor, centerSx, centerSz)
+            : centered;
+    }
+
+    /// <summary>A4: same stop count — resident map chunks first, then distance.</summary>
+    internal static List<long> OrderVisitKeysByResidency(
+        List<long> keys,
+        IBlockAccessor blockAccessor,
+        int centerSx,
+        int centerSz)
+    {
+        keys.Sort((a, b) =>
+        {
+            int la = LodLoginSweep.CountLoadedMapChunks(blockAccessor, a);
+            int lb = LodLoginSweep.CountLoadedMapChunks(blockAccessor, b);
+            if (la != lb) return lb.CompareTo(la);
+            long da = DistSq(a, centerSx, centerSz);
+            long db = DistSq(b, centerSx, centerSz);
+            int cmp = da.CompareTo(db);
+            return cmp != 0 ? cmp : a.CompareTo(b);
+        });
+        return keys;
     }
 
     internal static List<long> OrderVisitKeysFromCenter(List<long> keys, int centerSx, int centerSz)

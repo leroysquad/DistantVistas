@@ -703,8 +703,24 @@ public static class LoginSweepChecks
             "starving scouts force Capture at ~200ms");
         c.Eq(4, LodLoginScoutFill.MaxWaitHotKeyCooldown,
             "maxWait hot keys defer respawn for 4 ticks");
-        c.Eq(12, LodLoginScoutFill.ChunkPressureWaitChunksMin,
-            "IO governor engages when 12+ scouts WaitChunks while paint starves");
+        c.Eq(1, LodLoginScoutFill.ChunkPressureMinLive,
+            "chunkPressure engages on any paint starve with live scouts");
+        c.True(scoutFill.Contains("IsColdNearVisit"),
+            "cold-near annulus keys detected outside stream hold inside spawn disk");
+        c.True(scoutFill.Contains("CanEnterCapture"),
+            "Capture gated on map/resident readiness while paint starves");
+        c.True(scoutFill.Contains("WarmRingL0CellEstimate"),
+            "warm-ring L0 estimate from stream-hold radius");
+        c.True(scoutFill.Contains("CaptureStallCooldownTicks"),
+            "captureStall uses escalating cooldown to break hot-loop");
+        c.Eq(8, LodLoginScoutFill.MaxColdNearLiveWhenStarving(16),
+            "at most half the scout fleet on cold-near keys while paint starves");
+        c.True(scoutFill.Contains("OrderVisitKeysByResidency"),
+            "visit plan prefers resident map chunks (A4)");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
+                .Contains("warm-ring-probe"),
+            "warm-ring telemetry proves cliff geometry near finished~358");
         c.True(scoutFill.Contains("PendingPickScore"),
             "pending pick scores chunk residency before cold rim keys");
         c.True(scoutFill.Contains("spawnCooldown"),

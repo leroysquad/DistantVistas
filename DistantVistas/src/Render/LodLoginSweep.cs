@@ -89,6 +89,17 @@ public static class LodLoginSweep
         return false;
     }
 
+    /// <summary>How many of the four L0 map columns are resident (0–4).</summary>
+    public static int CountLoadedMapChunks(IBlockAccessor blockAccessor, long l0Key)
+    {
+        int n = 0;
+        foreach ((int cx, int cz) in ChunkColumnsForL0(l0Key))
+        {
+            if (blockAccessor.GetMapChunk(cx, cz) != null) n++;
+        }
+        return n;
+    }
+
     /// <summary>
     /// Spawn neighbourhood has map chunks so teleports can stream real terrain.
     /// </summary>

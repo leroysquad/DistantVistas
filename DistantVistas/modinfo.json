@@ -2,11 +2,11 @@
     "type":  "code",
     "modid":  "distantvistas",
     "name":  "Distant Vistas",
-    "version":  "1.0.37",
+    "version":  "1.0.38",
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.37. Cheaper-compute A-tier: chunk-residency cliff breaker, overlay GetColor dedup cache, GC hygiene on bake path. Builds on 1.0.36 wait cuts + ~358 resident handoff. Farseer gray tent + black tips. Vintage Horizons fork.",
+    "description":  "Official 1.0.38. Warm-ring cliff fix: paint-readiness scheduling past ~358 stall (cold-near annulus, captureStall break, chunkPressure on paint starve). Full seasonal colors + 4075 disk. Farseer gray tent + black tips. Vintage Horizons fork.",
     "authors":  [
                     "IllLeroySquad"
                 ],

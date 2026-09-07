@@ -1,7 +1,7 @@
 # Login bake — cheaper compute research (1.0.35+)
 
 **Branch:** `cursor/login-bake-cheaper-compute-research-beee`  
-**Implementation:** **1.0.37** on `cursor/login-bake-cheaper-compute-1037-dba0` — A2 + A1 + A3 shipped; A4 optional next.  
+**Implementation:** **1.0.38** on `cursor/login-bake-warmring-1038-dba0` — A2+A1+A3 from 1.0.37; **A4 + warm-ring fix** in 1.0.38.  
 **Audience:** speed/implementer bot, coordinator  
 **Scope:** Make the **same** visual and coverage outcome **easier to compute** — less waste, better scheduling, fewer allocations, provably equivalent reuse — **not** fewer painted cells, shorter disk, duller colors, or skipping `GetColor` without equivalence proof.  
 **Prior art in-repo:** [`login-bake-efficiency.md`](login-bake-efficiency.md), [`login-bake-walltime-1033.md`](login-bake-walltime-1033.md), [`simd-after-getcolor.md`](simd-after-getcolor.md)

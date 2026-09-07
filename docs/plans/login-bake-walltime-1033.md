@@ -265,3 +265,55 @@ Invariants unchanged: no teleports; scout viewers; exact pickup; spawn-solid 102
 | `maxWait` vs `painted` | ~1:1 | **`painted` ≫ `maxWait`** |
 | H-PAINT `getColorCalls`/batch | ~540 | **&lt;300** (dedup) |
 | `chunkPressure` in budget | n/a | **true** during rim IO saturation |
+
+## 1.0.38 warm-ring cliff (~358 stall — 1.0.37 failed)
+
+**1.0.37 playtest (runId 1037):** `finished=358` dead-end; `paintReadyQueued=0` (25/25); `paintStarveTicks=431`; **`chunkPressure:false`**; **`captureStall` 733** vs **`painted` 6** / `residentPaint` 16; `nearLive=16` `farLive=0`; avg ticks ~5 (thrash not wait). Meshes 87/8000 — **not a mesh cap**.
+
+### Root cause (geometry + scheduling, not magic numbers)
+
+Two radii overlap:
+
+| Ring | Radius | Role |
+|------|--------|------|
+| **Stream hold** | `SweepBoostViewDistanceBlocks` ≈ **750** blocks | Vanilla keeps map chunks warm — Capture can run |
+| **Spawn-solid / near scout** | **1024** blocks | Scouts use `WaitForMesh=true`, mesh gate at overlay end |
+
+Filled-disk L0 count at radius R (64-block cells): **N(R) ≈ π (R/64)²**
+
+- At **750** blocks: N ≈ **431** L0 cells (warm capacity)
+- At **358 finished**: inverse radius ≈ **683** blocks — progress exits warm halo before filling it
+- **Cold-near annulus** (750–1024 blocks): still “near” scouts, **zero** warm map chunks
+
+**Failure chain (1.0.37):**
+
+1. Pending crosses into cold-near / cold-rim keys after ~358 warm completions
+2. Force Capture @ 4 ticks **without loaded map** → zero `CapturedColumns`
+3. `TryTimeoutHandoff` fails → **`captureStall`** → 4-tick cooldown → immediate respawn (**733** loops, ~5 ticks each)
+4. All **16** near slots thrashing Capture — **`paintReadyQueued=0`**
+5. `chunkPressure` required WaitChunks≥12 — scouts were in **Capture**, so governor **never fired**
+
+**Not the cause:** mesh budget (87/8000), visit stop count cap, GetColor quality tradeoffs.
+
+### Shipped (1.0.38)
+
+| Fix | Mechanism |
+|-----|-----------|
+| **Paint-readiness Capture gate** | While paint starves: **no Capture** unless `loadedChunks≥1` or resident section exists — stops zero-column captureStall |
+| **Resident handoff in Capture** | `TryResidentPaintHandoff` every Capture tick before stall |
+| **Escalating captureStall cooldown** | `4 + retries²×2` ticks (cap 32) — breaks hot-loop |
+| **Cold-near fleet cap** | Max **half** scouts on cold-near annulus keys while starving |
+| **Pending score** | `loaded×10k + resident×10 − 50k` cold-near penalty |
+| **chunkPressure** | `paintStarve ∧ liveScouts>0` — any phase |
+| **A4 residency visit order** | `OrderVisitKeysByResidency` in bootstrap + pending resort every 32 starve ticks |
+| **Telemetry** | `warm-ring-probe` at finished 320–400: pending residency, annulus counts, `finishedRadiusBlocks` vs `warmHoldBlocks` |
+
+**Expect after 1.0.38:**
+
+| Signal | 1.0.37 @358 | Target |
+|--------|-------------|--------|
+| `finished` past 358 | dead | **climbing** |
+| `paintReadyQueued` | 0 (25/25) | **>0 most seconds** |
+| `chunkPressure` | false @ starve | **true** |
+| `captureStall` vs paint | 733 vs 6 | **captureStall ≪ painted/resident** |
+| `warm-ring-probe` | n/a | pending **loaded1Plus** rises; **coldNear** throttled |
