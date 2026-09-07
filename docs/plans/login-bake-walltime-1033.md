@@ -616,6 +616,62 @@ Hopping the player still cannot clear this class of cliff. Grow vanilla stream a
 
 Full 1680 filled disk is ~1478 blocks → stream ~1760, still under the 2048 engine ceiling. Sparse visits out to 4075 stay on scouts, not vanilla tessellation.
 
+## 1.0.45 chunkdb backpressure (1.0.44 playtest — 639 cleared, server autosave death ~679)
+
+**Playtest (runId 1044 / `distantvistas_1.0.44`):** Frontier stream worked. `finished` climbed through 639 with `streamViewBlocks` **1184→1216** and Capture alive. Then SP shut down:
+
+`Server shutting down - Server autosave failure`
+
+### Server log (authoritative)
+
+`%APPDATA%\VintagestoryData\Logs\server-main.log` ~16:09–16:12 PT:
+
+1. Repeated `Unable to autosave, was not able to pause the server` + `threads were not suspended: chunkdbthread`
+2. `Requested chunks buffer is too small! … RequestChunkColumnsQueueSize` + server ticks ~**3.2s**
+3. Fatal `Server suspend failed 20 times in a row` → stop to prevent data loss
+4. `Indexed Fifo Queue overflow` on chunkdbthread (`SupplyChunks` / `loadChunkAreaBlocking`)
+5. Shutdown still saved the world (`Saved 77064 chunks, 9722 mapchunks`)
+
+RealSmoke NREs during teardown are noise.
+
+### Why 1.0.44 flooded chunkdb
+
+| Path | What 1.0.44 did | FIFO cost |
+|------|-----------------|-----------|
+| Overlay VD write | `EnsureBoosted` set vanilla/LastApproved to full `OverlayStreamBlocks` (1024→**1184** in one shot, then **1216** at finished ~679) | Engine requests the whole new disk at once |
+| Hop reveal reset | `TryFirstHop` / `TryAdvanceHop` set `spawnRevealRadius = 2` then grew back toward stream (~40 chunks) at +8–16/tick | Re-dump of thousands of `SetChunkColumnVisible` |
+| Hop pump visible | `RequestChunkColumnsVisible` at hop XYZ with `StreamPumpRadiusChunks` (~40) every 4 ticks | 81×81 disk off pickup, not a neighbourhood |
+| Scout `RequestUp` retry | HoldAnchor released and `LoadChunkColumnPriority` the whole ring again | 16 × (2r+1)² KeepLoaded re-queues |
+
+Autosave must pause `chunkdbthread`. A blocking `loadChunkAreaBlocking` FIFO means 20 failed suspends → kill.
+
+### Shipped
+
+| Fix | Mechanism |
+|-----|-----------|
+| **Stepped stream** | Applied VD starts at **1024**, then **+32 blocks / 5s** toward `OverlayStreamBlocks`. Desired stays 1184 at finished 639; apply is not a one-shot jump |
+| **Hitch gate** | If overlay `EnsureBoosted` gap ≥ **800ms**, skip the next grow (SP hitch ≈ stuck chunkdb) |
+| **Visible budget** | `LodLoginChunkRequestBudget` **96** `SetChunkColumnVisible` / overlay tick |
+| **Spawn-solid reveal cap** | Overlay column-visible ring stays at spawn-solid (~34 chunks). Vanilla stream VD covers past-1024. Do **not** reset `spawnRevealRadius` on hop |
+| **Hop neighbourhood** | Pump `RequestL0MapChunksVisible` + radius **2** only. Player still at pickup |
+| **Idempotent HoldAnchor** | Same key/cx/cz/radius does not re-queue KeepLoaded |
+| **Staggered priority loads** | **24** `LoadChunkColumnPriority` / server tick, queue cap **512** |
+| **Telemetry** | runId **1045**: `stream-grow` has `desiredStreamBlocks`, `stepBlocks`, `dwellMs`, `hitchMs`, `hitchPressure`, `visibleReqTick`; `scout-budget` same pressure fields; `scout-host-hold.priorityLoadQueued` |
+
+**Optional safety net (not required):** in `VintagestoryData/servermagicnumbers.json` raise `RequestChunkColumnsQueueSize` (double the current value) while baking. Fix the flood in mod code first; this only buys FIFO headroom if something else still bursts.
+
+**Expect after 1.0.45:**
+
+| Signal | 1044 | Target |
+|--------|------|--------|
+| `finished` | 639 cleared, died ~679–687 | **>687 toward 800+**, server stays up |
+| `stream-grow` | 1024→1184 one write | **+32** steps, `dwellMs`:5000 |
+| `hitchPressure` | (none) | **true** during 3s ticks, then false |
+| `server-main.log` | suspend failed ×20 | **no** autosave-failure shutdown |
+| Capture / paint | alive until death | stays alive |
+
+Colors + 4075 visit/Farseer disk unchanged. Scouts stay primary.
+
 ## Plan B — soft-release threshold (geometry, not ~600)
 
 **User clarification:** a ~600 `finished` cutoff is **not hard**. Derive release timing from **warm-ring / residency geometry** (same model as the ~358 cliff), not a magic constant.

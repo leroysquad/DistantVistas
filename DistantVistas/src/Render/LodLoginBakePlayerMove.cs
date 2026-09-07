@@ -106,7 +106,11 @@ public static class LodLoginBakePlayerMove
         entity.Pos.Motion.Set(0, 0, 0);
     }
 
-    public static void RequestChunkColumnRing(
+    /// <summary>
+    /// Mark the Chebyshev annulus visible. Returns false if the overlay request
+    /// budget ran out mid-ring so the caller can retry the same shell.
+    /// </summary>
+    public static bool RequestChunkColumnRing(
         ICoreClientAPI capi,
         double x,
         double z,
@@ -114,7 +118,7 @@ public static class LodLoginBakePlayerMove
         int innerRadius,
         int outerRadius)
     {
-        if (outerRadius < 0) return;
+        if (outerRadius < 0) return true;
         int cx = (int)Math.Floor(x / GlobalConstants.ChunkSize);
         int cz = (int)Math.Floor(z / GlobalConstants.ChunkSize);
         IClientWorldAccessor world = capi.World;
@@ -127,9 +131,11 @@ public static class LodLoginBakePlayerMove
                 int tx = cx + dx;
                 int tz = cz + dz;
                 if (tx < 0 || tz < 0) continue;
-                world.SetChunkColumnVisible(tx, tz, dimension);
+                if (!LodLoginChunkRequestBudget.TrySetVisible(world, tx, tz, dimension))
+                    return false;
             }
         }
+        return true;
     }
 
     public static void RequestChunkColumnsVisible(
@@ -149,7 +155,8 @@ public static class LodLoginBakePlayerMove
                 int tx = cx + dx;
                 int tz = cz + dz;
                 if (tx < 0 || tz < 0) continue;
-                world.SetChunkColumnVisible(tx, tz, dimension);
+                if (!LodLoginChunkRequestBudget.TrySetVisible(world, tx, tz, dimension))
+                    return;
             }
         }
     }
@@ -161,7 +168,7 @@ public static class LodLoginBakePlayerMove
         foreach ((int cx, int cz) in LodLoginSweep.ChunkColumnsForL0(l0Key))
         {
             if (cx < 0 || cz < 0) continue;
-            world.SetChunkColumnVisible(cx, cz, dimension);
+            LodLoginChunkRequestBudget.TrySetVisible(world, cx, cz, dimension);
         }
     }
 }

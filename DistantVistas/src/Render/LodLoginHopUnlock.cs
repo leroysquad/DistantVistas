@@ -200,13 +200,16 @@ public sealed class LodLoginHopUnlock
     public void PumpUnlockResidency(ICoreClientAPI capi, LodLoginBakeViewBoost viewBoost, bool forceHost = false)
     {
         if (!Active) return;
+        _ = viewBoost;
 
         int dim = capi.World.Player.Entity.Pos.Dimension;
-        int revealR = StreamPumpRadiusChunks(viewBoost);
 
         if (TargetKey != 0)
             LodLoginBakePlayerMove.RequestL0MapChunksVisible(capi, TargetKey, dim);
-        LodLoginBakePlayerMove.RequestChunkColumnsVisible(capi, X, Z, dim, revealR);
+        // Neighbourhood only — 1.0.44 used StreamPumpRadiusChunks (~40) here and
+        // dumped thousands of SetChunkColumnVisible into the server FIFO each pump.
+        LodLoginBakePlayerMove.RequestChunkColumnsVisible(
+            capi, X, Z, dim, UnlockHoldRadiusChunks);
 
         if (!forceHost && TicksAtPoint % ResidencyPumpIntervalTicks != 0)
         {

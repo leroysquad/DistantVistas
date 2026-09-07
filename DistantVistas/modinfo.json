@@ -2,11 +2,11 @@
     "type":  "code",
     "modid":  "distantvistas",
     "name":  "Distant Vistas",
-    "version":  "1.0.44",
+    "version":  "1.0.45",
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.44. Overlay vanilla stream grows with the filled disk (floor 1024, cap 2048) so the 639/1024 cliff stays resident; visit disk still 4075. Scouts primary. Full seasonal colors.",
+    "description":  "Official 1.0.45. Overlay stream still grows past 1024, but one chunk / 5s with hitch backpressure so chunkdb can pause for autosave. Visit disk 4075. Scouts primary.",
     "authors":  [
                     "IllLeroySquad"
                 ],

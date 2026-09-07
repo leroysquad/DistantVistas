@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
@@ -24,6 +25,8 @@ public sealed class LodScoutHostSystem : ModSystem
     readonly Dictionary<long, int> columnRefs = new();
     readonly Dictionary<string, Queue<ScoutAnchorUp>> pendingUpsByPlayer = new();
     readonly Queue<ForceSendWork> forceSends = new();
+    readonly Queue<PriorityLoadWork> priorityLoads = new();
+    readonly HashSet<long> priorityLoadQueued = new();
     long tickListenerId;
 
     public static LodScoutHostSystem? ClientInstance { get; private set; }
@@ -36,6 +39,12 @@ public sealed class LodScoutHostSystem : ModSystem
     /// <summary>OnLoaded ForceSend budget so 16 scouts do not dump hundreds of columns in one tick.</summary>
     public const int MaxForceSendPerTick = 48;
     public const int MaxPendingUps = 32;
+    /// <summary>
+    /// LoadChunkColumnPriority per server tick. 16 scouts × 9×9 rings used to enqueue
+    /// hundreds of FIFO entries in one HoldAnchor (1.0.44 chunkdb autosave stall).
+    /// </summary>
+    public const int MaxPriorityLoadsPerTick = 24;
+    public const int MaxPriorityLoadQueue = 512;
 
     public override double ExecuteOrder() => 0.05;
 
@@ -181,6 +190,11 @@ public sealed class LodScoutHostSystem : ModSystem
             holdsByPlayer[player.PlayerUID] = holds;
         }
 
+        if (holds.TryGetValue(msg.Key, out ScoutHold? existing)
+            && existing.Cx == msg.Cx && existing.Cz == msg.Cz
+            && existing.Radius == radius && existing.Dimension == dim)
+            return;
+
         if (holds.Count >= MaxConcurrentHolds && !holds.ContainsKey(msg.Key))
         {
             if (msg.Priority)
@@ -216,7 +230,7 @@ public sealed class LodScoutHostSystem : ModSystem
 
         int pendingUps = pendingUpsByPlayer.TryGetValue(player.PlayerUID, out Queue<ScoutAnchorUp>? pq)
             ? pq.Count : 0;
-        LodScoutSeqDiag.LogHostHold(msg.Key, holds.Count, pendingUps, forceSends.Count);
+        LodScoutSeqDiag.LogHostHold(msg.Key, holds.Count, pendingUps, forceSends.Count, priorityLoads.Count);
 
         for (int dz = -radius; dz <= radius; dz++)
         {
@@ -228,13 +242,7 @@ public sealed class LodScoutHostSystem : ModSystem
                 long col = ColumnKey(cx, cz, dim);
                 columnRefs.TryGetValue(col, out int n);
                 columnRefs[col] = n + 1;
-                int sendCx = cx;
-                int sendCz = cz;
-                sapi.WorldManager.LoadChunkColumnPriority(cx, cz, new ChunkLoadOptions
-                {
-                    KeepLoaded = true,
-                    OnLoaded = () => EnqueueForceSend(player, sendCx, sendCz, dim),
-                });
+                EnqueuePriorityLoad(player, cx, cz, dim);
             }
         }
     }
@@ -288,6 +296,7 @@ public sealed class LodScoutHostSystem : ModSystem
     void OnServerTick(float dt)
     {
         _ = dt;
+        DrainPriorityLoads();
         DrainForceSends();
         DrainPendingUps();
     }
@@ -365,6 +374,59 @@ public sealed class LodScoutHostSystem : ModSystem
 
         if (q.Count == 0)
             pendingUpsByPlayer.Remove(player.PlayerUID);
+    }
+
+    void EnqueuePriorityLoad(IServerPlayer player, int cx, int cz, int dim)
+    {
+        long col = ColumnKey(cx, cz, dim);
+        if (!priorityLoadQueued.Add(col))
+            return;
+        if (priorityLoads.Count >= MaxPriorityLoadQueue)
+        {
+            DrainPriorityLoads(extra: MaxPriorityLoadsPerTick);
+            if (priorityLoads.Count >= MaxPriorityLoadQueue)
+            {
+                priorityLoadQueued.Remove(col);
+                return;
+            }
+        }
+
+        priorityLoads.Enqueue(new PriorityLoadWork
+        {
+            Player = player,
+            Cx = cx,
+            Cz = cz,
+            Dim = dim,
+        });
+    }
+
+    void DrainPriorityLoads(int extra = 0)
+    {
+        if (sapi == null) return;
+        int budget = MaxPriorityLoadsPerTick + extra;
+        int n = 0;
+        while (n < budget && priorityLoads.Count > 0)
+        {
+            PriorityLoadWork work = priorityLoads.Dequeue();
+            long col = ColumnKey(work.Cx, work.Cz, work.Dim);
+            priorityLoadQueued.Remove(col);
+            n++;
+            if (!columnRefs.TryGetValue(col, out int refs) || refs <= 0)
+                continue;
+            int sendCx = work.Cx;
+            int sendCz = work.Cz;
+            int sendDim = work.Dim;
+            IServerPlayer sendPlayer = work.Player;
+            try
+            {
+                sapi.WorldManager.LoadChunkColumnPriority(sendCx, sendCz, new ChunkLoadOptions
+                {
+                    KeepLoaded = true,
+                    OnLoaded = () => EnqueueForceSend(sendPlayer, sendCx, sendCz, sendDim),
+                });
+            }
+            catch { }
+        }
     }
 
     void EnqueueForceSend(IServerPlayer player, int cx, int cz, int dim)
@@ -494,6 +556,14 @@ public sealed class LodScoutHostSystem : ModSystem
     }
 
     sealed class ForceSendWork
+    {
+        public IServerPlayer Player = null!;
+        public int Cx;
+        public int Cz;
+        public int Dim;
+    }
+
+    sealed class PriorityLoadWork
     {
         public IServerPlayer Player = null!;
         public int Cx;

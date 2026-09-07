@@ -15,7 +15,7 @@ public static class LodScoutSeqDiag
 
     const string HypothesisId = "H-SCOUT-SEQ";
     const string SessionId = "40cccb";
-    const string RunId = "1044";
+    const string RunId = "1045";
 
     const int ThrashMaxTicks = 5;
     const long ThrashRespawnMs = 2000;
@@ -36,6 +36,9 @@ public static class LodScoutSeqDiag
     static int paintStarveTicks;
     static bool chunkPressureActive;
     static int overlayStreamViewBlocks;
+    static int overlayDesiredStreamBlocks;
+    static int overlayHitchMs;
+    static bool overlayHitchPressure;
 
     static readonly Dictionary<long, long> lastReleaseMsByKey = new();
     static readonly Dictionary<int, (LodScoutEntity.Phase Phase, long Ms)> lastPhaseLogBySlot = new();
@@ -61,6 +64,9 @@ public static class LodScoutSeqDiag
         paintStarveTicks = 0;
         chunkPressureActive = false;
         overlayStreamViewBlocks = 0;
+        overlayDesiredStreamBlocks = 0;
+        overlayHitchMs = 0;
+        overlayHitchPressure = false;
         lastWarmRingMs = 0;
         lastHopResidencyMs = 0;
         lastHopResidencyLoaded = -1;
@@ -87,12 +93,30 @@ public static class LodScoutSeqDiag
 
     public static void NoteStreamView(int blocks) => overlayStreamViewBlocks = blocks;
 
-    public static void LogStreamGrow(int finished, int streamViewBlocks)
+    public static void NoteStreamPressure(int desiredBlocks, int hitchMs, bool hitchPressure)
+    {
+        overlayDesiredStreamBlocks = desiredBlocks;
+        overlayHitchMs = hitchMs;
+        overlayHitchPressure = hitchPressure;
+    }
+
+    public static void LogStreamGrow(
+        int finished,
+        int streamViewBlocks,
+        int desiredStreamBlocks = 0,
+        int hitchMs = 0,
+        bool hitchPressure = false)
     {
         Write("LodLoginBakeViewBoost.EnsureBoosted", "stream-grow",
             "{\"finished\":" + finished
             + ",\"streamViewBlocks\":" + streamViewBlocks
+            + ",\"desiredStreamBlocks\":" + desiredStreamBlocks
             + ",\"finishedRadiusBlocks\":" + LodLoginScoutFill.FinishedToRadiusBlocks(finished)
+            + ",\"stepBlocks\":" + LodLoginBakeViewBoost.StreamGrowStepBlocks
+            + ",\"dwellMs\":" + LodLoginBakeViewBoost.StreamGrowDwellMs
+            + ",\"hitchMs\":" + hitchMs
+            + ",\"hitchPressure\":" + Bool(hitchPressure)
+            + ",\"visibleReqTick\":" + LodLoginChunkRequestBudget.IssuedThisTick
             + "}");
     }
 
@@ -375,6 +399,11 @@ public static class LodScoutSeqDiag
             + ",\"paintStarveTicks\":" + paintStarveTicks
             + ",\"chunkPressure\":" + Bool(chunkPressureActive)
             + ",\"streamViewBlocks\":" + overlayStreamViewBlocks
+            + ",\"desiredStreamBlocks\":" + overlayDesiredStreamBlocks
+            + ",\"hitchMs\":" + overlayHitchMs
+            + ",\"hitchPressure\":" + Bool(overlayHitchPressure)
+            + ",\"visibleReqTick\":" + LodLoginChunkRequestBudget.IssuedThisTick
+            + ",\"visibleBudgetHit\":" + Bool(LodLoginChunkRequestBudget.Exhausted)
             + "}");
 
         spawnsWindow = 0;
@@ -611,7 +640,7 @@ public static class LodScoutSeqDiag
             "{\"key\":" + key + ",\"source\":\"" + source + "\"}");
     }
 
-    public static void LogHostHold(long key, int holdCount, int pendingUps, int forceSendQueued)
+    public static void LogHostHold(long key, int holdCount, int pendingUps, int forceSendQueued, int priorityLoadQueued = 0)
     {
         lastHostOutcomeByKey[key] = "held";
         if (!overlayActive) return;
@@ -624,6 +653,7 @@ public static class LodScoutSeqDiag
             + ",\"holdCount\":" + holdCount
             + ",\"pendingUps\":" + pendingUps
             + ",\"forceSendQueued\":" + forceSendQueued
+            + ",\"priorityLoadQueued\":" + priorityLoadQueued
             + "}");
     }
 

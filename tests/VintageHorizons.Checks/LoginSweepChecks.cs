@@ -769,6 +769,14 @@ public static class LoginSweepChecks
                 GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
                 .Contains("1.0.44 frontier-relative stream"),
             "walltime plan documents 1.0.44 progressive overlay stream");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
+                .Contains("1.0.45 chunkdb backpressure"),
+            "walltime plan documents 1.0.45 autosave/chunkdb flood fix");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
+                .Contains("RequestChunkColumnsQueueSize"),
+            "plan documents optional servermagicnumbers FIFO bump");
         c.Eq(1024, LodLoginBakeViewBoost.SweepStreamViewDistanceBlocks,
             "overlay vanilla stream floor is spawn-solid so cliff L0s stay resident");
         c.Eq(1024, LodLoginBakeViewBoost.MinOverlayStreamBlocks,
@@ -803,6 +811,16 @@ public static class LoginSweepChecks
             "unlock marks all four L0 map columns visible");
         c.True(bake.Contains("PumpUnlockResidency"),
             "overlay pumps forced residency each tick while hop active");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
+                .Contains("dim, UnlockHoldRadiusChunks"),
+            "hop pump SetChunkColumnVisible is the L0 neighbourhood, not the full stream disk");
+        c.True(bake.Contains("SpawnSolidStreamChunks"),
+            "overlay visible ring stays on spawn-solid; vanilla VD covers past 1024");
+        c.Eq(1, bake.Split("spawnRevealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius").Length - 1,
+            "hop must not reset spawnRevealRadius (that re-dumps the visible disk)");
+        c.Eq(96, LodLoginChunkRequestBudget.MaxVisiblePerTick,
+            "overlay SetChunkColumnVisible is budgeted per tick");
         c.Eq(128, LodLoginHopUnlock.MaxResidencyForceTicks,
             "hop holds unlock up to 128 ticks while forcing residency");
         c.True(File.ReadAllText(Path.Combine(
@@ -878,6 +896,10 @@ public static class LoginSweepChecks
             "server hold cap is 16 scouts plus residency pump plus spare");
         c.Eq(48, LodScoutHostSystem.MaxForceSendPerTick,
             "ForceSend is budgeted so 16 KeepLoaded rings do not dump in one tick");
+        c.Eq(24, LodScoutHostSystem.MaxPriorityLoadsPerTick,
+            "LoadChunkColumnPriority is staggered so chunkdb can pause for autosave");
+        c.Eq(512, LodScoutHostSystem.MaxPriorityLoadQueue,
+            "priority-load queue is capped");
         c.Eq(32, LodScoutHostSystem.MaxPendingUps,
             "refused KeepLoaded Ups queue instead of going silent");
 
@@ -938,6 +960,10 @@ public static class LoginSweepChecks
             "server queues extra Ups instead of dropping them at the hold cap");
         c.True(scoutHost.Contains("MaxForceSendPerTick"),
             "server ForceSend is per-tick budgeted");
+        c.True(scoutHost.Contains("EnqueuePriorityLoad"),
+            "KeepLoaded columns enqueue instead of dumping the whole ring on HoldAnchor");
+        c.True(scoutHost.Contains("existing.Radius == radius"),
+            "HoldAnchor no-ops when the same scout ring is already KeepLoaded");
         c.True(scoutHost.Contains("Math.Clamp(msg.Radius, 1, MaxHoldRadiusChunks)"),
             "server KeepLoaded radius is the local neighbourhood, not the onset disk");
         c.True(scoutHost.Contains("LodVsCompat.TryGetLoadedEntities"),
@@ -1606,6 +1632,22 @@ public static class LoginSweepChecks
             "full 1680 filled disk still fits under 2048");
         c.True(LodLoginBakeViewBoost.OverlayStreamBlocks(800) > LodLoginBakeViewBoost.OverlayStreamBlocks(639),
             "stream keeps a lead as finished climbs toward 800+");
+        c.Eq(32, LodLoginBakeViewBoost.StreamGrowStepBlocks,
+            "applied overlay stream grows one vanilla chunk at a time");
+        c.Eq(5000, LodLoginBakeViewBoost.StreamGrowDwellMs,
+            "five seconds between stream steps so chunkdb can drain");
+        c.Eq(800, LodLoginBakeViewBoost.StreamGrowHitchPressureMs,
+            "overlay hitch ≥800ms blocks the next stream grow");
+        c.Eq(1024, LodLoginBakeViewBoost.StepAppliedStream(0, 1184, 0, 0, false),
+            "first apply is spawn-solid 1024, not a 1184 jump");
+        c.Eq(1024, LodLoginBakeViewBoost.StepAppliedStream(1024, 1184, 1000, 1, false),
+            "dwell holds stream at 1024");
+        c.Eq(1056, LodLoginBakeViewBoost.StepAppliedStream(1024, 1184, 6000, 1, false),
+            "after dwell, stream steps +32 toward 1184");
+        c.Eq(1024, LodLoginBakeViewBoost.StepAppliedStream(1024, 1184, 6000, 1, true),
+            "hitch pressure skips stream growth");
+        c.Eq(1184, LodLoginBakeViewBoost.StepAppliedStream(1184, 1184, 20000, 1, false),
+            "applied stream stops at the desired frontier target");
         c.Eq(4075, LodLoginBakeViewBoost.SweepVisitRadiusBlocks,
             "visit/Farseer disk stays 4075 (4.5×750+700), not the vanilla stream cap");
         c.Eq(
@@ -1672,8 +1714,16 @@ public static class LoginSweepChecks
             "boost resolve grows vanilla stream with finished radius");
         string diag = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"));
-        c.True(diag.Contains("RunId = \"1044\""),
-            "playtest telemetry runId is 1044");
+        c.True(diag.Contains("RunId = \"1045\""),
+            "playtest telemetry runId is 1045");
+        c.True(diag.Contains("hitchPressure"),
+            "stream-grow / scout-budget log hitch backpressure");
+        c.True(diag.Contains("desiredStreamBlocks"),
+            "telemetry splits applied vs desired overlay stream");
+        c.True(diag.Contains("priorityLoadQueued"),
+            "scout-host-hold logs staggered KeepLoaded queue depth");
+        c.True(viewBoost.Contains("StepAppliedStream"),
+            "applied overlay stream steps toward OverlayStreamBlocks");
         c.True(diag.Contains("stream-grow"),
             "stream-grow logs overlay VD increases past 1024");
         c.True(viewBoost.Contains("FarViewDistanceCap"),

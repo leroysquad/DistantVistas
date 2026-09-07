@@ -46,9 +46,9 @@ public sealed class LodLoginBake
     /// </summary>
     internal const int MaxExpireLeftoverKeys = 256;
     const int SweepRowsPerCall = 2;
-    const int RevealGrowPerTick = 8;
-    const int SpawnSweepEveryTicks = 4;
-    const int SpawnRevealEveryTicks = 4;
+        const int RevealGrowPerTick = 1;
+        const int SpawnSweepEveryTicks = 4;
+        const int SpawnRevealEveryTicks = 4;
 
     /// <summary>Near-field disk that must have drawable meshes before overlay Hide.</summary>
     public const double SpawnSolidRadiusBlocks = 1024;
@@ -782,9 +782,11 @@ public sealed class LodLoginBake
     {
         LogTeleportBegin();
         sweepingTicks++;
-
+        LodLoginChunkRequestBudget.BeginOverlayTick();
         viewBoost.EnsureBoosted(finished);
         LodScoutSeqDiag.NoteStreamView(viewBoost.LiveStreamViewDistanceBlocks);
+        LodScoutSeqDiag.NoteStreamPressure(
+            viewBoost.DesiredStreamViewDistanceBlocks, viewBoost.LastHitchMs, viewBoost.HitchPressure);
 
         if (sweepingTicks == 1 || sweepingTicks % SpawnRevealEveryTicks == 0)
             GrowRevealAroundStream();
@@ -805,16 +807,14 @@ public sealed class LodLoginBake
             paintStarveTicks, waitChunksLive, captureLive, liveScouts, finished);
         if (!hopUnlock.Active && stallSignature)
         {
-            if (hopUnlock.TryFirstHop(
-                    capi, viewBoost, pickupX, pickupY, pickupZ, hopPendingScratch, finished))
-                spawnRevealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
+            hopUnlock.TryFirstHop(
+                capi, viewBoost, pickupX, pickupY, pickupZ, hopPendingScratch, finished);
         }
         else if (hopUnlock.Active && hopUnlock.ShouldAdvance(
             capi, paintStarveTicks, waitChunksLive, captureLive, liveScouts, finished))
         {
-            if (hopUnlock.TryAdvanceHop(
-                    capi, viewBoost, pickupX, pickupY, pickupZ, hopPendingScratch, finished))
-                spawnRevealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
+            hopUnlock.TryAdvanceHop(
+                capi, viewBoost, pickupX, pickupY, pickupZ, hopPendingScratch, finished);
         }
         if (hopUnlock.Active)
         {
@@ -865,6 +865,7 @@ public sealed class LodLoginBake
         int inFlight = scoutFill.LiveCount + scoutFill.HeldCount + scoutReady.Count;
         if (inFlight == 0 && pending.Count == 0)
         {
+            LodLoginChunkRequestBudget.EndOverlayTick();
             RestorePlayerPose();
             BeginAuditing();
             return;
@@ -873,6 +874,7 @@ public sealed class LodLoginBake
         UpdateProgress(Progress,
             StatusWithEta(
                 $"{VisitPrefix()}{scoutFill.LiveCount}/{LodLoginScoutFill.MaxConcurrent} scouts streaming… ({Pct(finished, total)})"));
+        LodLoginChunkRequestBudget.EndOverlayTick();
     }
 
     /// <summary>
@@ -1222,14 +1224,16 @@ public sealed class LodLoginBake
     {
         if (!restoreCaptured) return;
         hopUnlock.StreamCenter(pickupX, pickupZ, out double streamX, out double streamZ);
-        int revealTarget = hopUnlock.StreamPumpRadiusChunks(viewBoost);
+        // Vanilla viewDistance already requests the growing stream disk. Overlay
+        // SetChunkColumnVisible stays on the spawn-solid shell so hop/stream growth
+        // cannot dump a 40-chunk disk into RequestChunkColumnsQueue.
+        int revealTarget = LodLoginBakeViewBoost.SpawnSolidStreamChunks();
         if (spawnRevealRadius >= revealTarget) return;
-        int grow = hopUnlock.Active ? RevealGrowPerTick * 2 : RevealGrowPerTick;
-        int before = spawnRevealRadius;
-        spawnRevealRadius = Math.Min(revealTarget, spawnRevealRadius + grow);
+        int next = Math.Min(revealTarget, spawnRevealRadius + RevealGrowPerTick);
         int dim = capi.World.Player.Entity.Pos.Dimension;
-        LodLoginBakePlayerMove.RequestChunkColumnRing(
-            capi, streamX, streamZ, dim, before, spawnRevealRadius);
+        if (LodLoginBakePlayerMove.RequestChunkColumnRing(
+                capi, streamX, streamZ, dim, spawnRevealRadius, next))
+            spawnRevealRadius = next;
     }
 
     void GrowRevealAroundSpawn() => GrowRevealAroundStream();

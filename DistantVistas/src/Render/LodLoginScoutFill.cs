@@ -914,9 +914,10 @@ public sealed class LodLoginScoutFill
             return;
 
         int before = scout.RevealRadius;
-        scout.RevealRadius = Math.Min(target, scout.RevealRadius + RevealGrowPerTick);
-        LodLoginBakePlayerMove.RequestChunkColumnRing(
-            capi, scout.X, scout.Z, dim, before, scout.RevealRadius);
+        int next = Math.Min(target, scout.RevealRadius + RevealGrowPerTick);
+        if (LodLoginBakePlayerMove.RequestChunkColumnRing(
+                capi, scout.X, scout.Z, dim, before, next))
+            scout.RevealRadius = next;
     }
 
     void StartSlot(
