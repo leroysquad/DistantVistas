@@ -2,6 +2,8 @@
 
 Plain-language overview for ModDB, store listings, and release notes. Block-scale math
 (radius, end-to-end, square blocks) lives in `docs/community/moddb-1.0.32-listing.html`.
+Architecture and overhaul detail: **[ARCHITECTURE-AND-OVERHAULS.md](ARCHITECTURE-AND-OVERHAULS.md)**.
+Authorship graph: **[CODEBASE-AUTHORSHIP.md](CODEBASE-AUTHORSHIP.md)**.
 
 ---
 

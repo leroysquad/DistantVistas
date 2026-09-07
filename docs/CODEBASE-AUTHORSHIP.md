@@ -135,3 +135,4 @@ Largest single file: `LodTerrainRenderer.cs` at 3,458 lines.
 - Block-scale math (radius, end-to-end, square blocks) is in
   `docs/community/moddb-1.0.32-listing.html`.
 - Official mod description: `docs/OFFICIAL-DESCRIPTION.md`.
+- Architecture and overhauls: `docs/ARCHITECTURE-AND-OVERHAULS.md`.
