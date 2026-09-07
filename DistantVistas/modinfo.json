@@ -6,7 +6,7 @@
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.32. Sixteen parallel scouts, two-tier mesh gate, texture-mean cache, batch-aware ETA. Farseer gray tent + black tips. Vintage Horizons fork.",
+    "description":  "Official 1.0.32. Far 3D land that stays. Join overlay paints the horizon while you stay at spawn — 16 parallel scouts, faster bake, seasons and frost on far terrain, Farseer gray tent + black tips. Vintage Horizons fork.",
     "authors":  [
                     "IllLeroySquad"
                 ],
