@@ -393,6 +393,34 @@ public static class LodCoveragePolicy
             ? FarseerSilhouetteOnsetScale
             : (float)(FarseerSilhouetteOnsetDistance(viewDistance) / viewDistance);
 
+    /// <summary>
+    /// Pull Farseer smoke to the meshed rim when FlagBaked lags the silhouette
+    /// by more than this many blocks (white sky strip). Overlay far-ready 75%
+    /// gate is unchanged; this only moves the companion onset uniform.
+    /// </summary>
+    public const float MeshLagSmokeBlocks = 256f;
+
+    /// <summary>Overlap so smoke sits just behind the last FlagBaked mesh.</summary>
+    public const float MeshSmokeOverlapBlocks = 128f;
+
+    /// <summary>
+    /// Shader onset scale. When <paramref name="meshedDist"/> is more than
+    /// <see cref="MeshLagSmokeBlocks"/> short of the silhouette, pull onset in
+    /// so gray tent covers the unmeshed band instead of sky. Recedes to the
+    /// full <see cref="FarseerSilhouetteOnsetDistance"/> as meshes catch up.
+    /// Does not change region.fsh.
+    /// </summary>
+    public static float FarseerOnsetScaleForMeshedRim(double viewDistance, double meshedDist)
+    {
+        float target = FarseerSilhouetteOnsetScaleForView((float)viewDistance);
+        if (viewDistance <= 1.0 || meshedDist <= 0.0) return target;
+        double targetBlocks = FarseerSilhouetteOnsetDistance(viewDistance);
+        if (meshedDist + MeshLagSmokeBlocks >= targetBlocks) return target;
+        double start = Math.Max(meshedDist - MeshSmokeOverlapBlocks, viewDistance * 0.5);
+        if (start >= targetBlocks) return target;
+        return (float)(start / viewDistance);
+    }
+
     public static bool PastHorizonDraw(double nearDist, double viewDistance) =>
         viewDistance > 0 && nearDist > HorizonDrawDistance(viewDistance);
 

@@ -655,6 +655,17 @@ public static class LoginSweepChecks
             "LOD renderer exposes drawable-mesh wait so scouts do not despawn on a hole");
         c.True(terrain.Contains("public bool HasEmptyMeshClaim"),
             "LOD renderer exposes sticky empty claims so Mesh wait can release the slot");
+        c.True(terrain.Contains("bool parentHasMesh = HasDrawableMesh(parentKey)"),
+            "parent coverage uses drawable meshes, not sticky emptyMeshKeys");
+        c.True(terrain.Contains("HasDrawableMesh(parent), AllChildrenCovered(parent)"),
+            "eviction PreferParentCoverage ignores empty-mesh claims");
+        c.True(terrain.Contains("!HasDrawableMesh(nk)"),
+            "neighbour mesh request retries past sticky empty claims");
+        int pruneAt = terrain.IndexOf("void PruneRenderDirty()", StringComparison.Ordinal);
+        c.True(pruneAt >= 0, "renderer prunes RenderDirty");
+        string prune = terrain.Substring(pruneAt, Math.Min(1800, terrain.Length - pruneAt));
+        c.True(prune.Contains("!HasAnyMesh(key)"),
+            "RenderDirty prune still treats empty claims as in-flight so it does not drop their jobs");
         c.True(scoutFill.Contains("RequestUp(key, scout.Cx, scout.Cz, radius, dim, x, y, z)"),
             "client sends visit-cell XYZ so the server spawns the viewer on that column");
         c.Eq(16, LodLoginScoutFill.MaxConcurrent, "all 16 scout slots must work in parallel");
@@ -1346,6 +1357,8 @@ public static class LoginSweepChecks
             "visit-onset classifies envelope + exact L0");
         c.True(onset.Contains("MaskRebuildMinMs"),
             "visit-mask does not full-rebuild on every HasDataSet stamp during overlay");
+        c.True(onset.Contains("FarseerOnsetScaleForMeshedRim"),
+            "Farseer onset uniforms pull to the meshed rim when FlagBaked lags the silhouette");
 
         string complete = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepComplete.cs"));

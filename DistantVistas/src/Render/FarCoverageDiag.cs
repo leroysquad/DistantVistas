@@ -70,7 +70,7 @@ public static class FarCoverageDiag
         lastLogMs = now;
         logCount++;
 
-        double onset = liveVd * LodCoveragePolicy.HorizonDrawScale;
+        double onset = LodCoveragePolicy.FarseerSilhouetteOnsetDistance(liveVd);
         double env = 0;
         try
         {

@@ -7,9 +7,11 @@ using Vintagestory.API.MathTools;
 namespace DistantVistas;
 
 /// <summary>
-/// Late-only Farseer silhouette onset. Early and late uniforms both use
-/// HorizonDrawScale so midground stays Distant Vistas. LodFrontierScout grows
-/// capture toward that rim; the visit mask remains for enrich / diagnostics.
+/// Late-only Farseer silhouette onset. Uniforms start at
+/// <see cref="LodCoveragePolicy.FarseerSilhouetteOnsetDistance"/> and pull in to
+/// the meshed rim when FlagBaked lags that silhouette (smoke, not white sky).
+/// LodFrontierScout still grows capture toward the full rim. Visit mask remains
+/// for enrich / diagnostics. Does not change region.fsh.
 ///
 /// Uploads a coarse L0-section visit mask and injects uniforms into Farseer's
 /// region program after it sets farViewDistance each frame.
@@ -260,7 +262,7 @@ public static class FarseerVisitOnset
         float vd = 0f;
         try { vd = capi.World.Player.WorldData.DesiredViewDistance; } catch { }
         if (vd <= 0f) vd = 512f;
-        float onsetScale = LodCoveragePolicy.FarseerSilhouetteOnsetScaleForView(vd);
+        float onsetScale = LodCoveragePolicy.FarseerOnsetScaleForMeshedRim(vd, debugMeshedDist);
         prog.Uniform("visitOnsetEarly", onsetScale);
         prog.Uniform("visitOnsetLate", onsetScale);
         prog.Uniform("camWorldXZ", (float)cam.X, (float)cam.Z);
@@ -320,10 +322,8 @@ public static class FarseerVisitOnset
 
         ResolveEnvelopeOrigin(out double envX, out double envZ, out double envRadius);
         double liveEnv = CaptureEnvelopeRadiusBlocks(world, envX, envZ);
-        double onsetScale = LodCoveragePolicy.FarseerSilhouetteOnsetScale;
-        double horizonScale = LodCoveragePolicy.HorizonDrawScale;
-        double onsetBlocks = vd * onsetScale;
-        double horizonBlocks = vd * horizonScale;
+        double onsetBlocks = LodCoveragePolicy.FarseerSilhouetteOnsetDistance(vd);
+        double horizonBlocks = LodCoveragePolicy.HorizonDrawDistance(vd);
         double farVd = lastFarViewDistanceLogged;
         double distStart = onsetBlocks;
         if (farVd > 0 && distStart > farVd) distStart = farVd;
@@ -361,8 +361,9 @@ public static class FarseerVisitOnset
                 + ",\"vd\":" + vd.ToString("0.#", inv)
                 + ",\"farView\":" + farVd.ToString("0.#", inv)
                 + ",\"bandThickness\":" + bandThickness.ToString("0.#", inv)
-                + ",\"onsetScale\":" + onsetScale.ToString("0.##", inv)
-                + ",\"horizonScale\":" + horizonScale.ToString("0.##", inv)
+                + ",\"onsetScale\":" + LodCoveragePolicy.FarseerSilhouetteOnsetScaleForView(vd).ToString("0.##", inv)
+                + ",\"horizonScale\":" + LodCoveragePolicy.HorizonDrawScale.ToString("0.##", inv)
+                + ",\"pulledOnsetScale\":" + LodCoveragePolicy.FarseerOnsetScaleForMeshedRim(vd, debugMeshedDist).ToString("0.##", inv)
                 + ",\"onsetBlocks\":" + onsetBlocks.ToString("0.#", inv)
                 + ",\"horizonBlocks\":" + horizonBlocks.ToString("0.#", inv)
                 + ",\"distStart\":" + distStart.ToString("0.#", inv)

@@ -422,7 +422,7 @@ public class LodTerrainRenderer : IRenderer
                             : "not-resident";
                     }
                     else if (cs.CapturedColumns == 0) state = "empty";
-                    else if (!HasAnyMesh(ck)) state = world.RenderDirty.Contains(ck) ? "meshing" : "no-mesh!";
+                    else if (!HasDrawableMesh(ck)) state = world.RenderDirty.Contains(ck) ? "meshing" : "no-mesh!";
                     else state = "ok";
                     sb.Append(' ').Append(state);
                 }
@@ -1414,7 +1414,7 @@ public class LodTerrainRenderer : IRenderer
                 if (LodCoveragePolicy.DrawIncompleteL0(hasMesh, insideVanilla))
                 {
                     long parentKey = LodWorld.ParentKey(key);
-                    bool parentHasMesh = HasAnyMesh(parentKey);
+                    bool parentHasMesh = HasDrawableMesh(parentKey);
                     world.Sections.TryGetValue(parentKey, out LodSection? parentSec);
                     bool parentLandLike = ComputeLandLike(
                         LodWorld.KeyLevel(parentKey), parentSec, parentKey);
@@ -1479,7 +1479,7 @@ public class LodTerrainRenderer : IRenderer
             {
                 lastSelectedFrame[key] = frameCounter;
                 long parentKey = LodWorld.ParentKey(key);
-                bool parentHasMesh = level < LodWorld.MaxLevel && HasAnyMesh(parentKey);
+                bool parentHasMesh = level < LodWorld.MaxLevel && HasDrawableMesh(parentKey);
                 world.Sections.TryGetValue(parentKey, out LodSection? parentSec);
                 bool parentLandLike = ComputeLandLike(LodWorld.KeyLevel(parentKey), parentSec, parentKey);
                 if (LodCoveragePolicy.SkipDrawTooFine(
@@ -1504,7 +1504,7 @@ public class LodTerrainRenderer : IRenderer
                 {
                     RequestMissingNeighbourMeshes(key);
                     long parent = LodWorld.ParentKey(key);
-                    if (world.HasDataSet.Contains(parent) && !HasAnyMesh(parent))
+                    if (world.HasDataSet.Contains(parent) && !HasDrawableMesh(parent))
                         RequestMesh(parent);
                 }
             }
@@ -1788,7 +1788,8 @@ public class LodTerrainRenderer : IRenderer
         else if (world.Sections.TryGetValue(key, out LodSection? s))
         {
             state = s.CapturedColumns == 0 ? "resident-empty"
-                : HasAnyMesh(key) ? "meshed"
+                : HasDrawableMesh(key) ? "meshed"
+                : HasEmptyMeshClaim(key) ? "empty-claim"
                 : meshJobInFlight.Contains(key) ? "meshing"
                 : world.RenderDirty.Contains(key) ? "queued"
                 : "resident-unrequested";
@@ -1817,7 +1818,7 @@ public class LodTerrainRenderer : IRenderer
         for (int i = start; i < tooFineDeferred.Count; i++)
         {
             long key = tooFineDeferred[i];
-            if (!HasAnyMesh(key)) continue;
+            if (!HasDrawableMesh(key)) continue;
             Submit(key);
             drew = true;
         }
@@ -1930,7 +1931,7 @@ public class LodTerrainRenderer : IRenderer
     void TryRequestNeighbourMesh(long key, int dx, int dz)
     {
         long nk = LodWorld.NeighborKey(key, dx, dz);
-        if (world.HasDataSet.Contains(nk) && !HasAnyMesh(nk))
+        if (world.HasDataSet.Contains(nk) && !HasDrawableMesh(nk))
             RequestMesh(nk);
     }
 
@@ -2244,14 +2245,14 @@ public class LodTerrainRenderer : IRenderer
             {
                 int lvl = LodWorld.KeyLevel(key);
                 long parent = LodWorld.ParentKey(key);
-                if (lvl < LodWorld.MaxLevel && !HasAnyMesh(parent))
+                if (lvl < LodWorld.MaxLevel && !HasDrawableMesh(parent))
                     continue;
                 if (lvl <= 1 && lvl < LodWorld.MaxLevel)
                 {
                     world.Sections.TryGetValue(parent, out LodSection? psec);
                     bool parentLandLike = ComputeLandLike(LodWorld.KeyLevel(parent), psec, parent);
                     bool parentPrefer = LodCoveragePolicy.PreferParentCoverage(
-                        HasAnyMesh(parent), AllChildrenCovered(parent));
+                        HasDrawableMesh(parent), AllChildrenCovered(parent));
                     if (!LodCoveragePolicy.MayDrawCoarseParent(
                             LodWorld.KeyLevel(parent), false, parentLandLike,
                             InLeadCone(parent), lookDown01,
@@ -2332,7 +2333,7 @@ public class LodTerrainRenderer : IRenderer
                     pinDist, liveViewDistance))
                 return;
             long parent = LodWorld.ParentKey(key);
-            if (LodWorld.KeyLevel(key) < LodWorld.MaxLevel && !HasAnyMesh(parent))
+            if (LodWorld.KeyLevel(key) < LodWorld.MaxLevel && !HasDrawableMesh(parent))
                 return;
         }
 

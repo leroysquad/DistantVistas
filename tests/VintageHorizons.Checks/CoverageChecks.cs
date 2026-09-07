@@ -205,6 +205,22 @@ public static class CoverageChecks
             "unvisited onset matches silhouette onset");
         c.Eq(LodCoveragePolicy.HorizonDrawScale, LodCoveragePolicy.FarseerSilhouetteOnsetScale,
             "horizon draw and Farseer onset share the same late rim");
+        c.Eq(LodCoveragePolicy.FarseerSilhouetteOnsetScaleForView(750),
+            LodCoveragePolicy.FarseerOnsetScaleForMeshedRim(750, 4075),
+            "meshes at the silhouette keep full Farseer onset");
+        c.Eq(LodCoveragePolicy.FarseerSilhouetteOnsetScaleForView(750),
+            LodCoveragePolicy.FarseerOnsetScaleForMeshedRim(750, 4075 - 256),
+            "256-block mesh lag still uses full onset");
+        c.Eq(LodCoveragePolicy.FarseerSilhouetteOnsetScaleForView(750),
+            LodCoveragePolicy.FarseerOnsetScaleForMeshedRim(750, 0),
+            "no meshes yet keeps the silhouette onset (shader floor still 0.5× VD)");
+        float pulled = LodCoveragePolicy.FarseerOnsetScaleForMeshedRim(750, 3056);
+        float fullOnset = LodCoveragePolicy.FarseerSilhouetteOnsetScaleForView(750);
+        c.True(pulled < fullOnset,
+            "75% far-ready mesh rim pulls Farseer onset inward so smoke covers the lag band");
+        c.True(Math.Abs(pulled - (3056f - LodCoveragePolicy.MeshSmokeOverlapBlocks) / 750f) < 1e-5f,
+            "pulled onset is the meshed rim minus overlap");
+        c.Eq(256f, LodCoveragePolicy.MeshLagSmokeBlocks, "mesh-lag smoke threshold is 256 blocks");
         c.True(LodCoveragePolicy.HorizonLeadConeFine(true, 0f, 400, 512),
             "inside 1.5x the horizon still wants L0/L1");
         c.False(LodCoveragePolicy.HorizonLeadConeFine(true, 0f, 800, 512),
