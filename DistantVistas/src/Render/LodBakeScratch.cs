@@ -19,7 +19,18 @@ static class LodBakeScratch
     [ThreadStatic] static int[]? topY;
     [ThreadStatic] static bool[]? frostCol;
     [ThreadStatic] static Dictionary<int, int>? texMeanByBlockId;
+    [ThreadStatic] static Dictionary<long, int>? getColorByKey;
     [ThreadStatic] static int texMeanScope;
+
+    /// <summary>
+    /// 8×8 climate tile + block id + Y band. GetColor is stable within a tile for
+    /// the same block type; reuses samples across the 4096-column L0 pass.
+    /// </summary>
+    public static long GetColorCacheKey(int blockId, int x, int y, int z) =>
+        ((long)blockId << 32)
+        | ((long)(x >> 3 & 0xFFFF) << 16)
+        | (long)(z >> 3 & 0xFFFF)
+        | ((long)(y & 0xFF) << 48);
 
     public static BlockPos Pos(int x, int y, int z)
     {
@@ -60,6 +71,8 @@ static class LodBakeScratch
     {
         texMeanByBlockId ??= new Dictionary<int, int>(128);
         texMeanByBlockId.Clear();
+        getColorByKey ??= new Dictionary<long, int>(4096);
+        getColorByKey.Clear();
         texMeanScope++;
     }
 
@@ -67,6 +80,22 @@ static class LodBakeScratch
     {
         if (texMeanScope > 0) texMeanScope--;
         texMeanByBlockId?.Clear();
+        getColorByKey?.Clear();
+    }
+
+    public static bool TryGetSectionGetColor(int blockId, int x, int y, int z, out int rgb)
+    {
+        if (texMeanScope > 0 && getColorByKey != null)
+            return getColorByKey.TryGetValue(GetColorCacheKey(blockId, x, y, z), out rgb);
+        rgb = 0;
+        return false;
+    }
+
+    public static void RememberSectionGetColor(int blockId, int x, int y, int z, int rgb)
+    {
+        if (texMeanScope <= 0 || rgb == 0) return;
+        getColorByKey ??= new Dictionary<long, int>(4096);
+        getColorByKey[GetColorCacheKey(blockId, x, y, z)] = rgb;
     }
 
     public static bool TryGetSectionTextureMean(int blockId, out int rgb)

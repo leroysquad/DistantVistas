@@ -249,8 +249,12 @@ public static class LoginSweepChecks
             "visit bake samples vanilla GetColor at column top");
         c.True(season.Contains("FinishColumnPaint"),
             "visit bake uses the shared season-ground mix for overlay and walk");
-        c.True(bake.Contains("BakeSectionFromVisit"),
-            "login bake calls visit-only exact bake");
+        c.True(bake.Contains("BakeSectionFromVisitChunked"),
+            "login overlay uses time-budgeted visit bake (BlurRadius 0 — no halo pass)");
+        c.True(bake.Contains("MaxPaintWallMsPerTick"),
+            "login overlay caps GetColor wall time per tick");
+        c.True(bake.Contains("paintResumeCol"),
+            "partial L0 bakes resume next tick instead of freezing the client");
         c.True(bake.Contains("DeferLegacyHeal = true"),
             "legacy heal is deferred during visit sweep");
 
@@ -632,10 +636,20 @@ public static class LoginSweepChecks
             "BlockPos scratch is thread-local so GetColor does not allocate per column");
         c.True(bakeScratch.Contains("BeginSectionTextureMeans"),
             "per-section texture-mean cache avoids 8× GetColorWithoutTint per ground layer");
+        c.True(bakeScratch.Contains("TryGetSectionGetColor"),
+            "per-section GetColor cache reuses climate-tile samples across columns");
         c.True(File.ReadAllText(Path.Combine(
                 GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSeasonBake.cs"))
                 .Contains("TryGetSectionTextureMean"),
             "SampleTextureMean hits the per-section BlockId cache");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSurfaceMix.cs"))
+                .Contains("StackDeterminedByTopOnly"),
+            "stack sampler stops after the top when FinishColumnPaint keeps topRgb");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSurfaceMix.cs"))
+                .Contains("NeedsTextureMean"),
+            "texture mean is skipped outside deep-winter camouflage");
         c.True(File.Exists(Path.Combine(
                 GameAssemblies.RepoRoot, "docs", "plans", "login-bake-efficiency.md")),
             "efficiency plan (citations + A/B tiers) ships in-repo");

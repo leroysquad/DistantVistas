@@ -60,8 +60,8 @@ public static class ExploreBakeChecks
             "walk visit bake tags the shared GetColor path");
         string login = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
-        c.True(login.Contains("BakeSectionFromVisit"),
-            "overlay visit bake uses the same GetColor path as walk");
+        c.True(login.Contains("BakeSectionFromVisitChunked"),
+            "overlay visit bake uses the same chunked GetColor path as walk");
         c.True(login.Contains("DebugVisitKind = \"overlay\""),
             "overlay visit bake tags the shared GetColor path");
         c.True(season.Contains("FinishColumnPaint"),

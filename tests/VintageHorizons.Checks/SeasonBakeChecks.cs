@@ -24,7 +24,28 @@ public static class SeasonBakeChecks
         CanopyGrayMixKeepsAutumn(c);
         SimdAfterGetColor(c);
         ExpireMissingTexGate(c);
+        LoginBakeGetColorReduction(c);
     }
+
+    static void LoginBakeGetColorReduction(Check c)
+    {
+        c.True(LodSurfaceMix.StackDeterminedByTopOnly(
+                LodSurfaceMix.Kind.Snow, "snow-3", 0xFFEEEEEE, 0.5f),
+            "snow cap stops stack after top GetColor");
+        c.True(LodSurfaceMix.StackDeterminedByTopOnly(
+                LodSurfaceMix.Kind.Plant, "pine-leaves-normal", 0xFF336622, 0.2f),
+            "canopy leaves stop stack in autumn");
+        c.False(LodSurfaceMix.StackDeterminedByTopOnly(
+                LodSurfaceMix.Kind.Ground, "soil-low-normal", 0xFF886644, 0.2f),
+            "ground columns still sample the stack for mix");
+        c.Eq(
+            LodBakeScratch.GetColorCacheKey(42, 128, 64, 256),
+            LodBakeScratch.GetColorCacheKey(42, 131, 64, 263),
+            "GetColor cache key shares an 8×8 climate tile");
+        c.Neq(
+            LodBakeScratch.GetColorCacheKey(42, 128, 64, 256),
+            LodBakeScratch.GetColorCacheKey(43, 128, 64, 256),
+            "GetColor cache key varies by block id");
 
     static void MultiplyRgbIdentity(Check c)
     {

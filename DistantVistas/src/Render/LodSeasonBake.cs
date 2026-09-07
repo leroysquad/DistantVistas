@@ -175,6 +175,10 @@ public static class LodSeasonBake
     /// </summary>
     public static int SampleVanillaColor(ICoreClientAPI capi, Block block, int x, int y, int z)
     {
+        int id = block.BlockId;
+        if (LodBakeScratch.TryGetSectionGetColor(id, x, y, z, out int cached))
+            return cached;
+
         try
         {
             int color = block.GetColor(capi, LodBakeScratch.Pos(x, y, z));
@@ -183,6 +187,7 @@ public static class LodSeasonBake
                 // Pure GetColor. FlagFrost + mesher apply the wash so early-spring
                 // remesh thaws walls and crowns without rebaking every column.
                 _ = ApplyVisitFrost(capi.World, block, LodBakeScratch.Pos(x, y, z), color);
+                LodBakeScratch.RememberSectionGetColor(id, x, y, z, color);
                 // #region agent log
                 if (LodCanopyGray.IsSeasonFoliage(block))
                     FarCoverageDiag.NoteCanopySample(getColor: true, zero: false);

@@ -360,6 +360,26 @@ public static class LodSurfaceMix
     public static bool IsCanopyPlant(Kind k, string? path) =>
         k == Kind.Plant && LodCanopyGray.IsSeasonFoliagePath(path);
 
+    /// <summary>
+    /// When the visual top alone decides <see cref="FinishColumnPaint"/>, deeper
+    /// stack layers are dead weight (each was another GetColor). Snow caps, canopy,
+    /// water, and non-deep-winter plants keep the top sample only.
+    /// </summary>
+    public static bool StackDeterminedByTopOnly(Kind topKind, string? topPath, int topRgb, float winter)
+    {
+        if (topRgb == 0) return false;
+        if (topKind == Kind.Water) return true;
+        if (IsActualSnowTop(topKind, topPath)) return true;
+        if (LodCanopyGray.IsSeasonFoliagePath(topPath)) return true;
+        if (topKind == Kind.Plant
+            && (topPath == null || LodCanopyGray.IsCanopyPath(topPath) || LodCanopyGray.IsBushPath(topPath)))
+            return true;
+        return topKind == Kind.Plant && winter < DeepWinterCamouflageStart;
+    }
+
+    static bool NeedsTextureMean(float winter, float frost) =>
+        frost < 0.05f && winter >= DeepWinterCamouflageStart;
+
     public static float ReadSeasonRel(ICoreClientAPI capi, int x, int y, int z)
     {
         try
@@ -497,6 +517,7 @@ public static class LodSurfaceMix
         int skipped = 0;
         int snowLayers = 0, groundLayers = 0, plantLayers = 0;
         bool gotGround = false;
+        bool topOnly = false;
         ProbeTopPath = null;
         ProbeTopKind = Kind.None;
         ProbeTopRgb = 0;
@@ -553,6 +574,7 @@ public static class LodSurfaceMix
                 ProbeTopPath = b.Code?.Path;
                 ProbeTopKind = k;
                 ProbeTopRgb = rgb;
+                topOnly = StackDeterminedByTopOnly(k, ProbeTopPath, rgb, ProbeWinter);
             }
             if (k == Kind.Snow) snowLayers++;
             else if (k == Kind.Plant) plantLayers++;
@@ -581,7 +603,7 @@ public static class LodSurfaceMix
                 gr += cr * w; gg += cg * w; gb += cb * w; gw += w;
             }
 
-            if (k != Kind.Snow && !IsCanopyPlant(k, b.Code?.Path))
+            if (k != Kind.Snow && !IsCanopyPlant(k, b.Code?.Path) && NeedsTextureMean(ProbeWinter, ProbeFrostW))
             {
                 int texRgb = LodSeasonBake.SampleTextureMean(capi, b, x, py, z);
                 if (texRgb != 0)
@@ -603,6 +625,8 @@ public static class LodSurfaceMix
                 if (gotGround) break;
                 gotGround = true;
             }
+
+            if (topOnly) break;
         }
 
         int snow = sw > 0f ? Pack((int)(sr / sw), (int)(sg / sw), (int)(sb / sw)) : 0;

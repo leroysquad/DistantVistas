@@ -33,6 +33,10 @@ public sealed class LodLoginBake
     const int MaxBatchBakePerStop = 32;
     /// <summary>GetColor + persist per overlay tick across all live scouts, not one stop.</summary>
     const int MaxBakePerTick = 24;
+    /// <summary>Wall-clock cap so one PaintReadyScouts pass cannot freeze the client for minutes.</summary>
+    const double MaxPaintWallMsPerTick = 120.0;
+    /// <summary>Columns per partial L0 bake before re-yielding (BlurRadius 0 — no halo pass).</summary>
+    const int MaxPaintColumnsPerSection = 384;
     const int MaxLeftoverBakePerTick = 16;
     /// <summary>
     /// Month-expire leftover GetColor queue. Large caches used to enqueue every
@@ -57,7 +61,7 @@ public sealed class LodLoginBake
     public const float FarReadyHorizonScale = 0.75f;
 
     const int StabilizeWindowFrames = 90;
-    const int StabilizeWindowsRequired = 4;
+    const int StabilizeWindowsRequired = 2;
     const double StabilizeMaxMs = 28.0;
     const int MaxDrainTicks = 1800;
     const int DrainStallTicks = 240;
@@ -131,6 +135,7 @@ public sealed class LodLoginBake
     readonly List<(double DistSq, long Key)> leftoverRank = new();
     readonly LodLoginScoutFill scoutFill = new();
     readonly Queue<long> scoutReady = new();
+    readonly Dictionary<long, int> paintResumeCol = new();
     int sweepingTicks;
     int revealRadius;
     int stopBakeIndex;
@@ -292,6 +297,7 @@ public sealed class LodLoginBake
         spawnRevealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
         scoutFill.Reset(capi);
         scoutReady.Clear();
+        paintResumeCol.Clear();
         sweepingTicks = 0;
 
         overlay.Show();
@@ -772,26 +778,44 @@ public sealed class LodLoginBake
     /// </summary>
     void PaintReadyScouts()
     {
+        long deadline = Stopwatch.GetTimestamp()
+            + (long)(Stopwatch.Frequency * MaxPaintWallMsPerTick / 1000.0);
         int steps = 0;
         int painted = 0;
         int queued = scoutReady.Count;
+        int persistBatch = 0;
         for (int i = 0; i < queued && steps < MaxBakePerTick; i++)
         {
+            double wallLeftMs = (deadline - Stopwatch.GetTimestamp()) * 1000.0 / Stopwatch.Frequency;
+            if (wallLeftMs <= 0 && painted > 0)
+                break;
+
             long key = scoutReady.Dequeue();
             steps++;
-            if (!TryBakeOne(key))
+            if (!TryBakeOne(key, wallLeftMs, out bool complete))
             {
+                paintResumeCol.Remove(key);
                 if (scoutFill.IsLive(key))
                     scoutReady.Enqueue(key);
                 continue;
             }
+
+            if (!complete)
+            {
+                scoutReady.Enqueue(key);
+                continue;
+            }
+
+            paintResumeCol.Remove(key);
             scoutFill.NotifyPainted(key);
             finished++;
             painted++;
+            persistBatch++;
         }
 
-        if (painted > 0)
+        if (persistBatch > 0)
         {
+            pipeline.DrainLoginPersistence(Math.Min(16, persistBatch));
             SaveResumeSnapshot();
             sweepTiming.NoteFinished(finished);
             statusWriter.TouchAdvance($"region-{finished}-of-{total}");
@@ -972,8 +996,9 @@ public sealed class LodLoginBake
     /// Lock season appearance from the freshly captured voxels: snow on columns,
     /// leaf hue per species/height, ground tone from live maps at each block top.
     /// </summary>
-    void BakeAndPersist(long l0Key)
+    void BakeAndPersist(long l0Key, double wallMs, out bool complete)
     {
+        complete = false;
         LodWorld world = pipeline.World;
         if (!world.Sections.TryGetValue(l0Key, out LodSection? section))
         {
@@ -982,27 +1007,34 @@ public sealed class LodLoginBake
         }
         if (section == null) return;
 
+        paintResumeCol.TryGetValue(l0Key, out int startCol);
+
         // #region agent log
         string prevVisit = LodSeasonBake.DebugVisitKind;
         LodSeasonBake.DebugVisitKind = "overlay";
         // #endregion
-        LodSeasonBake.BakeSectionFromVisit(
-            capi, section, l0Key, plantTintFallback, untintedOf, out LodSeasonBake.VisitBakeTally tally);
+        int changed = LodSeasonBake.BakeSectionFromVisitChunked(
+            capi, section, l0Key, plantTintFallback, untintedOf,
+            startCol, MaxPaintColumnsPerSection, wallMs,
+            out int nextCol, out complete);
         // #region agent log
         LodSeasonBake.DebugVisitKind = prevVisit;
         // #endregion
-        visitBakeGetColor += tally.GetColor;
-        visitBakeChanged += tally.Changed;
-        visitBakePale += tally.PaleKept;
-        visitBakeZero += tally.Zero;
-        visitBakeLeaves += tally.Leaves;
-        visitBakeSnow += tally.Snow;
+
+        if (complete)
+        {
+            visitBakeGetColor += LodSection.GridSize * LodSection.GridSize;
+            visitBakeChanged += changed;
+        }
+        else
+            paintResumeCol[l0Key] = nextCol;
+
+        if (!complete) return;
 
         seasonSamples.RecordSection(l0Key, section);
 
         world.MarkChanged(l0Key);
         pipeline.InvalidateMipAncestors(l0Key);
-        pipeline.DrainLoginPersistence(1);
     }
 
     /// <summary>
@@ -1088,16 +1120,20 @@ public sealed class LodLoginBake
         return true;
     }
 
-    bool TryBakeOne(long key)
+    bool TryBakeOne(long key, double wallMs, out bool complete)
     {
+        complete = false;
         bool prevExpire = LodSeasonBake.AllowExpireNoMapSample;
         if (expireRecapture) LodSeasonBake.AllowExpireNoMapSample = true;
-        try { BakeAndPersist(key); }
+        try { BakeAndPersist(key, wallMs, out complete); }
         finally { LodSeasonBake.AllowExpireNoMapSample = prevExpire; }
         if (!pipeline.World.Sections.ContainsKey(key)) return false;
+        if (!complete) return true;
         completedKeys.Add(key);
         return true;
     }
+
+    bool TryBakeOne(long key) => TryBakeOne(key, MaxPaintWallMsPerTick, out _);
 
     void GrowRevealAround(long l0Key)
     {
@@ -1352,9 +1388,14 @@ public sealed class LodLoginBake
         }
         else if (leftover && now < SpawnReadyTimeoutSec)
         {
-            UpdateProgress(Progress,
-                $"Building horizon meshes… ({pipeline.World.RenderDirty.Count} left)");
-            return;
+            // Spawn is solid and far canvas is ready — horizon meshes can finish
+            // after the overlay without leaving holes at the player's feet.
+            if (!spawnSolid || !farReady)
+            {
+                UpdateProgress(Progress,
+                    $"Building horizon meshes… ({pipeline.World.RenderDirty.Count} left)");
+                return;
+            }
         }
 
         bool stable = windowMedians.Count >= StabilizeWindowsRequired
@@ -1414,6 +1455,7 @@ public sealed class LodLoginBake
         progressUi.Reset();
         scoutFill.Reset(capi);
         scoutReady.Clear();
+        paintResumeCol.Clear();
 
         if (success)
         {
