@@ -31,6 +31,8 @@ public sealed class LodLoginScoutFill
     public const int NearRevealChunks = 4;
     /// <summary>Far visit cells only need the L0 footprint (64 blocks ≈ 2 chunks).</summary>
     public const int FarRevealChunks = 2;
+    /// <summary>Pinned scouts re-partition this often; spawn still partitions once.</summary>
+    public const int PartitioningEveryTicks = 8;
     /// <summary>
     /// Cap passed into Tick as chunkVisibleTarget. Must stay a neighbourhood,
     /// not the ~130-chunk onset disk.
@@ -160,6 +162,8 @@ public sealed class LodLoginScoutFill
             {
                 int cx = scout.Cx;
                 int cz = scout.Cz;
+                // Near WaitChunks only. Paint/Mesh never SweepLoadedColumns or
+                // forceRecapture — that recapture storm held 16 slots and blew GC.
                 if (scout.WaitForMesh && scout.Ticks % 2 == 0)
                     pipeline.SweepLoadedColumns(
                         cx, cz, SweepRadiusChunks, forceRecapture: false,
@@ -222,8 +226,12 @@ public sealed class LodLoginScoutFill
 
             if (scout.Current == LodScoutEntity.Phase.Mesh)
             {
+                // Sticky empty tessellation claims are not drawable land. Do not
+                // hold the scout slot for MaxMeshWaitTicks on a known-empty upload;
+                // drain/stabilize still waits on HasDrawableMesh at spawn.
                 bool meshed = renderer.HasDrawableMesh(key);
-                if (!meshed && scout.Ticks < MaxMeshWaitTicks)
+                bool emptyClaim = renderer.HasEmptyMeshClaim(key);
+                if (!meshed && !emptyClaim && scout.Ticks < MaxMeshWaitTicks)
                     continue;
                 ReleaseSlot(capi, i);
             }
@@ -309,6 +317,9 @@ public sealed class LodLoginScoutFill
         viewer.ServerPos.Motion.Set(0, 0, 0);
         viewer.IsRendered = false;
         viewer.AlwaysActive = true;
+        scout.PartitionTicks++;
+        if (scout.PartitionTicks % PartitioningEveryTicks == 0)
+            LodVsCompat.TryUpdatePartitioning(viewer);
     }
 
     static int ClampReveal(

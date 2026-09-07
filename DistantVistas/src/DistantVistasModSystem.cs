@@ -529,7 +529,7 @@ public class DistantVistasModSystem : ModSystem
             visitEnrichForcedAfterBake = true;
             FarseerVisitedHeightEnrich.RefreshLoadedIfNeeded(force: true);
         }
-        else
+        else if (!renderer.LoginBakeOverlayActive)
             FarseerVisitedHeightEnrich.RefreshLoadedIfNeeded();
         // #region agent log
         if (logPlay) AgentPlayTickLog("after-assist", playTickCount, playTickEnter, "\"ok\":true");

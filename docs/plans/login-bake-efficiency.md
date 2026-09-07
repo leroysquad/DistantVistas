@@ -6,11 +6,17 @@ Ported onto `cursor/1.0.26-catchup-playtest-e27c` as **1.0.32**. Original resear
 
 | Tier | Idea | This branch |
 |------|------|-------------|
-| A | All ~16 scouts work; UI must not sit on 1/16 | Done (8 near mesh-wait + 8 far paint-release; overlay `{live}/16 scouts`) |
-| A | Near mesh-gate vs far capture-release | Done (`WaitForMesh` inside `SpawnSolidRadiusBlocks` 1024) |
-| A | Bake `scoutReady` while others stream | Done (`PaintReadyScouts`, `MaxBakePerTick = 24`) |
-| B | `LodBakeScratch` thread-local `BlockPos` + `ArrayPool` column arrays | Done |
-| B | Reuse ready / batch-candidate / despawn lists | Done |
+| A1 | Drain `scoutReady` under shared MaxBakePerTick while scouts stream | Done (`PaintReadyScouts`, `MaxBakePerTick = 24`) |
+| A2 | Near mesh-gate inside SpawnSolidRadiusBlocks; far release after paint | Done (`WaitForMesh` inside 1024) |
+| A3 | GetColor ×4096 × stack; SampleTextureMean 8× per ground layer | Done (`LodBakeScratch` + per-section BlockId texture-mean cache) |
+| A4 | Smaller batch radius beyond ~1024 | Done (leftover neighbour bake radius 0 past spawn-solid; overlay paints the visit cell) |
+| 5 | No forceRecapture in Mesh | Done (WaitChunks near-only, `forceRecapture: false`; Paint/Mesh never sweep) |
+| 6 | UpdatePartitioning every ~8 ticks (pinned scouts) | Done (`PartitioningEveryTicks = 8` via `LodVsCompat`) |
+| 7 | Throttle spawn reveal ring | Done (`SpawnRevealEveryTicks = 4`) |
+| 8 | Progress/ETA assumes 0.25s/stop | Done (`NoteFinished` uses wall / delta; measured min 0.02s) |
+| 9 | Farseer visit-mask 256×256 on HasDataSet churn | Done (500ms debounce; stamp L0 keys + envelope disk; skip height enrich during overlay) |
+| 10 | Drain/stabilize + emptyMeshKeys must not block scout slots | Done (`HasDrawableMesh` wait; `HasEmptyMeshClaim` releases the slot) |
+| B | Reuse ready / batch-candidate / despawn lists | Done (in-place `CollectBatchBakeKeys` into `stopBakeKeys`) |
 | B | `MaxBakePerTick` 12→16 | Absorbed as **24** so parallel captures drain in one overlay tick |
 
 Invariants kept: no player teleports; exact pickup XYZ; scout despawn on slot release / Reset / overlay end; spawn-solid 1024; Farseer gray tent + black tips.
@@ -24,13 +30,13 @@ Invariants kept: no player teleports; exact pickup XYZ; scout despawn on slot re
 | GC | ~7 GB managed growth in ~30 s |
 | Concurrency UI | Often **1/16** scouts active early, then slow ramp |
 
-Bottleneck shape: (1) main-thread `Block.GetColor`, (2) per-stop allocations, (3) serial `BakeBatchAtStop`, (4) mesh-gate waits at every stop including far.
+Bottleneck shape: (1) serial `currentKey` / `BakeBatchAtStop`, (2) far mesh-wait holding slots, (3) GetColor + SampleTextureMean cost — **not** scout count.
 
 ## Techniques (citations)
 
 ### 1. Array pooling + Span scratch
 
-Rent fixed-size buffers from `ArrayPool<T>.Shared` instead of `new T[n]` in the 4096-column GetColor pass. Thread-local `BlockPos` avoids thousands of short-lived position objects.
+Rent fixed-size buffers from `ArrayPool<T>.Shared` instead of `new T[n]` in the 4096-column GetColor pass. Thread-local `BlockPos` avoids thousands of short-lived position objects. Per-section `Dictionary<BlockId, meanRgb>` reuses the 8-sample texture mean.
 
 - Microsoft Learn, [ArrayPool\<T\>](https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1)
 - Adam Sitnik, [Pooling large arrays with ArrayPool](https://adamsitnik.com/Array-Pool/) (2018)

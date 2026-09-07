@@ -19,6 +19,11 @@ public static class FarseerVisitOnset
     const string HarmonyId = "distantvistas.farseer.visitonset";
     const int MaskTexels = 256;
     const int TextureUnit = 4;
+    /// <summary>
+    /// HasDataSet churn during overlay must not rebuild the 256×256 mask every
+    /// captured L0. Origin moves still upload immediately.
+    /// </summary>
+    const int MaskRebuildMinMs = 500;
 
     /// <summary>
     /// Extra blocks past the farthest captured L0 so sparse visit stops still
@@ -35,6 +40,7 @@ public static class FarseerVisitOnset
     static int lastOriginSz = int.MinValue;
     static int lastVisitCount = -1;
     static int lastEnvelopeBlocks = -1;
+    static long lastMaskMs;
     static bool inFarseerFrame;
     static bool loggedBind;
     // #region agent log
@@ -169,6 +175,7 @@ public static class FarseerVisitOnset
         lastEnvelopeBlocks = -1;
         lastOriginSx = int.MinValue;
         lastOriginSz = int.MinValue;
+        lastMaskMs = 0;
     }
 
     public static void AttachWorld(LodWorld lodWorld) => world = lodWorld;
@@ -393,20 +400,22 @@ public static class FarseerVisitOnset
         int originSx = camSx - half;
         int originSz = camSz - half;
         int visitCount = world.HasDataSet.Count;
+        long now = capi.ElapsedMilliseconds;
+
+        bool originMoved = originSx != lastOriginSx || originSz != lastOriginSz;
+        if (!originMoved && visitCount == lastVisitCount && lastEnvelopeBlocks >= 0)
+            return;
+        if (!originMoved && lastVisitCount >= 0 && now - lastMaskMs < MaskRebuildMinMs)
+            return;
 
         ResolveEnvelopeOrigin(out double envX, out double envZ, out double envRadius);
         int envBlocks = (int)Math.Ceiling(envRadius);
-
-        if (originSx == lastOriginSx
-            && originSz == lastOriginSz
-            && visitCount == lastVisitCount
-            && envBlocks == lastEnvelopeBlocks)
-            return;
 
         lastOriginSx = originSx;
         lastOriginSz = originSz;
         lastVisitCount = visitCount;
         lastEnvelopeBlocks = envBlocks;
+        lastMaskMs = now;
 
         // #region agent log
         FarseerFlickerDiag.NoteMaskUpload(originSx, originSz, visitCount, envBlocks);
@@ -414,23 +423,44 @@ public static class FarseerVisitOnset
 
         Array.Clear(pixels, 0, pixels.Length);
         const int white = unchecked((int)0xFFFFFFFFu);
-        LodWorld lod = world;
 
-        // Exact L0 captures first (also feeds envelope radius).
-        for (int tz = 0; tz < MaskTexels; tz++)
+        if (envRadius > 0)
         {
-            int sz = originSz + tz;
-            if (sz < 0) continue;
-            for (int tx = 0; tx < MaskTexels; tx++)
+            double r2 = envRadius * envRadius;
+            int rTex = (int)Math.Ceiling(envRadius / sectionBlocks) + 1;
+            int envTx = (int)Math.Floor(envX / sectionBlocks) - originSx;
+            int envTz = (int)Math.Floor(envZ / sectionBlocks) - originSz;
+            int tz0 = Math.Max(0, envTz - rTex);
+            int tz1 = Math.Min(MaskTexels - 1, envTz + rTex);
+            int tx0 = Math.Max(0, envTx - rTex);
+            int tx1 = Math.Min(MaskTexels - 1, envTx + rTex);
+            for (int tz = tz0; tz <= tz1; tz++)
             {
-                int sx = originSx + tx;
-                if (sx < 0) continue;
-                if (!IsVisitedForOnset(
-                        sx, sz, sectionBlocks, envX, envZ, envRadius,
-                        key => lod.HasDataSet.Contains(key)))
-                    continue;
-                pixels[tz * MaskTexels + tx] = white;
+                int sz = originSz + tz;
+                if (sz < 0) continue;
+                double cz = (sz + 0.5) * sectionBlocks - envZ;
+                double cz2 = cz * cz;
+                for (int tx = tx0; tx <= tx1; tx++)
+                {
+                    int sx = originSx + tx;
+                    if (sx < 0) continue;
+                    double cx = (sx + 0.5) * sectionBlocks - envX;
+                    if (cx * cx + cz2 <= r2)
+                        pixels[tz * MaskTexels + tx] = white;
+                }
             }
+        }
+
+        foreach (long key in world.HasDataSet)
+        {
+            if (LodWorld.KeyLevel(key) != 0) continue;
+            int sx = LodWorld.KeySx(key);
+            int sz = LodWorld.KeySz(key);
+            if (sx < 0 || sz < 0) continue;
+            int tx = sx - originSx;
+            int tz = sz - originSz;
+            if ((uint)tx >= MaskTexels || (uint)tz >= MaskTexels) continue;
+            pixels[tz * MaskTexels + tx] = white;
         }
 
         // Nearest: hard visit frontier. Clamp-to-edge (2) keeps UV outside on the rim.

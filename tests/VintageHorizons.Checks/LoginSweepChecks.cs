@@ -223,7 +223,7 @@ public static class LoginSweepChecks
             "dispose routes through Teardown");
         c.True(bake.Contains("LOGIN VISIT SWEEP ARMED"),
             "login bake logs loudly when sweep arms");
-        c.True(bake.Contains("scout workers visit chunk columns"),
+        c.True(bake.Contains("scout viewer entities stream visit cells"),
             "login bake logs scout coverage, not player teleports");
         c.True(!bake.Contains("quiet teleports begin"),
             "login bake no longer claims quiet teleports");
@@ -244,7 +244,7 @@ public static class LoginSweepChecks
             "visit bake walks every captured column, not one colour per block id");
         c.True(season.Contains("TrySetTopRunPaletteId"),
             "visit bake splits palette rows per column when colours differ");
-        c.True(season.Contains("block.GetColor(capi, pos)"),
+        c.True(season.Contains("block.GetColor(capi, LodBakeScratch.Pos(x, y, z))"),
             "visit bake samples vanilla GetColor at column top");
         c.True(season.Contains("FinishColumnPaint"),
             "visit bake uses the shared season-ground mix for overlay and walk");
@@ -420,6 +420,8 @@ public static class LoginSweepChecks
             "mod wires login bake pulse");
         c.True(mod.Contains("loginBakePulse?.Pulse(dt)"),
             "mod pulses the sweep from OnGameTick");
+        c.True(mod.Contains("else if (!renderer.LoginBakeOverlayActive)"),
+            "Farseer height enrich does not rebuild on HasDataSet churn during overlay");
         c.True(mod.Contains("LodPauseOnStartCompat.RestoreAfterLoginBake"),
             "skip/not-allowed join restores Pause-on-Start after overlay-time unpause");
         c.True(!mod.Contains("OnRenderPulse"),
@@ -493,6 +495,14 @@ public static class LoginSweepChecks
             "login bake captures loaded columns across the onset disk, not only the current stop");
         c.True(bake.Contains("SpawnSweepEveryTicks"),
             "spawn-disk capture is not every overlay tick (GC)");
+        c.True(bake.Contains("SpawnRevealEveryTicks"),
+            "spawn reveal ring is throttled so it does not fight 16 scout streams");
+        c.True(bake.Contains("BatchBakeRadiusFor"),
+            "leftover neighbour bake shrinks past spawn-solid instead of a 12-cell disk");
+        c.True(bake.Contains("CollectBatchBakeKeys(primaryKey, stopBakeKeys)"),
+            "leftover batch keys fill stopBakeKeys in place");
+        c.True(!bake.Contains("batchBakeResult"),
+            "in-place CollectBatchBakeKeys does not copy through a second list");
         c.True(bake.Contains("scoutFill.LiveCount}/{LodLoginScoutFill.MaxConcurrent} scouts"),
             "overlay reports live/max scouts so 1/16 stuck is visible");
         int releaseAt = bake.IndexOf("void ReleaseResources(bool success, bool keepResume = false)", StringComparison.Ordinal);
@@ -567,8 +577,29 @@ public static class LoginSweepChecks
             "scouts despawn each viewer and wipe leftovers on reset");
         c.True(scoutFill.Contains("HasDrawableMesh"),
             "near scouts wait for a LOD mesh before despawn");
+        c.True(scoutFill.Contains("HasEmptyMeshClaim"),
+            "sticky empty tessellation claims do not hold scout slots");
         c.True(scoutFill.Contains("WaitForMesh"),
             "far scouts skip the mesh-wait gate after FlagBaked paint");
+        c.True(scoutFill.Contains("PartitioningEveryTicks"),
+            "pinned scouts re-partition every 8 ticks, not every overlay tick");
+        c.Eq(8, LodLoginScoutFill.PartitioningEveryTicks,
+            "partition throttle matches the research-branch cadence");
+        c.True(scoutFill.Contains("LodVsCompat.TryUpdatePartitioning(viewer)"),
+            "HoldViewer partitions through the 1.22.7 reflection helper");
+        int meshAt = scoutFill.IndexOf("Phase.Mesh", StringComparison.Ordinal);
+        int countMixAt = scoutFill.IndexOf("void CountLiveMix", meshAt, StringComparison.Ordinal);
+        c.True(meshAt >= 0 && countMixAt > meshAt, "Mesh phase bounds");
+        string meshPhase = scoutFill.Substring(meshAt, countMixAt - meshAt);
+        c.True(!meshPhase.Contains("SweepLoadedColumns"),
+            "Mesh phase does not recapture neighbourhoods");
+        c.True(!meshPhase.Contains("forceRecapture"),
+            "Mesh phase has no forceRecapture");
+        int paintAt = scoutFill.IndexOf("Phase.Paint", StringComparison.Ordinal);
+        c.True(paintAt >= 0 && paintAt < meshAt, "Paint precedes Mesh");
+        string paintPhase = scoutFill.Substring(paintAt, meshAt - paintAt);
+        c.True(!paintPhase.Contains("SweepLoadedColumns"),
+            "Paint phase does not recapture neighbourhoods");
         c.True(scoutFill.Contains("Phase.Paint"),
             "scouts stay until GetColor paint, then near waits mesh / far despawns");
         c.True(scoutFill.Contains("NotifyPainted"),
@@ -587,6 +618,12 @@ public static class LoginSweepChecks
             "column meta arrays come from ArrayPool, not new T[4096] each stop");
         c.True(bakeScratch.Contains("ThreadStatic"),
             "BlockPos scratch is thread-local so GetColor does not allocate per column");
+        c.True(bakeScratch.Contains("BeginSectionTextureMeans"),
+            "per-section texture-mean cache avoids 8× GetColorWithoutTint per ground layer");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSeasonBake.cs"))
+                .Contains("TryGetSectionTextureMean"),
+            "SampleTextureMean hits the per-section BlockId cache");
         c.True(File.Exists(Path.Combine(
                 GameAssemblies.RepoRoot, "docs", "plans", "login-bake-efficiency.md")),
             "efficiency plan (citations + A/B tiers) ships in-repo");
@@ -604,6 +641,8 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodTerrainRenderer.cs"));
         c.True(terrain.Contains("public bool HasDrawableMesh"),
             "LOD renderer exposes drawable-mesh wait so scouts do not despawn on a hole");
+        c.True(terrain.Contains("public bool HasEmptyMeshClaim"),
+            "LOD renderer exposes sticky empty claims so Mesh wait can release the slot");
         c.True(scoutFill.Contains("RequestUp(key, scout.Cx, scout.Cz, radius, dim, x, y, z)"),
             "client sends visit-cell XYZ so the server spawns the viewer on that column");
         c.Eq(16, LodLoginScoutFill.MaxConcurrent, "all 16 scout slots must work in parallel");
@@ -1005,7 +1044,7 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSeasonBake.cs"));
         c.True(season.Contains("entry.Color = baked"),
             "visit bake overwrites FlagBaked palette RGB in place");
-        c.True(season.Contains("block.GetColor(capi, pos)"),
+        c.True(season.Contains("block.GetColor(capi, LodBakeScratch.Pos(x, y, z))"),
             "visit bake samples vanilla GetColor at the column top");
         c.True(season.Contains("CanVisitBake"),
             "visit bake does not drop snow or climate-untinted tops");
@@ -1053,6 +1092,22 @@ public static class LoginSweepChecks
         c.Eq(420.0, LodLoginSweepTiming.BootstrapTargetMaxSec, "bootstrap target max seconds");
         c.Eq(90.0, LodLoginSweepTiming.RetryTargetSec, "retry pass wall seconds");
         c.Eq(0.25, LodLoginSweepTiming.InitialSecPerStop, "fallback per-stop with viewer scouts (no hop cost)");
+        c.Eq(0.02, LodLoginSweepTiming.MeasuredMinSecPerStop,
+            "measured parallel rate may be faster than hop-era 0.25");
+        LodLoginSweepTiming.SetMachineSecPerStop(0.04);
+        c.Near(0.04, LodLoginSweepTiming.MachineSecPerStop, 1e-9,
+            "do not clamp live scout rate up to 0.25s/stop");
+        LodLoginSweepTiming.SetMachineSecPerStop(LodLoginSweepTiming.InitialSecPerStop);
+        c.Eq(1680, LodLoginSweepTiming.VisitStopBudget(0.04, LodLoginSweepTiming.TargetMaxSec),
+            "faster than fallback still plans the 1680 ceiling");
+        var batch = new LodLoginSweepTiming();
+        batch.BeginSession(0.25);
+        c.Near(0.25, batch.SecondsPerStop, 1e-9, "seeded ETA before any painted stop");
+        batch.NoteFinished(24);
+        c.Eq(24, batch.SampleCount, "a 24-scout PaintReadyScouts tick counts 24 stops, not 1");
+        c.True(batch.SecondsPerStop < 0.05, "immediate batch finish is not 0.25s per stop");
+        c.True(batch.EstimateRemainingSec(24, 1680) < 1680 * 0.1,
+            "ETA after a parallel batch does not assume 0.25s/stop");
         c.Eq(LodLoginBakeViewBoost.SweepVisitRadiusBlocks, LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks,
             "bootstrap disk is Farseer onset at the 750 hold (4.5× + 700), not a 288 km sparse probe");
         c.Eq(
@@ -1254,6 +1309,8 @@ public static class LoginSweepChecks
             "visit-onset paints continuous capture envelope");
         c.True(onset.Contains("IsVisitedForOnset"),
             "visit-onset classifies envelope + exact L0");
+        c.True(onset.Contains("MaskRebuildMinMs"),
+            "visit-mask does not full-rebuild on every HasDataSet stamp during overlay");
 
         string complete = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepComplete.cs"));

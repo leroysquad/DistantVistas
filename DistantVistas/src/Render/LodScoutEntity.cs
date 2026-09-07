@@ -27,6 +27,8 @@ public sealed class LodScoutEntity
     public bool WaitForMesh { get; set; }
     /// <summary>KeepLoaded radius last sent to the server (retry RequestUp uses this).</summary>
     public int HoldRadius { get; set; }
+    /// <summary>Pinned-scout partitioning cadence (not every overlay tick).</summary>
+    public int PartitionTicks { get; set; }
 
     public LodScoutEntity(long key)
     {

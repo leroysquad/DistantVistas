@@ -685,6 +685,12 @@ public class LodTerrainRenderer : IRenderer
         sectionMeshes.ContainsKey(key) || waterMeshes.ContainsKey(key);
 
     /// <summary>
+    /// Sticky empty tessellation claim. Scout Mesh-wait must not treat this as
+    /// coverage or hold the slot until MaxMeshWaitTicks.
+    /// </summary>
+    public bool HasEmptyMeshClaim(long key) => emptyMeshKeys.Contains(key);
+
+    /// <summary>
     /// Drawable mesh, or a sticky empty claim. Prefer <see cref="HasDrawableMesh"/>
     /// for parent-replace / draw coverage so empty uploads cannot punch sky holes.
     /// </summary>

@@ -6,7 +6,7 @@
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.32. Sixteen parallel scouts (near mesh-gate, far FlagBaked release) plus GetColor scratch pooling. Farseer gray tent + black tips. Vintage Horizons fork.",
+    "description":  "Official 1.0.32. Sixteen parallel scouts, two-tier mesh gate, texture-mean cache, batch-aware ETA. Farseer gray tent + black tips. Vintage Horizons fork.",
     "authors":  [
                     "IllLeroySquad"
                 ],

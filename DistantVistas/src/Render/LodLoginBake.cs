@@ -37,6 +37,7 @@ public sealed class LodLoginBake
     const int SweepRowsPerCall = 2;
     const int RevealGrowPerTick = 8;
     const int SpawnSweepEveryTicks = 4;
+    const int SpawnRevealEveryTicks = 4;
 
     /// <summary>Near-field disk that must have drawable meshes before overlay Hide.</summary>
     public const double SpawnSolidRadiusBlocks = 1024;
@@ -121,7 +122,6 @@ public sealed class LodLoginBake
     readonly List<long> openOceanFillKeys = new();
     readonly List<long> stopBakeKeys = new();
     readonly List<(long DistSq, long Key)> batchBakeCandidates = new();
-    readonly List<long> batchBakeResult = new();
     readonly List<long> leftoverKeys = new();
     readonly LodLoginScoutFill scoutFill = new();
     readonly Queue<long> scoutReady = new();
@@ -707,6 +707,7 @@ public sealed class LodLoginBake
         }
 
         phase = Phase.Sweeping;
+        sweepTiming.Begin(resetSamples: false);
         LogTeleportBegin();
         statusWriter.TouchAdvance("teleports-begin");
         UpdateProgress(Progress,
@@ -727,7 +728,8 @@ public sealed class LodLoginBake
         LogTeleportBegin();
         sweepingTicks++;
 
-        GrowRevealAroundSpawn();
+        if (sweepingTicks == 1 || sweepingTicks % SpawnRevealEveryTicks == 0)
+            GrowRevealAroundSpawn();
         PinPickupPose();
 
         List<long> ready = scoutFill.Tick(
@@ -1007,8 +1009,7 @@ public sealed class LodLoginBake
     {
         if (!stopBakePrepared)
         {
-            stopBakeKeys.Clear();
-            stopBakeKeys.AddRange(CollectBatchBakeKeys(primaryKey));
+            CollectBatchBakeKeys(primaryKey, stopBakeKeys);
             stopBakeIndex = 0;
             stopBakeSkipIdle = 0;
             stopBakeSkipMaps = 0;
@@ -1121,16 +1122,17 @@ public sealed class LodLoginBake
             rowsPerCall: SweepRowsPerCall, lane: LodPipeline.SweepLaneSpawn);
     }
 
-    List<long> CollectBatchBakeKeys(long primaryKey)
+    void CollectBatchBakeKeys(long primaryKey, List<long> dest)
     {
         int sx0 = LodWorld.KeySx(primaryKey);
         int sz0 = LodWorld.KeySz(primaryKey);
+        int radius = BatchBakeRadiusFor(primaryKey);
         batchBakeCandidates.Clear();
-        batchBakeResult.Clear();
+        dest.Clear();
 
-        for (int dsz = -BatchBakeL0Radius; dsz <= BatchBakeL0Radius; dsz++)
+        for (int dsz = -radius; dsz <= radius; dsz++)
         {
-            for (int dsx = -BatchBakeL0Radius; dsx <= BatchBakeL0Radius; dsx++)
+            for (int dsx = -radius; dsx <= radius; dsx++)
             {
                 int sx = sx0 + dsx;
                 int sz = sz0 + dsz;
@@ -1146,8 +1148,21 @@ public sealed class LodLoginBake
         batchBakeCandidates.Sort((a, b) => a.DistSq.CompareTo(b.DistSq));
         int cap = Math.Min(MaxBatchBakePerStop, batchBakeCandidates.Count);
         for (int i = 0; i < cap; i++)
-            batchBakeResult.Add(batchBakeCandidates[i].Key);
-        return batchBakeResult;
+            dest.Add(batchBakeCandidates[i].Key);
+    }
+
+    /// <summary>
+    /// Leftover hop-era neighbour bake: visit cell only past spawn-solid.
+    /// Radius 12 (256 L0) was the overlay freeze; overlay scouts paint one cell.
+    /// </summary>
+    int BatchBakeRadiusFor(long primaryKey)
+    {
+        var (x, _, z) = LodLoginSweep.VisitPosition(capi.World, primaryKey);
+        double dx = x - pickupX;
+        double dz = z - pickupZ;
+        if (dx * dx + dz * dz > SpawnSolidRadiusBlocks * SpawnSolidRadiusBlocks)
+            return 0;
+        return BatchBakeL0Radius;
     }
 
     /// <summary>

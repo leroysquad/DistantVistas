@@ -200,6 +200,11 @@ public static class LodSeasonBake
 
     public static int SampleTextureMean(ICoreClientAPI capi, Block block, int x, int y, int z)
     {
+        int id = block.BlockId;
+        if (LodBakeScratch.TryGetSectionTextureMean(id, out int cached))
+            return cached;
+
+        int mean = 0;
         try
         {
             BlockPos pos = LodBakeScratch.Pos(x, y, z);
@@ -214,12 +219,15 @@ public static class LodSeasonBake
                 b += (c >> 16) & 0xFF;
                 n++;
             }
-            return n == 0 ? 0 : LodSurfaceMix.Pack((int)(r / n), (int)(g / n), (int)(b / n));
+            mean = n == 0 ? 0 : LodSurfaceMix.Pack((int)(r / n), (int)(g / n), (int)(b / n));
         }
         catch
         {
-            return 0;
+            mean = 0;
         }
+
+        LodBakeScratch.RememberSectionTextureMean(id, mean);
+        return mean;
     }
 
     /// <summary>
@@ -557,6 +565,37 @@ public static class LodSeasonBake
         int mapH = world.BlockAccessor.MapSizeY;
         LodSurfaceMix.Rent(cols, out int[] raw, out int[] blurred, out byte[] mask);
         LodBakeScratch.RentColumnMeta(cols, out Block?[] tops, out int[] topY, out bool[] frostCol);
+        LodBakeScratch.BeginSectionTextureMeans();
+        try
+        {
+            changed = BakeSectionFromVisitBody(
+                capi, world, section, sectionKey, untintedOf,
+                cols, mapH, raw, blurred, mask, tops, topY, frostCol, ref tally);
+        }
+        finally
+        {
+            LodBakeScratch.EndSectionTextureMeans();
+        }
+        return changed;
+    }
+
+    static int BakeSectionFromVisitBody(
+        ICoreClientAPI capi,
+        IClientWorldAccessor world,
+        LodSection section,
+        long sectionKey,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
+        int cols,
+        int mapH,
+        int[] raw,
+        int[] blurred,
+        byte[] mask,
+        Block?[] tops,
+        int[] topY,
+        bool[] frostCol,
+        ref VisitBakeTally tally)
+    {
+        int changed = 0;
         int nLand = 0, nSnowTop = 0, nPlantTop = 0, nGroundTop = 0;
         long sumTopR = 0, sumMixR = 0, sumBlurR = 0, sumFinalR = 0;
         int nKeepChanged = 0, nSkipped = 0;
@@ -992,10 +1031,42 @@ public static class LodSeasonBake
         }
 
         int mapH = world.BlockAccessor.MapSizeY;
-        int changed = 0;
         int painted = 0;
         long deadline = Stopwatch.GetTimestamp()
             + (long)(Stopwatch.Frequency * maxMs / 1000.0);
+
+        LodBakeScratch.BeginSectionTextureMeans();
+        try
+        {
+            return BakeSectionFromVisitChunkedBody(
+                capi, world, section, sectionKey, untintedOf,
+                startCol, maxColumns, cols, mapH, deadline,
+                out nextCol, out complete, ref painted);
+        }
+        finally
+        {
+            LodBakeScratch.EndSectionTextureMeans();
+        }
+    }
+
+    static int BakeSectionFromVisitChunkedBody(
+        ICoreClientAPI capi,
+        IClientWorldAccessor world,
+        LodSection section,
+        long sectionKey,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
+        int startCol,
+        int maxColumns,
+        int cols,
+        int mapH,
+        long deadline,
+        out int nextCol,
+        out bool complete,
+        ref int painted)
+    {
+        int changed = 0;
+        complete = false;
+        nextCol = startCol;
 
         for (int col = startCol; col < cols; col++)
         {

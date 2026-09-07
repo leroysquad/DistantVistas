@@ -75,7 +75,7 @@ public sealed class LodLoginSweepTimingStore
             : measured;
         var data = new LodLoginSweepTimingStore
         {
-            SecPerStop = Math.Clamp(blended, 0.75, 6.0),
+            SecPerStop = Math.Clamp(blended, LodLoginSweepTiming.MeasuredMinSecPerStop, 6.0),
             LastWallSec = timing.WallSec,
             LastStops = timing.SampleCount,
             Samples = (prior?.Samples ?? 0) + timing.SampleCount,
@@ -110,7 +110,7 @@ public sealed class LodLoginSweepTimingStore
         {
             var data = JsonSerializer.Deserialize<LodLoginSweepTimingStore>(File.ReadAllText(path), JsonOptions);
             if (data == null || data.Schema != SchemaVersion) return null;
-            if (data.SecPerStop < 0.75 || data.SecPerStop > 6.0) return null;
+            if (data.SecPerStop < LodLoginSweepTiming.MeasuredMinSecPerStop || data.SecPerStop > 6.0) return null;
             return data;
         }
         catch
@@ -145,7 +145,7 @@ public sealed class LodLoginSweepTimingStore
             : LodLoginSweepTiming.InitialSecPerStop;
         var data = new LodLoginSweepTimingStore
         {
-            SecPerStop = Math.Clamp(sec, 0.75, 6.0),
+            SecPerStop = Math.Clamp(sec, LodLoginSweepTiming.MeasuredMinSecPerStop, 6.0),
             Samples = samples.Count,
             Source = samples.Count > 0 ? "client-logs" : "fallback",
         };

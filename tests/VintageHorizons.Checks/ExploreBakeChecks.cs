@@ -68,6 +68,8 @@ public static class ExploreBakeChecks
             "overlay and walk share FinishColumnPaint season-ground mix");
         c.True(season.Contains("SampleTextureMean"),
             "visit bake samples texture mean for winter camouflage specks");
+        c.True(season.Contains("BeginSectionTextureMeans"),
+            "visit bake opens the per-section texture-mean cache");
         c.True(season.Contains("MixVisitBlock"),
             "expire leftover uses the same season-ground mix as overlay and walk");
         string mix = File.ReadAllText(Path.Combine(
