@@ -206,6 +206,10 @@ public static class StaticAssetChecks
             "lodterrain.fsh names low-ground mist flatness");
         c.True(fsh.Contains("lowMist"),
             "lodterrain.fsh keeps the 1.0.25 low-ground mist wash");
+        c.True(fsh.Contains("flatness * 0.09"),
+            "lodterrain.fsh thins low-ground mist (1.0.28)");
+        c.True(fsh.Contains("lowMistCol"),
+            "lodterrain.fsh lightens low-ground mist toward pale fog");
 
         // Gap fill: the renderer draws a parent mesh clipped to one child
         // footprint. Both halves of that contract live in the shaders.
@@ -255,10 +259,16 @@ public static class StaticAssetChecks
             "farseer overlay does not sink heightmaps (that buried the silhouette)");
         c.False(fsh.Contains("0.35 * radial"),
             "farseer overlay does not discard overhead (that ate the heightmap disc)");
-        c.True(fsh.Contains("terraColor.rgb *= 0.92"),
-            "farseer overlay softens heightmaps so hills read as mist, not ink");
-        c.True(fsh.Contains("mix(terraColor.rgb, rgbaFog.rgb, mist)"),
-            "farseer overlay mixes fog colour for a misty silhouette");
+        c.False(fsh.Contains("terraColor.rgb *= 0.92"),
+            "farseer overlay uses ridge inkAmt, not a global 0.92 multiply");
+        c.True(fsh.Contains("mix(terraColor.rgb, mistCol, mist)"),
+            "farseer overlay mixes paler mist for a misty silhouette");
+        c.True(fsh.Contains("mist * 0.12"),
+            "farseer overlay thins sky-mix so mist does not bleach the skyline");
+        c.True(fsh.Contains("0.0, 0.38)"),
+            "farseer overlay mist cap is thinner than the 1.0.25 0.62 wash");
+        c.True(fsh.Contains("height01 * height01"),
+            "farseer overlay darkens mountain tips so ridges read against sky");
         c.True(fsh.Contains("smokeGray"),
             "farseer overlay uses grayish smoke (gray bottom, slight black top)");
         c.True(fsh.Contains("inkAmt"),

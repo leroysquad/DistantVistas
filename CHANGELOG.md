@@ -1,3 +1,8 @@
+## 1.0.28
+- **Readable skyline.** Darken Farseer mountain tips a bit (ridge ink) so ridges read against the sky. Lighten and thin distance mist (less opaque, less sky-blue wash). Grayish smoke from 1.0.23/1.0.25 stays (gray bottom, slight black top). Low-ground LOD mist stays, paler/thinner. `flatness` name kept (do not use reserved `float flat`).
+- Drop `distantvistas_1.0.28.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+- **Verify:** silhouette/ridges readable vs sky (not sky-colored mush). Mist looks lighter and less dense. Smoke still grayish, not an ink wall. LOD meshes still draw.
+
 ## 1.0.27
 - **Scout entities, player stays.** Login overlay no longer HoldQuiet-teleports you onto each visit cell. Staggered `LodScoutEntity` workers (client-side; not Vintage Story Entity classes — this mod is client-only) call `SetChunkColumnVisible`, grow the streamed ring, capture, GetColor-bake, then despawn. Esc cancel/resume snapshots in-flight scout keys before teardown. The player stays at spawn.
 - **Pause-on-Start:** force-unpause while the overlay is up so bake can tick; after overlay success or skip, restore pause and reopen the ingame menu if `pauseonstart` is installed.

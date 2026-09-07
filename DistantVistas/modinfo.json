@@ -2,11 +2,11 @@
     "type":  "code",
     "modid":  "distantvistas",
     "name":  "Distant Vistas",
-    "version":  "1.0.27",
+    "version":  "1.0.28",
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.27. Login scout entities (player stays); Pause-on-Start restore after overlay; FlagBaked parents remesh so far land does not flip green. 1.0.26 GLSL flatness fix kept. Vintage Horizons fork.",
+    "description":  "Official 1.0.28. Readable Farseer skyline (darker ridge tips, thinner paler mist). 1.0.27 scout/PoS/FlagBaked remesh kept. Vintage Horizons fork.",
     "authors":  [
                     "IllLeroySquad"
                 ],

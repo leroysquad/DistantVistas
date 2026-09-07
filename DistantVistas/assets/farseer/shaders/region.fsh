@@ -8,6 +8,7 @@
 // Clamp tint, skip sphere fog, only dissolve at the far rim. ColorTint alpha
 // is also clamped so a 0.4 slate wash cannot hide relief.
 // Mist veil: grayish smoke (more gray near/low, little black far/top).
+// 1.0.28: darker ridge tips, thinner paler mist so the skyline reads.
 
 in vec4 worldPos;
 in float yLevel;
@@ -81,14 +82,19 @@ void main()
     float height01 = clamp((yLevel - float(seaLevel)) / 90.0, 0.0, 1.0);
     float nearRim = 1.0 - smoothstep(0.35, 0.85, dist);
     float smokeAmt = clamp(0.22 + nearRim * 0.38 + (1.0 - height01) * 0.20, 0.0, 0.72);
-    float inkAmt = clamp(smoothstep(0.70, 1.0, dist) * 0.10 * height01, 0.0, 0.12);
+    // 1.0.28: extra ridge/far-tip ink so the skyline reads against sky.
+    float inkAmt = clamp(
+        smoothstep(0.62, 1.0, dist) * 0.16 * height01
+        + height01 * height01 * 0.12,
+        0.0, 0.24);
     terraColor.rgb = mix(terraColor.rgb, smokeGray, smokeAmt);
     terraColor.rgb *= 1.0 - inkAmt;
 
-    // Distance mist: fog colour + a little sky, keep enough relief to read as hills.
-    float mist = clamp(fogAmount * 0.45 + smoothstep(0.55, 0.95, dist) * 0.32, 0.0, 0.62);
-    terraColor.rgb = mix(terraColor.rgb, rgbaFog.rgb, mist);
-    terraColor.rgb = mix(terraColor.rgb, skyColor.rgb, mist * 0.34);
+    // 1.0.28: thinner, paler mist — less sky mix so ridges stay readable.
+    vec3 mistCol = mix(rgbaFog.rgb, vec3(0.78, 0.80, 0.83), 0.40);
+    float mist = clamp(fogAmount * 0.28 + smoothstep(0.62, 0.98, dist) * 0.18, 0.0, 0.38);
+    terraColor.rgb = mix(terraColor.rgb, mistCol, mist);
+    terraColor.rgb = mix(terraColor.rgb, skyColor.rgb, mist * 0.12);
 
     terraColor = applyFog(terraColor, fogAmount);
     terraGlow *= dist;
