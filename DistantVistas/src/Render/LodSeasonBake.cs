@@ -176,6 +176,10 @@ public static class LodSeasonBake
     public static int SampleVanillaColor(ICoreClientAPI capi, Block block, int x, int y, int z)
     {
         int id = block.BlockId;
+        if (LodBlockPolicy.IsClimateUntinted(block)
+            && LodBakeScratch.TryGetBlockIdGetColor(id, out int untintedCached))
+            return untintedCached;
+
         if (LodBakeScratch.TryGetSectionGetColor(id, x, y, z, out int cached))
             return cached;
 
@@ -187,8 +191,11 @@ public static class LodSeasonBake
             {
                 // Pure GetColor. FlagFrost + mesher apply the wash so early-spring
                 // remesh thaws walls and crowns without rebaking every column.
-                _ = ApplyVisitFrost(capi.World, block, LodBakeScratch.Pos(x, y, z), color);
+                if (!LodBlockPolicy.IsClimateUntinted(block))
+                    _ = ApplyVisitFrost(capi.World, block, LodBakeScratch.Pos(x, y, z), color);
                 LodBakeScratch.RememberSectionGetColor(id, x, y, z, color);
+                if (LodBlockPolicy.IsClimateUntinted(block))
+                    LodBakeScratch.RememberBlockIdGetColor(id, color);
                 // #region agent log
                 if (LodCanopyGray.IsSeasonFoliage(block))
                     FarCoverageDiag.NoteCanopySample(getColor: true, zero: false);
@@ -1120,13 +1127,11 @@ public static class LodSeasonBake
             if (painted >= maxColumns)
             {
                 nextCol = col;
-                if (changed > 0) section.InvalidatePaletteSnapshot();
                 return changed;
             }
             if ((painted & 15) == 0 && Stopwatch.GetTimestamp() >= deadline)
             {
                 nextCol = col;
-                if (changed > 0) section.InvalidatePaletteSnapshot();
                 return changed;
             }
 

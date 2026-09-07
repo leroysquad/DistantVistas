@@ -17,7 +17,7 @@ public sealed class LodLoginScoutFill
     /// <summary>Legacy near/far slot caps (telemetry). All slots share one FIFO queue.</summary>
     public const int MaxNearConcurrent = 8;
     public const int MaxFarConcurrent = 8;
-    public const int MaxWaitTicks = 120;
+    public const int MaxWaitTicks = 96;
     public const int MaxCaptureWaitTicks = 16;
     public const int MaxMeshWaitTicks = 120;
     public const int ChunkVisibleRadius = 2;

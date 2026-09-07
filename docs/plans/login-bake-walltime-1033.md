@@ -1,4 +1,4 @@
-# Login bake wall-time 1.0.33 / 1.0.34
+# Login bake wall-time 1.0.33 / 1.0.34 / 1.0.35
 
 Target: cold-login overlay bake **under ~2–3 minutes** for a typical **1680 L0** revisit on a mid/high PC (stretch **~90s** when capture keeps 16 scouts fed).
 
@@ -115,3 +115,48 @@ Filter `debug-40cccb.log` for `"hypothesisId":"H-SCOUT-SEQ"`. Read in time order
 | C | `HoldLook` every overlay tick + server controls blocked; silent delta drain while `OverlayLookLocked` |
 
 **Expect after fix:** `paintReadyQueued` &gt; 0 most seconds when scouts live; `heldNear`≈0; `avgNearTicks` / `avgFarTicks` in teens not 80/400; L0 count climbs past 358 without interval stalls.
+
+## 1.0.35 overlay speed cut (2026-09-07 playtest follow-up)
+
+**Symptom (1.0.34 stall fix OK):** `heldNear=0`, `paintReadyQueued` 58–76, finished climbing — but overlay still slow + hitchy. First 30s Stats: **2383 gen0**, **~9251 MB managed**; `GetColorCalls` avg ~540 / max ~1186; `maxPaintWallMs=200`; **16638 inline loads**; render schedule max ~7.6ms, quadtree walk max ~22ms.
+
+**Hypotheses verified:**
+
+| # | Hypothesis | Verdict | Fix |
+|---|------------|---------|-----|
+| 1 | Allocation churn in paint/GetColor | **Confirmed** — partial `InvalidatePaletteSnapshot` every budget slice rebuilt palette int[] for mesh; resume snapshot allocated every paint batch | Defer snapshot invalidation until section complete; throttle `SaveResumeSnapshot` (8 stops / 2s) |
+| 2 | Too much work per paint tick | **Confirmed** — 200ms wall + 24 stops/tick spiked main thread | Wall **120ms**; **32** stops/tick; near-first paint queue |
+| 3 | Redundant GetColor / cache gaps | **Confirmed** — 8×8 tile + per-column season rel still missed repeats | **16×16** tile cache; BlockId-only cache for climate-untinted; **16×16 season tile** cache |
+| 4 | Scout WaitChunks waste | **Partial** — some `maxWait` remain | `MaxWaitTicks` 120→**96** (partial paint handoff unchanged) |
+| 5 | Inline loads vs bake | **Confirmed** — 8 installs/tick during overlay | **2** installs/tick, **1ms** budget when `DeferLegacyHeal` |
+| 6 | Visit order oversized for “near done” | **Confirmed** — uniform revisit subsample | Revisit + expire use `BudgetBootstrapVisitStops` (spawn **75%** of budget before rim) |
+
+**Shipped:**
+
+| Change | File |
+|--------|------|
+| 16×16 GetColor cache tile (was 8×8) | `LodBakeScratch.GetColorCacheKey` |
+| BlockId-only GetColor cache for climate-untinted | `LodBakeScratch`, `LodSeasonBake.SampleVanillaColor` |
+| 16×16 season-rel tile cache | `LodBakeScratch`, `LodSurfaceMix.ReadSeasonRel` |
+| No partial `InvalidatePaletteSnapshot` during chunked paint | `LodSeasonBake.BakeSectionFromVisitChunkedBody` |
+| Paint wall 200→**120** ms; `MaxBakePerTick` 24→**32** | `LodLoginBake` |
+| Near-first + partial-resume paint queue | `LodLoginBake.PrioritizePaintQueue` |
+| Throttled resume snapshot (8 finished / 2s) | `LodLoginBake.MaybeSaveResumeSnapshot` |
+| Overlay inline load cap 8→**2** @ **1ms** | `LodPipeline.InstallLoadedSections` |
+| Revisit/expire spawn-first budgeting (75% inner) | `LodLoginSweepBootstrap` |
+| Scout chunk wait 120→**96** ticks | `LodLoginScoutFill` |
+
+Invariants unchanged: no teleports; scout viewers; exact pickup; spawn-solid 1024; Farseer gray tent; no SIMD inside GetColor; look lock; no false-complete.
+
+**Expect after 1.0.35:**
+
+| Signal | Before (1.0.34) | Target |
+|--------|-----------------|--------|
+| First-30s gen0 | ~2383 | **&lt;800** (fewer palette snapshot + resume allocs) |
+| Managed heap @ 30s | ~9251 MB | **&lt;4000 MB** (lower churn + throttled installs) |
+| `GetColorCalls` / paint batch (H-PAINT) | avg ~540 | **&lt;250** (wider cache + season tile) |
+| `maxPaintWallMs` (H-PAINT) | 200 | **120** |
+| Inline loads / 30s | ~16638 | **&lt;5000** |
+| Spawn neighbourhood FlagBaked | lags rim | **Done first** (spawn-first queue + revisit budget) |
+| `paintReadyQueued` | healthy | stays **&gt;0** when scouts live |
+| Look lock | intact | no `H-LOOK` delta storms |

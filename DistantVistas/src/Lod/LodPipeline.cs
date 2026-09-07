@@ -884,7 +884,9 @@ public class LodPipeline
     }
 
     const int InstallsPerTick = 8;
+    const int OverlayInstallsPerTick = 2;
     const double InstallBudgetMs = 2.0;
+    const double OverlayInstallBudgetMs = 1.0;
     /// <summary>
     /// Load-time no-colour palette fill used to MarkChanged every section (neighbor
     /// remesh + mip). First join of a large cache (~3419 entries) stormed the mesh
@@ -892,8 +894,6 @@ public class LodPipeline
     /// First draw of unrepaired-GPU sections still reads the in-RAM palette.
     /// </summary>
     internal const int PaletteRepairRemeshPerTick = 2;
-    static readonly long InstallBudgetTicks =
-        (long)(System.Diagnostics.Stopwatch.Frequency * InstallBudgetMs / 1000.0);
 
     int paletteRemeshLeft = PaletteRepairRemeshPerTick;
 
@@ -906,10 +906,14 @@ public class LodPipeline
     {
         if (storageThread == null) return;
 
+        int cap = DeferLegacyHeal ? OverlayInstallsPerTick : InstallsPerTick;
+        double budgetMs = DeferLegacyHeal ? OverlayInstallBudgetMs : InstallBudgetMs;
+        long budgetTicks = (long)(System.Diagnostics.Stopwatch.Frequency * budgetMs / 1000.0);
+
         int installed = 0;
         long start = System.Diagnostics.Stopwatch.GetTimestamp();
-        while (installed < InstallsPerTick
-               && System.Diagnostics.Stopwatch.GetTimestamp() - start < InstallBudgetTicks
+        while (installed < cap
+               && System.Diagnostics.Stopwatch.GetTimestamp() - start < budgetTicks
                && storageThread.LoadResults.TryDequeue(out (long Key, LodSection? Section) result))
         {
             int repaired = 0;

@@ -32,9 +32,9 @@ public sealed class LodLoginBake
     const int BatchBakeL0Radius = 2;
     const int MaxBatchBakePerStop = 32;
     /// <summary>GetColor + persist per overlay tick across all live scouts, not one stop.</summary>
-    const int MaxBakePerTick = 24;
+    const int MaxBakePerTick = 32;
     /// <summary>Wall-clock cap per overlay tick for all PaintReadyScouts work combined.</summary>
-    const double MaxPaintWallMsPerTick = 200.0;
+    const double MaxPaintWallMsPerTick = 120.0;
     /// <summary>Columns per partial L0 slice (BlurRadius 0 — full section may span 2–3 ticks).</summary>
     const int MaxPaintColumnsPerSection = 4096;
     const int MaxLeftoverBakePerTick = 16;
@@ -136,6 +136,9 @@ public sealed class LodLoginBake
     readonly LodLoginScoutFill scoutFill = new();
     readonly Queue<long> scoutReady = new();
     readonly Dictionary<long, int> paintResumeCol = new();
+    readonly List<long> paintOrderScratch = new(64);
+    int lastResumeSavedFinished;
+    long lastResumeSaveMs;
     int sweepingTicks;
     int revealRadius;
     int stopBakeIndex;
@@ -755,6 +758,7 @@ public sealed class LodLoginBake
         for (int i = 0; i < ready.Count; i++)
             scoutReady.Enqueue(ready[i]);
 
+        PrioritizePaintQueue();
         PaintReadyScouts();
         LodScoutSeqDiag.NotePaintBudget(MaxBakePerTick, MaxPaintWallMsPerTick, scoutReady.Count);
         scoutFill.CountLiveBands(out int nearLive, out int farLive);
@@ -781,6 +785,47 @@ public sealed class LodLoginBake
     /// Paint every captured scout this tick (budgeted), not one serial currentKey.
     /// A 256-neighbour batch on a single stop froze the UI at 1/16 and blew managed heap.
     /// </summary>
+    void PrioritizePaintQueue()
+    {
+        if (scoutReady.Count <= 1) return;
+
+        paintOrderScratch.Clear();
+        while (scoutReady.Count > 0)
+            paintOrderScratch.Add(scoutReady.Dequeue());
+
+        paintOrderScratch.Sort((a, b) =>
+        {
+            bool partialA = paintResumeCol.ContainsKey(a);
+            bool partialB = paintResumeCol.ContainsKey(b);
+            if (partialA != partialB) return partialA ? -1 : 1;
+            long da = PaintDistSqToPickup(a);
+            long db = PaintDistSqToPickup(b);
+            int cmp = da.CompareTo(db);
+            return cmp != 0 ? cmp : a.CompareTo(b);
+        });
+
+        for (int i = 0; i < paintOrderScratch.Count; i++)
+            scoutReady.Enqueue(paintOrderScratch[i]);
+    }
+
+    long PaintDistSqToPickup(long l0Key)
+    {
+        var (x, _, z) = LodLoginSweep.VisitPosition(capi.World, l0Key);
+        double dx = x - pickupX;
+        double dz = z - pickupZ;
+        return (long)(dx * dx + dz * dz);
+    }
+
+    void MaybeSaveResumeSnapshot()
+    {
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (finished - lastResumeSavedFinished < 8 && now - lastResumeSaveMs < 2000)
+            return;
+        lastResumeSavedFinished = finished;
+        lastResumeSaveMs = now;
+        SaveResumeSnapshot();
+    }
+
     void PaintReadyScouts()
     {
         long deadline = Stopwatch.GetTimestamp()
@@ -826,7 +871,7 @@ public sealed class LodLoginBake
         {
             if (persistBatch > 0)
                 pipeline.DrainLoginPersistence(Math.Min(16, persistBatch));
-            SaveResumeSnapshot();
+            MaybeSaveResumeSnapshot();
             sweepTiming.NoteFinished(finished);
             statusWriter.TouchAdvance($"region-{finished}-of-{total}");
             LogPaintBatch(completed, painted, getColorCalls, resumeKeys, queued);
@@ -1608,7 +1653,7 @@ public sealed class LodLoginBake
         {
             System.IO.File.AppendAllText(
                 @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
-                "{\"sessionId\":\"40cccb\",\"runId\":\"1033\",\"hypothesisId\":\"H-PAINT\",\"location\":\"LodLoginBake.PaintReadyScouts\",\"message\":\"paint-scout-batch\",\"data\":{"
+                "{\"sessionId\":\"40cccb\",\"runId\":\"1035\",\"hypothesisId\":\"H-PAINT\",\"location\":\"LodLoginBake.PaintReadyScouts\",\"message\":\"paint-scout-batch\",\"data\":{"
                 + "\"completed\":" + completed
                 + ",\"attempted\":" + attempted
                 + ",\"getColorCalls\":" + getColorCalls

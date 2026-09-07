@@ -216,15 +216,7 @@ public static class LodLoginSweepBootstrap
 
         if (planned.Count > maxVisitStops)
         {
-            if (needsVisit.Count >= maxVisitStops)
-                planned = BudgetVisitStops(needsVisit, centerSx, centerSz, maxVisitStops);
-            else
-            {
-                planned = new List<long>(needsVisit);
-                int left = maxVisitStops - planned.Count;
-                if (left > 0)
-                    planned.AddRange(BudgetVisitStops(complete, centerSx, centerSz, left));
-            }
+            planned = BudgetBootstrapVisitStops(planned, centerSx, centerSz, maxVisitStops);
             LogBudget(capi, visitedTotal, planned.Count, "Revisit");
         }
 
@@ -282,7 +274,7 @@ public static class LodLoginSweepBootstrap
 
         int diskCount = visited.Count;
         int maxVisitStops = RevisitMaxVisitStops;
-        List<long> planned = BudgetVisitStops(visited, centerSx, centerSz, maxVisitStops);
+        List<long> planned = BudgetBootstrapVisitStops(visited, centerSx, centerSz, maxVisitStops);
         int interiorBudget = RetryMaxVisitStops;
         List<long> interior = InteriorGapsBetweenStops(visited, planned, interiorBudget);
         if (interior.Count > 0)
@@ -348,7 +340,7 @@ public static class LodLoginSweepBootstrap
                 centerSx = (int)Math.Floor(clientWorld.Player.Entity.Pos.X / footprint);
                 centerSz = (int)Math.Floor(clientWorld.Player.Entity.Pos.Z / footprint);
             }
-            keys = BudgetVisitStops(keys, centerSx, centerSz, maxVisitStops);
+            keys = BudgetBootstrapVisitStops(keys, centerSx, centerSz, maxVisitStops);
         }
         string label = gapCount == 1
             ? "Repairing 1 incomplete region"
@@ -619,7 +611,7 @@ public static class LodLoginSweepBootstrap
             else outer.Add(key);
         }
 
-        int innerTake = Math.Min(inner.Count, Math.Max((max * 2) / 3, 64));
+        int innerTake = Math.Min(inner.Count, Math.Max((max * 3) / 4, 64));
         innerTake = Math.Min(innerTake, max);
         var result = new List<long>(max);
         var used = new HashSet<long>();

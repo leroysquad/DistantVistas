@@ -20,6 +20,8 @@ static class LodBakeScratch
     [ThreadStatic] static bool[]? frostCol;
     [ThreadStatic] static Dictionary<int, int>? texMeanByBlockId;
     [ThreadStatic] static Dictionary<long, int>? getColorByKey;
+    [ThreadStatic] static Dictionary<int, int>? getColorByBlockId;
+    [ThreadStatic] static Dictionary<long, float>? seasonByTile;
     [ThreadStatic] static int getColorCalls;
     [ThreadStatic] static int texMeanScope;
 
@@ -27,14 +29,17 @@ static class LodBakeScratch
     public static int SectionGetColorCalls => getColorCalls;
 
     /// <summary>
-    /// 8×8 climate tile + block id + Y band. GetColor is stable within a tile for
+    /// 16×16 climate tile + block id + Y band. GetColor is stable within a tile for
     /// the same block type; reuses samples across the 4096-column L0 pass.
     /// </summary>
     public static long GetColorCacheKey(int blockId, int x, int y, int z) =>
         ((long)blockId << 32)
-        | ((long)(x >> 3 & 0xFFFF) << 16)
-        | (long)(z >> 3 & 0xFFFF)
+        | ((long)(x >> 4 & 0xFFFF) << 16)
+        | (long)(z >> 4 & 0xFFFF)
         | ((long)(y & 0xFF) << 48);
+
+    static long SeasonTileKey(int x, int z) =>
+        ((long)(x >> 4 & 0xFFFF) << 16) | (long)(z >> 4 & 0xFFFF);
 
     public static BlockPos Pos(int x, int y, int z)
     {
@@ -77,6 +82,10 @@ static class LodBakeScratch
         texMeanByBlockId.Clear();
         getColorByKey ??= new Dictionary<long, int>(4096);
         getColorByKey.Clear();
+        getColorByBlockId ??= new Dictionary<int, int>(64);
+        getColorByBlockId.Clear();
+        seasonByTile ??= new Dictionary<long, float>(256);
+        seasonByTile.Clear();
         getColorCalls = 0;
         texMeanScope++;
     }
@@ -86,6 +95,8 @@ static class LodBakeScratch
         if (texMeanScope > 0) texMeanScope--;
         texMeanByBlockId?.Clear();
         getColorByKey?.Clear();
+        getColorByBlockId?.Clear();
+        seasonByTile?.Clear();
         getColorCalls = 0;
     }
 
@@ -119,5 +130,36 @@ static class LodBakeScratch
         if (texMeanScope <= 0) return;
         texMeanByBlockId ??= new Dictionary<int, int>(128);
         texMeanByBlockId[blockId] = rgb;
+    }
+
+    /// <summary>Snow / water / climate-untinted blocks: one GetColor per BlockId per section.</summary>
+    public static bool TryGetBlockIdGetColor(int blockId, out int rgb)
+    {
+        if (texMeanScope > 0 && getColorByBlockId != null)
+            return getColorByBlockId.TryGetValue(blockId, out rgb);
+        rgb = 0;
+        return false;
+    }
+
+    public static void RememberBlockIdGetColor(int blockId, int rgb)
+    {
+        if (texMeanScope <= 0 || rgb == 0) return;
+        getColorByBlockId ??= new Dictionary<int, int>(64);
+        getColorByBlockId[blockId] = rgb;
+    }
+
+    public static bool TryGetSeasonTile(int x, int z, out float seasonRel)
+    {
+        if (texMeanScope > 0 && seasonByTile != null)
+            return seasonByTile.TryGetValue(SeasonTileKey(x, z), out seasonRel);
+        seasonRel = 0;
+        return false;
+    }
+
+    public static void RememberSeasonTile(int x, int z, float seasonRel)
+    {
+        if (texMeanScope <= 0) return;
+        seasonByTile ??= new Dictionary<long, float>(256);
+        seasonByTile[SeasonTileKey(x, z)] = seasonRel;
     }
 }

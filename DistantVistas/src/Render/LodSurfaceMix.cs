@@ -382,9 +382,13 @@ public static class LodSurfaceMix
 
     public static float ReadSeasonRel(ICoreClientAPI capi, int x, int y, int z)
     {
+        if (LodBakeScratch.TryGetSeasonTile(x, z, out float cached))
+            return cached;
         try
         {
-            return capi.World.Calendar.GetSeasonRel(LodBakeScratch.Pos(x, y, z));
+            float rel = capi.World.Calendar.GetSeasonRel(LodBakeScratch.Pos(x, y, z));
+            LodBakeScratch.RememberSeasonTile(x, z, rel);
+            return rel;
         }
         catch
         {

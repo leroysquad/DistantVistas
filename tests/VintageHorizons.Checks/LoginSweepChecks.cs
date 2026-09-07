@@ -255,6 +255,10 @@ public static class LoginSweepChecks
             "login overlay caps GetColor wall time per tick");
         c.True(bake.Contains("paintResumeCol"),
             "partial L0 bakes resume next tick instead of freezing the client");
+        c.True(bake.Contains("PrioritizePaintQueue"),
+            "paint queue prefers partial + spawn-near L0 before far rim");
+        c.True(bake.Contains("MaybeSaveResumeSnapshot"),
+            "resume snapshot is throttled so paint batches do not allocate every tick");
         c.True(bake.Contains("DeferLegacyHeal = true"),
             "legacy heal is deferred during visit sweep");
 
@@ -262,6 +266,8 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Lod", "LodPipeline.cs"));
         c.True(pipeline.Contains("DeferLegacyHeal"),
             "pipeline can defer approximate legacy heal");
+        c.True(pipeline.Contains("OverlayInstallsPerTick"),
+            "inline storage installs are throttled during overlay DeferLegacyHeal");
         c.True(pipeline.Contains("DiscoverOnly"),
             "pipeline can restrict post-sweep capture to new and nearby land");
         c.True(bake.Contains("DiscoverOnly = true"),
@@ -477,7 +483,7 @@ public static class LoginSweepChecks
             "login bake settles after each bake");
         c.True(bake.Contains("BatchBakeL0Radius = 2"),
             "overlay visit paint is the visit cell, not a 750-block neighbour disk");
-        c.True(bake.Contains("MaxBakePerTick = 24"),
+        c.True(bake.Contains("MaxBakePerTick = 32"),
             "login bake paints many captured scouts per overlay tick");
         c.True(bake.Contains("MaxLeftoverBakePerTick = 16"),
             "expire leftover GetColor is 16/tick (research 12→16)");
@@ -638,6 +644,12 @@ public static class LoginSweepChecks
             "per-section texture-mean cache avoids 8× GetColorWithoutTint per ground layer");
         c.True(bakeScratch.Contains("TryGetSectionGetColor"),
             "per-section GetColor cache reuses climate-tile samples across columns");
+        c.True(bakeScratch.Contains("TryGetBlockIdGetColor"),
+            "climate-untinted blocks reuse one GetColor per BlockId per section");
+        c.True(bakeScratch.Contains("TryGetSeasonTile"),
+            "season rel is cached per 16×16 tile during section bake");
+        c.True(bakeScratch.Contains("x >> 4"),
+            "GetColor cache tile is 16×16 blocks for higher reuse on flat terrain");
         c.True(File.ReadAllText(Path.Combine(
                 GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSeasonBake.cs"))
                 .Contains("TryGetSectionTextureMean"),
@@ -657,6 +669,8 @@ public static class LoginSweepChecks
             "overlay scouts fill pending FIFO without heldNear starvation");
         c.True(scoutFill.Contains("FlushHeldToPending"),
             "legacy heldNear/heldFar queues drain into pending each tick");
+        c.Eq(96, LodLoginScoutFill.MaxWaitTicks,
+            "chunk wait capped ~4.8s at 50ms pulse (partial paint on timeout)");
         c.Eq(16, LodLoginScoutFill.MaxCaptureWaitTicks,
             "scout capture wait aligned with LodLoginSweep (~0.8s at 50ms pulse)");
         c.True(scoutFill.Contains("RequestUpRetryTicks"),
