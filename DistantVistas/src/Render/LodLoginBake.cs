@@ -35,7 +35,7 @@ public sealed class LodLoginBake
     const int MaxBakePerTick = 12;
     const int MaxLeftoverBakePerTick = 12;
     const int SweepRowsPerCall = 2;
-    const int RevealGrowPerTick = 2;
+    const int RevealGrowPerTick = 4;
 
     const int StabilizeWindowFrames = 90;
     const int StabilizeWindowsRequired = 4;
@@ -121,6 +121,7 @@ public sealed class LodLoginBake
     int leftoverFarLeft;
     int leftoverNearBaked;
     int leftoverFarBaked;
+    int spawnRevealRadius;
     int stopBakeSkipIdle;
     int stopBakeSkipMaps;
     int stopBakeBaked;
@@ -264,6 +265,7 @@ public sealed class LodLoginBake
         stopBakeIndex = 0;
         stopBakeKeys.Clear();
         revealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
+        spawnRevealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
         scoutFill.Reset();
         scoutReady.Clear();
 
@@ -687,6 +689,9 @@ public sealed class LodLoginBake
     {
         LogTeleportBegin();
 
+        GrowRevealAroundSpawn();
+        SweepColumnsAroundSpawn();
+
         List<long> ready = scoutFill.Tick(
             capi, pipeline, pending, completedKeys, viewBoost.ChunkVisibleRadius);
         for (int i = 0; i < ready.Count; i++)
@@ -1005,7 +1010,9 @@ public sealed class LodLoginBake
         if (stopBakeIndex < stopBakeKeys.Count)
             return false;
 
-        if (stopBakeBaked == 0)
+        if (stopBakeBaked == 0
+            && (expireRecapture
+                || LodLoginSweep.AllMapChunksLoaded(capi.World.BlockAccessor, primaryKey)))
         {
             if (TryBakeOne(primaryKey))
                 stopBakeBaked = 1;
@@ -1068,6 +1075,26 @@ public sealed class LodLoginBake
         (double x, _, double z) = LodLoginSweep.VisitPosition(capi.World, l0Key);
         LodLoginBakePlayerMove.RequestChunkColumnRing(
             capi, x, z, capi.World.Player.Entity.Pos.Dimension, before, revealRadius);
+    }
+
+    void GrowRevealAroundSpawn()
+    {
+        if (!restoreCaptured) return;
+        int target = viewBoost.ChunkVisibleRadius;
+        if (spawnRevealRadius >= target) return;
+        int before = spawnRevealRadius;
+        spawnRevealRadius = Math.Min(target, spawnRevealRadius + RevealGrowPerTick);
+        int dim = capi.World.Player.Entity.Pos.Dimension;
+        LodLoginBakePlayerMove.RequestChunkColumnRing(
+            capi, restorePos.X, restorePos.Z, dim, before, spawnRevealRadius);
+    }
+
+    void SweepColumnsAroundSpawn()
+    {
+        if (!restoreCaptured) return;
+        int cx = (int)Math.Floor(restorePos.X / GlobalConstants.ChunkSize);
+        int cz = (int)Math.Floor(restorePos.Z / GlobalConstants.ChunkSize);
+        pipeline.SweepLoadedColumns(cx, cz, viewBoost.ChunkSweepRadiusChunks, forceRecapture: true, rowsPerCall: SweepRowsPerCall);
     }
 
     List<long> CollectBatchBakeKeys(long primaryKey)

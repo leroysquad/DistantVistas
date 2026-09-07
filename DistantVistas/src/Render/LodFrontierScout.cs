@@ -252,8 +252,8 @@ public sealed class LodFrontierScout
         double vd = renderer.LiveViewDistance;
         if (vd <= 0) vd = 256;
         double maxR = LodCoveragePolicy.HorizonDrawDistance(vd);
-        double farCap = renderer.EffectiveFarDistance;
-        if (farCap > 0 && farCap < maxR) maxR = farCap;
+        // Do not clamp to EffectiveFarDistance: that is the *meshed* rim and would
+        // trap post-login fill inside a thin ring instead of Farseer onset + 700.
         double minR = vd * MinRingScale;
         if (minR >= maxR) return false;
 

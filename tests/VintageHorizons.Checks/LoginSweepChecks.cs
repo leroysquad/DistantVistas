@@ -460,6 +460,10 @@ public static class LoginSweepChecks
             "login bake owns the concurrent scout fill");
         c.True(bake.Contains("GrowRevealAround(key)"),
             "login bake grows SetChunkColumnVisible rings at the scout stop (player stays)");
+        c.True(bake.Contains("GrowRevealAroundSpawn()"),
+            "login bake grows a spawn-centered ring to Farseer onset + 700");
+        c.True(bake.Contains("SweepColumnsAroundSpawn()"),
+            "login bake captures loaded columns across the onset disk, not only the current stop");
         c.True(bake.Contains("SweepColumnsAround(key)"),
             "login bake sweeps loaded columns around the scout stop");
         int releaseAt = bake.IndexOf("void ReleaseResources(bool success, bool keepResume = false)", StringComparison.Ordinal);
@@ -488,6 +492,10 @@ public static class LoginSweepChecks
             "scouts grow streamed rings without moving the player");
         c.True(scoutFill.Contains("RevealGrowPerTick"),
             "scout ring growth is staggered");
+        c.True(scoutFill.Contains("Do not bake missing-tex white"),
+            "scouts skip GetColor bake when map chunks never arrived");
+        c.True(bake.Contains("AllMapChunksLoaded(capi.World.BlockAccessor, primaryKey)"),
+            "login bake does not force-paint a stop with missing-tex white when maps are absent");
         c.True(scoutFill.Contains("viewBoost.ChunkVisibleRadius") || bake.Contains("viewBoost.ChunkVisibleRadius"),
             "scout ring target follows the login view-boost visible radius");
         c.Eq(6, LodLoginScoutFill.MaxConcurrent, "scout concurrency stays capped");
@@ -811,12 +819,16 @@ public static class LoginSweepChecks
         c.Eq(420.0, LodLoginSweepTiming.BootstrapTargetMaxSec, "bootstrap target max seconds");
         c.Eq(90.0, LodLoginSweepTiming.RetryTargetSec, "retry pass wall seconds");
         c.Eq(1.0, LodLoginSweepTiming.InitialSecPerStop, "fallback per-stop when this PC has no samples");
-        c.Eq(288000, LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks,
-            "empty-canvas bootstrap probe radius default (~288 km, meets Farseer onset)");
-        c.Eq(4500, LodLoginSweepBootstrap.BootstrapCellRadius(),
-            "288000 blocks is 4500 L0 cells radius at 64-block footprint");
-        c.Eq(9216, LodLoginSweepBootstrap.MaxBootstrapClassifyCells,
-            "classify ceiling scales with the 1.5x radius (~2.25x area)");
+        c.Eq(LodLoginBakeViewBoost.SweepVisitRadiusBlocks, LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks,
+            "bootstrap disk is Farseer onset at the 750 hold (4.5× + 700), not a 288 km sparse probe");
+        c.Eq(
+            (int)Math.Ceiling(LodLoginBakeViewBoost.SweepVisitRadiusBlocks / (double)LodSection.SectionBlocks),
+            LodLoginSweepBootstrap.BootstrapCellRadius(),
+            "bootstrap cell radius matches the onset disk");
+        c.Eq(4075, LodLoginBakeViewBoost.SweepVisitRadiusBlocks,
+            "750-block hold × 4.5 + 700 is 4075 blocks");
+        c.Eq(16384, LodLoginSweepBootstrap.MaxBootstrapClassifyCells,
+            "classify ceiling covers the ~12k L0 onset disk");
         c.Eq(180, LodLoginSweepTiming.MinVisitStops, "first-pass floor densifies the disk");
         c.Eq(520, LodLoginSweepTiming.MaxVisitStops, "first-pass ceiling for fast machines");
         c.Eq(36, LodLoginSweepTiming.MinRetryStops, "retry floor stays shorter than first pass");
@@ -971,6 +983,10 @@ public static class LoginSweepChecks
             "visit radius is wider than the thin graphics hold");
         c.True(viewBoost.Contains("SweepVisitRadiusBlocks"),
             "ChunkSweepRadiusChunks uses SweepVisitRadiusBlocks toward onset");
+        c.False(viewBoost.Contains("Math.Min(vd, SweepBoostViewDistanceBlocks)"),
+            "login chunk-visible radius is not clamped to the 750 graphics hold");
+        c.True(viewBoost.Contains("Stream to Farseer onset + 700"),
+            "login SetChunkColumnVisible radius is the onset disk");
         c.Eq(1000, LodLoginBakeViewBoost.LegacySweepHoldBlocks,
             "old 1000-block hold is leftover, never a restore target");
         c.True(LodLoginBakeViewBoost.IsSweepHoldValue(750), "750 is the scan hold");
@@ -1015,6 +1031,13 @@ public static class LoginSweepChecks
             "view boost clears DV far cap during sweep");
         c.True(viewBoost.Contains("ApplyZFar"),
             "view boost refreshes camera z-far after far-cap change");
+
+        string frontier = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodFrontierScout.cs"));
+        c.False(frontier.Contains("farCap < maxR"),
+            "frontier scout does not shrink the fill ring to EffectiveFarDistance");
+        c.True(frontier.Contains("HorizonDrawDistance(vd)"),
+            "frontier scout aims at Farseer onset + 700 after overlay");
     }
 
     static void HudHide(Check c)

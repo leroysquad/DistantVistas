@@ -1,3 +1,10 @@
+## 1.0.29
+- **Bigger FlagBaked disk, same Farseer look.** Login coverage was a thin ring: bootstrap planned a 288 km sparse subsample, and scout `SetChunkColumnVisible` was clamped to the 750-block graphics hold (~768 blocks). The canvas now matches Farseer onset at the login hold: **4.5 × 750 + 700 = 4075 blocks**. Spawn-centered ring + scouts stream/bake that disk; the player stays at spawn. 1.0.28 gray tent + black tips / thinner mist is unchanged (not a void fill).
+- Post-login frontier scout no longer clamps its ring to `EffectiveFarDistance` (that was the meshed rim). Overlay stays on the **420s / ~7 min** visit budget. Holes left after that are a second-pass frontier drip, not an endless overlay.
+- Scouts / batch bake skip GetColor when map chunks never arrived, so missing-tex white does not paint a strip at the land/Farseer join.
+- Drop `distantvistas_1.0.29.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+- **Verify:** after overlay, FlagBaked land meets the gray/black Farseer silhouette with no big empty/white gap; coverage visibly larger than the thin ~720-mesh / ~180-drawn playtest; meshes >> 180 drawn; player not hopped around. Silhouette still gray body + darker tips, not sky mush.
+
 ## 1.0.28
 - **Readable skyline.** Darken Farseer mountain tips a bit (ridge ink) so ridges read against the sky. Lighten and thin distance mist (less opaque, less sky-blue wash). Grayish smoke from 1.0.23/1.0.25 stays (gray bottom, slight black top). Low-ground LOD mist stays, paler/thinner. `flatness` name kept (do not use reserved `float flat`).
 - Drop `distantvistas_1.0.28.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.

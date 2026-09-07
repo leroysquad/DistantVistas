@@ -52,18 +52,21 @@ public readonly struct LodLoginSweepPlan
 
 /// <summary>
 /// Plans which L0 cells the login visit sweep should touch. With no per-world complete
-/// marker, always bootstraps a coast-guard ocean sweep or ~216 km radius around the player
-/// (even if some land was already walked). After a successful complete, existing visited
-/// canvases are spatially subsampled to a wall-clock revisit budget.
+/// marker, always bootstraps a coast-guard ocean sweep or the Farseer-onset disk
+/// (<see cref="EmptyCanvasBootstrapRadiusBlocks"/>, 4.5× the 750-block hold + 700)
+/// around the player (even if some land was already walked). After a successful complete,
+/// existing visited canvases are spatially subsampled to a wall-clock revisit budget.
 /// </summary>
 public static class LodLoginSweepBootstrap
 {
     /// <summary>
-    /// Season-expired / first-join disk around the player. 288000 = 2× the original
-    /// 144 km radius so FlagBaked land meets the Farseer silhouette rim.
+    /// First-join / season-expire disk around the player: Farseer onset at the
+    /// login graphics hold (4.5 × 750 + 700 ≈ 4075 blocks). A 288 km probe with
+    /// 420 stops left a thin ring — vanilla will not stream that far from spawn.
     /// Canvas outside this disk is kept, never wiped.
     /// </summary>
-    public const int EmptyCanvasBootstrapRadiusBlocks = 288000;
+    public static int EmptyCanvasBootstrapRadiusBlocks =>
+        LodLoginBakeViewBoost.SweepVisitRadiusBlocks;
 
     /// <summary>
     /// Hard cap on bootstrap visit stops at this PC's measured stop rate.
@@ -97,11 +100,10 @@ public static class LodLoginSweepBootstrap
 
     /// <summary>
     /// Hard ceiling on rain-height ClassifyCell calls during empty-canvas planning.
-    /// Full-disk classify at 216 km would freeze the client; visit stops stay on the
-    /// wall budget, so a stratified sample is enough. Scaled with the 1.5× radius
-    /// (area ~2.25×) so coast/land classify still covers the larger disk.
+    /// Full-disk classify at hundreds of km would freeze the client. The onset disk
+    /// is ~12k L0 cells; this ceiling covers it so land/ocean classify is not a sample.
     /// </summary>
-    public const int MaxBootstrapClassifyCells = 9216;
+    public const int MaxBootstrapClassifyCells = 16384;
 
     internal enum CellKind { Unknown, Ocean, Land }
 
@@ -130,8 +132,8 @@ public static class LodLoginSweepBootstrap
         Plan(world, clientWorld, pipeline, blocks, plantTintFallback, untintedOf, capi, RevisitMaxVisitStops);
 
     /// <summary>
-    /// First-sweep / empty-canvas plan: coast-guard or ~216 km player-radius disk, spatially
-    /// subsampled to <see cref="BootstrapMaxVisitStops"/>. Skips L0 cells already fully
+    /// First-sweep / empty-canvas plan: coast-guard or Farseer-onset player-radius disk,
+    /// spatially subsampled to <see cref="BootstrapMaxVisitStops"/>. Skips L0 cells already fully
     /// baked in the per-world cache; ocean sample/stamp rules unchanged.
     /// </summary>
     public static LodLoginSweepPlan PlanBootstrap(
@@ -380,8 +382,7 @@ public static class LodLoginSweepBootstrap
         double radiusSq = EmptyCanvasBootstrapRadiusBlocks * (double)EmptyCanvasBootstrapRadiusBlocks;
         int diskEstimate = EstimateDiskCellCount(cellRadius);
 
-        // Never walk every L0 cell in the probe disk on the main thread. At 216 km that is
-        // millions of ClassifyCell / GetMapChunk calls and the client looks frozen forever.
+        // Never walk every L0 cell in a huge probe disk on the main thread.
         List<(int Sx, int Sz)> disk = diskEstimate <= MaxBootstrapClassifyCells
             ? EnumerateDiskCells(centerSx, centerSz, cellRadius, footprint, pos.X, pos.Z, radiusSq)
                 .ToList()
@@ -464,8 +465,7 @@ public static class LodLoginSweepBootstrap
                 visitKeys.Add(key);
         }
 
-        // Prefer the geometric disk size in UI/logs when we only classified a sample,
-        // so "64 of ~4M" still reads as the probe footprint Jack asked for.
+        // Prefer the geometric disk size in UI/logs when we only classified a sample.
         int plannedForLabel = diskCellEstimate > landVisit.Count ? diskCellEstimate : landVisit.Count;
 
         LogOceanPlan(capi, openOceanNeeding.Count, oceanSamples.Count, openOceanFill.Count, landBudgeted.Count);
@@ -586,9 +586,9 @@ public static class LodLoginSweepBootstrap
     }
 
     /// <summary>
-    /// First-join bootstrap subsample across the ~216 km probe disk. Linear distance picks
+    /// First-join bootstrap subsample across the Farseer-onset disk. Linear distance picks
     /// (see <see cref="BudgetVisitStops"/>) left ~1 stop per long outer arc. Outer-weighted
-    /// distance bands put more teleports on the horizon ring so the far LOD looks filled.
+    /// distance bands put more visits on the horizon ring so FlagBaked land meets Farseer.
     /// </summary>
     internal static List<long> BudgetBootstrapVisitStops(
         List<long> keys,

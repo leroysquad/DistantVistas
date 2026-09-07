@@ -20,7 +20,7 @@ public sealed class LodLoginScoutFill
     public const int ChunkVisibleRadius = 2;
     public const int SweepRadiusChunks = 3;
     public const int SweepRowsPerCall = 2;
-    public const int RevealGrowPerTick = 2;
+    public const int RevealGrowPerTick = 4;
 
     readonly LodScoutEntity?[] slots = new LodScoutEntity[MaxConcurrent];
     int liveCount;
@@ -95,8 +95,15 @@ public sealed class LodLoginScoutFill
                     pipeline.SweepLoadedColumns(cx, cz, SweepRadiusChunks, forceRecapture: true, rowsPerCall: SweepRowsPerCall);
 
                 bool loaded = LodLoginSweep.AllMapChunksLoaded(capi.World.BlockAccessor, key);
-                if (!loaded && scout.Ticks < MaxWaitTicks)
+                if (!loaded)
+                {
+                    if (scout.Ticks < MaxWaitTicks)
+                        continue;
+                    // Do not bake missing-tex white. Miss audit / retry can pick this L0 up.
+                    scout.Live = false;
+                    slots[i] = null;
                     continue;
+                }
 
                 pipeline.SweepLoadedColumns(cx, cz, SweepRadiusChunks, forceRecapture: true, rowsPerCall: SweepRowsPerCall);
                 pipeline.QueueL0SectionForce(key);

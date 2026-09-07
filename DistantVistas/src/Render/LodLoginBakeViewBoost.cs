@@ -77,11 +77,11 @@ public sealed class LodLoginBakeViewBoost
     {
         get
         {
-            int vd = applied ? boostedViewDistance : (int)renderer.LiveViewDistance;
-            vd = Math.Min(vd, SweepBoostViewDistanceBlocks);
+            // Stream to Farseer onset + 700, not the 750-block graphics hold.
+            // Clamping to SweepBoostViewDistanceBlocks left a thin ~768-block ring.
+            int blocks = SweepVisitRadiusBlocks;
             int cs = GlobalConstants.ChunkSize;
-            int cap = Math.Max(4, (int)Math.Ceiling(SweepBoostViewDistanceBlocks / (double)cs) + 2);
-            return GameMath.Clamp((int)Math.Ceiling(vd / (double)cs), 4, cap);
+            return Math.Max(4, (int)Math.Ceiling(blocks / (double)cs) + 2);
         }
     }
 
