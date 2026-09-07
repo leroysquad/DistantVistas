@@ -1,4 +1,4 @@
-using System.Reflection;
+﻿using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Runtime.Loader;
@@ -87,7 +87,9 @@ public static class GameAssemblies
             var dir = new DirectoryInfo(AppContext.BaseDirectory);
             while (dir != null)
             {
-                if (Directory.Exists(Path.Combine(dir.FullName, ".git"))) return dir.FullName;
+                string gitMarker = Path.Combine(dir.FullName, ".git");
+                // Worktrees use a .git file, not a directory.
+                if (Directory.Exists(gitMarker) || File.Exists(gitMarker)) return dir.FullName;
                 dir = dir.Parent;
             }
             throw new DirectoryNotFoundException(

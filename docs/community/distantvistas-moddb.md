@@ -2,7 +2,7 @@
 
 - **URL:** https://mods.vintagestory.at/distantvistas (`asset` ~65544)
 - **Author:** IllLeroySquad; fork of Vintage Horizons (AliasFactory, MIT); Farseer techniques (Badgerson, MIT)
-- **Latest public:** 0.7.55 (Farseer companion draw, spawn plates locked, spatial tint). 0.7.49 was visited land / sky circle / keep-origin seasons.
+- **Latest public:** 0.7.56 (look-down squares wait until ~67 deg / off the monitor). 0.7.55 was Farseer companion draw, spawn plates locked, spatial tint. 0.7.49 was visited land / sky circle / keep-origin seasons. Winter colour: first pass 0.7.14, walking autumn snap 0.7.49, mountain leaf/grass 0.7.55.
 - **Tags:** `lod` `fog` `bug` `horizons`
 - **Comments:** 14 (mostly packaging/screenshot at scrape time)
 

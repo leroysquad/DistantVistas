@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using DistantVistas;
 
 namespace DistantVistas.Checks;
 
@@ -16,6 +17,9 @@ public static class StaticAssetChecks
         VersionAgreement(c);
         LiveSeasonClock(c);
         NoCameraLockedNearDiscard(c);
+        FarseerOverlay(c);
+        NoFakeOptionalDependencies(c);
+        LoginOverlayAssets(c);
     }
 
     /// <summary>
@@ -93,16 +97,14 @@ public static class StaticAssetChecks
     }
 
     /// <summary>
-    /// LodMesher packs the tint slot into a vertex alpha byte in three bands: opaque at
-    /// slot, water at MaxSlots + slot, thin at MaxSlots * 2 + slot. Alpha is a byte, so the
-    /// largest encodable value is MaxSlots * 3 - 1. Raise MaxSlots past 85 and the thin band
-    /// wraps into the opaque band with no error anywhere - thin plants would render as solid
-    /// terrain of an arbitrary tint.
+    /// LodMesher packs the tint slot into a vertex alpha byte in four bands: opaque at
+    /// slot, water at MaxSlots + slot, thin at MaxSlots * 2 + slot, baked at MaxSlots * 3.
+    /// Alpha is a byte, so the largest encodable value is MaxSlots * 4 - 1.
     /// </summary>
     static void AlphaPacking(Check c)
     {
-        c.True(LodTintRegistry.MaxSlots * 3 <= 256,
-            $"tint bands fit in a byte (MaxSlots {LodTintRegistry.MaxSlots} * 3 <= 256)");
+        c.True(LodTintRegistry.MaxSlots * 4 <= 256,
+            $"tint bands fit in a byte (MaxSlots {LodTintRegistry.MaxSlots} * 4 <= 256)");
     }
 
     /// <summary>
@@ -154,6 +156,7 @@ public static class StaticAssetChecks
         c.True(vsh.Contains("uniform float seasonRel"), "lodterrain.vsh has live seasonRel");
         c.True(vsh.Contains("seasonTints"), "lodterrain.vsh has seasonTints");
         c.True(vsh.Contains("band != 1"), "lodterrain.vsh skips season on water");
+        c.True(vsh.Contains("band == 3"), "lodterrain.vsh bypasses live tint on baked band");
         c.False(vsh.Contains("uniform float seasonTempX"),
             "lodterrain.vsh does not drive vegetation with a global seasonTempX");
         c.True(vsh.Contains("keepClimateLow") && vsh.Contains("climateLow00"),
@@ -181,6 +184,12 @@ public static class StaticAssetChecks
             "lodterrain.fsh does not discard the camera skip disc");
         c.False(fsh.Contains("skipR"),
             "lodterrain.fsh does not punch a view-distance sphere (sky circle)");
+        c.True(vsh.Contains("grassPullWeight"), "lodterrain.vsh tags vegetation slots for coarse plant-pull");
+        c.True(fsh.Contains("COARSE_PLATE_COLUMNS"), "lodterrain.fsh gates plate noise to coarse LOD");
+        c.True(fsh.Contains("grassPullWeight"), "lodterrain.fsh receives grassPullWeight for coarse plant-pull");
+        c.True(fsh.Contains("bool baked = band == 3"), "lodterrain.fsh skips snow/noise on baked band");
+        c.True(fsh.Contains("baked ? vertexColor.rgb"),
+            "lodterrain.fsh uses stored RGB directly on baked band");
         c.True(fsh.Contains("band == 1") && fsh.Contains("0.18, 0.38, 0.50"),
             "lodterrain.fsh recolors foam-white water to lake blue");
         c.True(vsh.Contains("lookDown"),
@@ -200,5 +209,87 @@ public static class StaticAssetChecks
             "lodterrain.fsh receives localXZ and the clipRect uniform");
         c.True(Regex.IsMatch(fsh, @"localXZ\.x\s*<\s*clipRect\.x") && Regex.IsMatch(fsh, @"localXZ\.y\s*>\s*clipRect\.w"),
             "lodterrain.fsh discards outside the clip rectangle (minX, minZ, maxX, maxZ)");
+    }
+
+    /// <summary>
+    /// We overlay Farseer's region shaders so their sky cylinder and
+    /// bleach-to-sky tint are not in the player's view. No Harmony.
+    /// </summary>
+    static void FarseerOverlay(Check c)
+    {
+        string vsh = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "assets", "farseer", "shaders", "region.vsh"));
+        string fsh = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "assets", "farseer", "shaders", "region.fsh"));
+        c.False(FarseerShaderOverlay.OverlayActive,
+            "Farseer overlay inject is off (stock SkyTint bleaches; yield punched our holes)");
+        c.True(vsh.Contains("distStart = viewDistance * 0.785"),
+            "farseer overlay inner disc is stock so the spawn 512-block region can rasterize");
+        c.False(vsh.Contains("distStart = 24.0"),
+            "farseer overlay inner disc is not a 24-block hole under the player");
+        c.False(vsh.Contains("distStart = viewDistance * 1.5"),
+            "farseer overlay does not start at 1.5x (that discarded the spawn region)");
+        c.False(vsh.Contains("distStart = viewDistance * 0.92"),
+            "farseer overlay does not use the 0.92 inner start");
+        c.False(Regex.IsMatch(vsh, @"farViewDistance\s*-\s*distStart\s*-\s*512"),
+            "farseer overlay dist == 1 is the real far rim, not 512 blocks inside the hills");
+        c.False(fsh.Contains("applySpheresFog"),
+            "farseer overlay does not run sphere fog (sky ring)");
+        c.True(fsh.Contains("clamp(skyTint, 0.0, 0.4)"),
+            "farseer overlay clamps SkyTint so 5-10 cannot bleach the heightmap");
+        c.True(fsh.Contains("min(colorTint.a, 0.12)"),
+            "farseer overlay clamps ColorTint so slate wash cannot hide relief");
+        c.True(fsh.Contains("smoothstep(0.88, 1.0, dist)"),
+            "farseer overlay only mixes sky at the far rim");
+        c.True(vsh.Contains("DV_FARSEER_OVERLAY") && fsh.Contains("DV_FARSEER_OVERLAY"),
+            "farseer overlay carries a marker the boot log can see");
+        c.False(vsh.Contains("yLevel > 340.0"),
+            "farseer overlay does not sink heightmaps (that buried the silhouette)");
+        c.False(fsh.Contains("0.35 * radial"),
+            "farseer overlay does not discard overhead (that ate the heightmap disc)");
+        c.True(fsh.Contains("terraColor.rgb *= 0.78"),
+            "farseer overlay darkens sky-sampled heightmaps so hills read against sky");
+
+        string overlayCs = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "DistantVistasModSystem.cs"));
+        c.False(overlayCs.Contains("capi.Shader.ReloadShaders"),
+            "client system does not ReloadShaders after overlay (that reloads Farseer's zip)");
+        c.False(overlayCs.Contains("RegisterFileShaderProgram"),
+            "client system does not re-register Farseer's region program");
+        c.False(overlayCs.Contains("RecompileRegion"),
+            "client system does not Compile Farseer's live region program");
+
+        string srcVsh = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "assets", "distantvistas", "shaders", "farseer-region.vsh"));
+        string srcFsh = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "assets", "distantvistas", "shaders", "farseer-region.fsh"));
+        c.Eq(vsh, srcVsh, "distantvistas domain vsh is the same overlay we inject");
+        c.Eq(fsh, srcFsh, "distantvistas domain fsh is the same overlay we inject");
+    }
+
+    static void NoFakeOptionalDependencies(Check c)
+    {
+        string json = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "modinfo.json"));
+        c.False(json.Contains("optionaldependencies"),
+            "modinfo does not lie about optionaldependencies (VS has no such field)");
+        c.False(json.Contains("\"farseer\":"),
+            "modinfo does not require Farseer (companion only)");
+    }
+
+    /// <summary>
+    /// Login visit-sweep overlay ships both GUI textures in the mod zip.
+    /// </summary>
+    static void LoginOverlayAssets(Check c)
+    {
+        string gui = Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "assets", "distantvistas", "textures", "gui");
+        string backdrop = Path.Combine(gui, "login-backdrop.png");
+        c.True(File.Exists(backdrop),
+            "login backdrop is packaged at assets/distantvistas/textures/gui/login-backdrop.png");
+        c.True(new FileInfo(backdrop).Length > 50000,
+            "login backdrop is a real splash photo, not an 8 KB placeholder");
+        c.True(File.Exists(Path.Combine(gui, "login-title-rainbow.png")),
+            "login title is packaged at assets/distantvistas/textures/gui/login-title-rainbow.png");
     }
 }

@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Text.RegularExpressions;
+using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
@@ -15,7 +16,7 @@ namespace DistantVistas;
 /// <param name="cx">Chunk column X, for sampling position.</param>
 /// <param name="cz">Chunk column Z, for sampling position.</param>
 /// <param name="sampleY">Y of the run's top, for sampling position.</param>
-public delegate (int Color, byte TintSlot) LodPaletteDescriber(int blockId, int blockX, int blockY, int blockZ);
+public delegate (int Color, byte TintSlot, bool Baked) LodPaletteDescriber(int blockId, int blockX, int blockY, int blockZ);
 
 /// <summary>Which live tint applies to a block. The server has none and answers 0.</summary>
 public delegate byte LodTintSlotResolver(Block block);
@@ -39,6 +40,12 @@ public class LodPipeline
     // runs ahead; the worker backlog is the real throttle on capture work in flight.
     const int CaptureSchedulesPerTick = 8;
     const int MaxWorkerCaptureBacklog = 32;
+    /// <summary>
+    /// Completed captures waiting to apply. The worker cap only limits in-flight
+    /// jobs; without this, results stacked into the thousands while apply stayed
+    /// on a 4 ms budget (play tick 600: capRes 0, tick 1000: capRes 1537).
+    /// </summary>
+    const int MaxCaptureResultBacklog = 16;
 
     /// <summary>
     /// Applies per tick: one when idle, more while results are stacked up, always
@@ -47,9 +54,9 @@ public class LodPipeline
     /// in the queue until the chunk unloaded, and was then dropped at schedule time.
     /// </summary>
     const int CaptureAppliesPerTick = 1;
-    const int CaptureAppliesPerTickBusy = 8;
+    const int CaptureAppliesPerTickBusy = 2;
     const double CaptureApplyBudgetMs = 4.0;
-    const int CaptureBusyThreshold = 4;
+    internal const int CaptureBusyThreshold = 4;
 
     const int PropagationsPerTick = 4;
     const int CatchUpPropagationsPerTick = 48;
@@ -96,10 +103,65 @@ public class LodPipeline
     /// </summary>
     public System.Func<LodSection, int>? RepairUncoloredPalette;
 
+    /// <summary>Upgrade legacy live-tint palette rows after load (join refresh).</summary>
+    public System.Func<LodSection, long, int>? HealLegacyPalette;
+
+    /// <summary>Explore-time exact bake while chunks are still loaded (client only).</summary>
+    public LodExploreBake ExploreBake { get; } = new();
+
+    /// <summary>True while <see cref="ApplyOneCaptureResult"/> is registering a peek capture.</summary>
+    public bool CurrentCaptureProvisional { get; private set; }
+
+    public Block? ExplorePlantTintFallback { get; set; }
+
+    public System.Func<Block, (int Color, LodUntintedShare Share)>? ExploreUntintedOf { get; set; }
+
+    /// <summary>
+    /// While the login visit sweep runs, skip approximate legacy heal — the sweep
+    /// stores exact GetColor samples per column instead.
+    /// </summary>
+    public bool DeferLegacyHeal { get; set; }
+
+    /// <summary>
+    /// Unused play-time lock (kept so existing probe logs compile). Discover uses
+    /// <see cref="DiscoverOnly"/> instead of freezing all capture.
+    /// </summary>
+    public bool FreezeCapture { get; set; }
+
+    /// <summary>
+    /// After a successful login sweep: capture never-seen land, and recapture
+    /// provisional/live-tint columns only near the player. Do not recapture the
+    /// whole already-painted canvas when view distance rises.
+    /// </summary>
+    public bool DiscoverOnly { get; set; }
+
+    /// <summary>
+    /// Login visit sweep: keep columns whose map chunk is still streaming instead of
+    /// dropping them. Teleport purge still clears leftovers after the player moves.
+    /// </summary>
+    public bool HoldUnloadedCaptures { get; set; }
+
+    const int DiscoverRecaptureRadiusChunks = 8;
+    int discoverCx;
+    int discoverCz;
+    bool discoverOriginSet;
+    int debugDiscoverAccept;
+    int debugDiscoverSkip;
+    int debugSweepPause;
+    int debugSchedulePause;
+    int debugRainRetry;
+    int debugRainDrop;
+    int debugLoadDrop;
+    int debugMipDrop;
+
     /// <summary>Palette entries given a colour on load because the cache had none.</summary>
     public int PaletteEntriesRepaired { get; private set; }
 
+    /// <summary>Drop resident GPU mesh after login bake remesh.</summary>
+    public System.Action<long>? InvalidateGpuMesh;
+
     readonly ConcurrentDictionary<long, byte> queuedColumns = new();
+    readonly ConcurrentDictionary<long, byte> captureInFlight = new();
     readonly ConcurrentQueue<long> pendingColumns = new();
     readonly BlockPos paletteSamplePos = new(0, 0, 0);
 
@@ -109,6 +171,11 @@ public class LodPipeline
     /// stored row. The column queue holds work until it flips.
     /// </summary>
     public bool Active { get; private set; }
+
+    /// <summary>Play-tick index for land-hang probes. 0 during sweep.</summary>
+    internal int DebugPlayTick;
+    internal int LastAppliedCount;
+    internal double LastApplyMs;
 
     public bool Persisting => store != null;
     public int CachedSectionsLoaded { get; private set; }
@@ -157,10 +224,79 @@ public class LodPipeline
         SaveCalls = LoadCalls = 0;
     }
 
+    public void NotePlayerColumn(int cx, int cz)
+    {
+        discoverCx = cx;
+        discoverCz = cz;
+        discoverOriginSet = true;
+    }
+
+    public void ResetDiscover()
+    {
+        DiscoverOnly = false;
+        FreezeCapture = false;
+        HoldUnloadedCaptures = false;
+        captureInFlight.Clear();
+        discoverOriginSet = false;
+        debugDiscoverAccept = 0;
+        debugDiscoverSkip = 0;
+        debugSweepPause = 0;
+        debugSchedulePause = 0;
+        debugRainRetry = 0;
+        debugRainDrop = 0;
+    }
+
+    /// <summary>
+    /// Drop pending keys whose map chunk is gone. Login leftovers sat at the
+    /// FIFO head with no rain map and starved new land (~324 after release).
+    /// </summary>
+    public int PurgeUnloadedPendingColumns()
+    {
+        if (pendingColumns.IsEmpty) return 0;
+        var keep = new List<long>();
+        int dropped = 0;
+        while (pendingColumns.TryDequeue(out long key))
+        {
+            queuedColumns.TryRemove(key, out _);
+            int cx = (int)(key & 0xFFFFFFFF);
+            int cz = (int)(key >> 32);
+            if (api.World.BlockAccessor.GetMapChunk(cx, cz) == null)
+            {
+                dropped++;
+                continue;
+            }
+            keep.Add(key);
+        }
+        foreach (long key in keep)
+        {
+            if (queuedColumns.TryAdd(key, 0))
+                pendingColumns.Enqueue(key);
+        }
+        // #region agent log
+        try
+        {
+            System.IO.File.AppendAllText(
+                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                "{\"sessionId\":\"40cccb\",\"runId\":\"post-fix-2\",\"hypothesisId\":\"H-P-dead-pending\",\"location\":\"LodPipeline.PurgeUnloadedPendingColumns\",\"message\":\"purge-unloaded\",\"data\":{\"dropped\":"
+                + dropped + ",\"kept\":" + keep.Count + ",\"pending\":" + pendingColumns.Count
+                + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+        }
+        catch
+        {
+        }
+        // #endregion
+        return dropped;
+    }
+
     /// <summary>Note a chunk column as needing (re)capture. Safe from any thread.</summary>
     public void QueueColumn(int cx, int cz)
     {
         if (!NeedsCapture(cx, cz)) return;
+        if (DiscoverOnly && ShouldSkipDiscoverRecapture(cx, cz))
+        {
+            DebugDiscoverLog(false, cx, cz);
+            return;
+        }
 
         if (pendingColumns.Count >= MaxPendingColumns)
         {
@@ -169,7 +305,135 @@ public class LodPipeline
         }
 
         long key = ((long)cz << 32) | (uint)cx;
+        if (queuedColumns.TryAdd(key, 0))
+        {
+            pendingColumns.Enqueue(key);
+            DebugDiscoverLog(true, cx, cz);
+        }
+    }
+
+    /// <summary>
+    /// Login visit sweep: always re-queue a column so live loaded terrain replaces cache.
+    /// </summary>
+    public void QueueColumnForce(int cx, int cz)
+    {
+        if (!Active) return;
+        if (pendingColumns.Count >= MaxPendingColumns)
+        {
+            Interlocked.Increment(ref columnsDropped);
+            return;
+        }
+
+        long key = ((long)cz << 32) | (uint)cx;
         if (queuedColumns.TryAdd(key, 0)) pendingColumns.Enqueue(key);
+    }
+
+    bool TryResidentQuadrant(int cx, int cz, out LodSection sec, out int q)
+    {
+        sec = null!;
+        q = 0;
+        int sb = LodSection.SectionBlocks;
+        int sx = (cx * ChunkSize) / sb;
+        int sz = (cz * ChunkSize) / sb;
+        long sectionKey = LodWorld.SectionKey(0, sx, sz);
+        if (!World.Sections.TryGetValue(sectionKey, out LodSection? found) || found == null)
+            return false;
+        sec = found;
+        int colOx = ((cx * ChunkSize) % sb) / LodSection.ColumnStepBlocks;
+        int colOz = ((cz * ChunkSize) % sb) / LodSection.ColumnStepBlocks;
+        q = LodSection.QuadrantOf(colOx, colOz);
+        return true;
+    }
+
+    bool QuadrantFullyCapturedResident(int cx, int cz) =>
+        TryResidentQuadrant(cx, cz, out LodSection sec, out int q) && sec.QuadrantFullyCaptured(q);
+
+    bool ShouldSkipDiscoverRecapture(int cx, int cz)
+    {
+        if (!QuadrantFullyCapturedResident(cx, cz)) return false;
+        if (!discoverOriginSet) return true;
+        int dx = cx - discoverCx;
+        int dz = cz - discoverCz;
+        return dx * dx + dz * dz > DiscoverRecaptureRadiusChunks * DiscoverRecaptureRadiusChunks;
+    }
+
+    // #region agent log
+    void DebugDiscoverLog(bool accepted, int cx, int cz)
+    {
+        if (!DiscoverOnly) return;
+        if (accepted)
+        {
+            if (debugDiscoverAccept >= 16) return;
+            debugDiscoverAccept++;
+        }
+        else
+        {
+            if (debugDiscoverSkip >= 16) return;
+            debugDiscoverSkip++;
+        }
+        try
+        {
+            System.IO.File.AppendAllText(
+                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                "{\"sessionId\":\"40cccb\",\"runId\":\"post-fix\",\"hypothesisId\":\"H-P-discover\",\"location\":\"LodPipeline.QueueColumn\",\"message\":\""
+                + (accepted ? "discover-accept" : "discover-skip")
+                + "\",\"data\":{\"cx\":" + cx + ",\"cz\":" + cz
+                + ",\"pending\":" + pendingColumns.Count
+                + ",\"originSet\":" + (discoverOriginSet ? "true" : "false")
+                + ",\"pcx\":" + discoverCx + ",\"pcz\":" + discoverCz
+                + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+        }
+        catch
+        {
+        }
+    }
+
+    void DebugBackpressure(string why)
+    {
+        int n = why switch
+        {
+            "sweep-pause" => ++debugSweepPause,
+            "schedule-pause" => ++debugSchedulePause,
+            "rain-retry" => ++debugRainRetry,
+            "rain-drop" => ++debugRainDrop,
+            _ => 99,
+        };
+        if (n > 8) return;
+        try
+        {
+            System.IO.File.AppendAllText(
+                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                "{\"sessionId\":\"40cccb\",\"runId\":\"post-fix\",\"hypothesisId\":\"H-P-backpressure\",\"location\":\"LodPipeline\",\"message\":\""
+                + why
+                + "\",\"data\":{\"pending\":" + pendingColumns.Count
+                + ",\"capRes\":" + Worker.CaptureResults.Count
+                + ",\"swept\":" + ColumnsSwept
+                + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+        }
+        catch
+        {
+        }
+    }
+    // #endregion
+
+    /// <summary>Force re-capture of every vanilla chunk column covering an L0 section.</summary>
+    public void QueueL0SectionForce(long l0Key)
+    {
+        if (LodWorld.KeyLevel(l0Key) != 0) return;
+        foreach ((int cx, int cz) in LodLoginSweep.ChunkColumnsForL0(l0Key))
+            QueueColumnForce(cx, cz);
+    }
+
+    /// <summary>True when no capture work remains for an L0 section's four chunk columns.</summary>
+    public bool IsL0SectionCaptureIdle(long l0Key)
+    {
+        foreach ((int cx, int cz) in LodLoginSweep.ChunkColumnsForL0(l0Key))
+        {
+            long key = ((long)cz << 32) | (uint)cx;
+            if (queuedColumns.ContainsKey(key) || captureInFlight.ContainsKey(key))
+                return false;
+        }
+        return true;
     }
 
     /// <summary>
@@ -197,8 +461,13 @@ public class LodPipeline
             int colOx = ((cx * ChunkSize) % sb) / LodSection.ColumnStepBlocks;
             int colOz = ((cz * ChunkSize) % sb) / LodSection.ColumnStepBlocks;
             int q = LodSection.QuadrantOf(colOx, colOz);
-            if (sec.QuadrantFullyCaptured(q) && !sec.IsProvisionalQuadrant(q))
-                return false;
+            if (sec.QuadrantFullyCaptured(q))
+            {
+                if (!sec.IsProvisionalQuadrant(q)) return false;
+                // Visit-baked peeks already have FlagBaked paint — do not recapture
+                // the whole disk just because view distance loaded those chunks.
+                if (!LodExploreBake.SectionHasLiveTint(sec)) return false;
+            }
             // Track sparse pre-0.7.7 one-quadrant sections so cold skips stay open.
             World.ClassifySparseL0(sectionKey, sec);
             return true;
@@ -240,9 +509,17 @@ public class LodPipeline
     /// costs 55 map-chunk lookups a tick and covers the whole disc in under 3 seconds.
     /// Main thread only: it reads the loaded chunk list.
     /// </summary>
-    public void SweepLoadedColumns(int centreCx, int centreCz, int radiusChunks)
+    public void SweepLoadedColumns(int centreCx, int centreCz, int radiusChunks) =>
+        SweepLoadedColumns(centreCx, centreCz, radiusChunks, forceRecapture: false, rowsPerCall: 1);
+
+    public void SweepLoadedColumns(int centreCx, int centreCz, int radiusChunks, bool forceRecapture, int rowsPerCall)
     {
         if (!Active || radiusChunks <= 0) return;
+        if (DiscoverOnly && Worker.CaptureResults.Count >= MaxCaptureResultBacklog)
+        {
+            DebugBackpressure("sweep-pause");
+            return;
+        }
 
         if (sweepRow == int.MinValue || sweepRow > radiusChunks || sweepRadius != radiusChunks)
         {
@@ -250,29 +527,40 @@ public class LodPipeline
             sweepRadius = radiusChunks;
         }
 
-        int cz = centreCz + sweepRow;
-        if (cz >= 0)
+        int rows = Math.Max(1, rowsPerCall);
+        for (int row = 0; row < rows; row++)
         {
-            for (int dx = -radiusChunks; dx <= radiusChunks; dx++)
+            int cz = centreCz + sweepRow;
+            if (cz >= 0)
             {
-                int cx = centreCx + dx;
-                if (cx < 0) continue;
-                // Cheap DV-side test first; the engine lookup only for columns we want.
-                if (!NeedsCapture(cx, cz)) continue;
-                long key = ((long)cz << 32) | (uint)cx;
-                if (queuedColumns.ContainsKey(key)) continue;
-                if (api.World.BlockAccessor.GetMapChunk(cx, cz) == null) continue;
-                if (pendingColumns.Count >= MaxPendingColumns) return;
-                if (queuedColumns.TryAdd(key, 0))
+                for (int dx = -radiusChunks; dx <= radiusChunks; dx++)
                 {
-                    pendingColumns.Enqueue(key);
-                    ColumnsSwept++;
+                    int cx = centreCx + dx;
+                    if (cx < 0) continue;
+                    if (!forceRecapture && !NeedsCapture(cx, cz)) continue;
+                    if (!forceRecapture && DiscoverOnly && QuadrantFullyCapturedResident(cx, cz)) continue;
+                    long key = ((long)cz << 32) | (uint)cx;
+                    if (queuedColumns.ContainsKey(key)) continue;
+                    if (api.World.BlockAccessor.GetMapChunk(cx, cz) == null) continue;
+                    if (pendingColumns.Count >= MaxPendingColumns) return;
+                    if (forceRecapture)
+                    {
+                        int before = pendingColumns.Count;
+                        QueueColumnForce(cx, cz);
+                        if (pendingColumns.Count > before)
+                            ColumnsSwept++;
+                    }
+                    else if (queuedColumns.TryAdd(key, 0))
+                    {
+                        pendingColumns.Enqueue(key);
+                        ColumnsSwept++;
+                    }
                 }
             }
-        }
 
-        sweepRow++;
-        if (sweepRow > radiusChunks) sweepRow = -radiusChunks;
+            sweepRow++;
+            if (sweepRow > radiusChunks) sweepRow = -radiusChunks;
+        }
     }
 
     /// <summary>
@@ -377,6 +665,7 @@ public class LodPipeline
             LoadCalls++;
             LoadMsTotal += ms;
             if (ms > LoadMsMax) LoadMsMax = ms;
+            if (loaded != null) AfterSectionLoaded(key, loaded);
             return loaded;
         };
         CachedSectionsLoaded = store.LoadAllKeys((level, sx, sz, applyToParent, provisional) =>
@@ -420,6 +709,7 @@ public class LodPipeline
         if (LodWorld.KeyLevel(key) == 0) section.MarkCapturedQuadrantsProvisional();
 
         World.InstallLoaded(key, section);
+        AfterSectionLoaded(key, section);
         // Persist it: re-fetching a mean 45.9 KB a section every session is not an option,
         // so a section from the network becomes part of the local cache like any other.
         World.MarkChanged(key);
@@ -458,15 +748,62 @@ public class LodPipeline
     {
         if (!Active) return;
 
+        long t0 = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        long mark = t0;
+        AgentTickStep("tick-install-enter", t0, ref mark, storageThread?.LoadResults.Count ?? 0, ExploreBake.PendingCount);
         InstallLoadedSections();
+        AgentTickStep("tick-install-exit", t0, ref mark, storageThread?.LoadResults.Count ?? 0, ExploreBake.PendingCount);
         ScheduleCaptures();
-        ApplyCaptureResults();
-        int propagationBudget = World.MipDirty.Count > CatchUpPropagationThreshold
-            ? CatchUpPropagationsPerTick
-            : PropagationsPerTick;
-        World.ProcessPropagation(propagationBudget);
-        SaveSomeDirtySections(SectionSavesPerTick);
+        DrainDiscardedCaptures();
+        int captureBacklog = ApplyCaptureResults();
+        double applyMs = applyClock.Elapsed.TotalMilliseconds;
+        LastApplyMs = applyMs;
+        AgentTickStep("tick-apply-exit", t0, ref mark, captureBacklog, LastAppliedCount);
+        if (applyMs <= 8.0)
+            DrainExploreBake(captureBacklog);
+        AgentTickStep("tick-explore-exit", t0, ref mark, ExploreBake.LastDrainSpins, ExploreBake.PendingCount);
+        int propagationBudget = PropagationsPerTick;
+        if (!DiscoverOnly && World.MipDirty.Count > CatchUpPropagationThreshold)
+            propagationBudget = CatchUpPropagationsPerTick;
+        if (applyMs > 8.0)
+            propagationBudget = Math.Min(propagationBudget, 2);
+        World.ProcessPropagation(propagationBudget, World.RequestGpuSwap);
+        int saveBudget = DiscoverOnly ? 1 : SectionSavesPerTick;
+        if (applyMs > 8.0) saveBudget = 0;
+        SaveSomeDirtySections(saveBudget);
+        AgentTickStep("tick-exit", t0, ref mark, World.SaveDirty.Count, ExploreBake.PendingCount);
         tickCounter++;
+    }
+
+    // #region agent log
+    void AgentTickStep(string message, long enterMs, ref long mark, int a, int b)
+    {
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        long stepMs = now - mark;
+        long totalMs = now - enterMs;
+        mark = now;
+        bool early = DebugPlayTick > 0 && DebugPlayTick <= 16;
+        if (!early && stepMs <= 20 && totalMs <= 80) return;
+        try
+        {
+            System.IO.File.AppendAllText(
+                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                "{\"sessionId\":\"40cccb\",\"runId\":\"post-fix-3\",\"hypothesisId\":\"H-P-tickstep\",\"location\":\"LodPipeline.Tick\",\"message\":\"" + message + "\",\"data\":{\"n\":" + DebugPlayTick + ",\"stepMs\":" + stepMs + ",\"ms\":" + totalMs + ",\"a\":" + a + ",\"b\":" + b + "},\"timestamp\":" + now + "}\n");
+        }
+        catch { }
+    }
+    // #endregion
+
+    void DrainExploreBake(int captureBacklog)
+    {
+        if (api.Side != EnumAppSide.Client || ExploreUntintedOf == null) return;
+        var capi = (ICoreClientAPI)api;
+        ExploreBake.Drain(
+            capi,
+            this,
+            ExplorePlantTintFallback,
+            ExploreUntintedOf,
+            captureBacklog);
     }
 
     /// <summary>
@@ -500,7 +837,7 @@ public class LodPipeline
                 // runs for anything that is no longer terrain (fire, meta) from sections
                 // captured under an older policy, without needing a re-explore.
                 result.Section.RemoveRunsWithFlag(LodPaletteEntry.FlagSkip);
-                repaired = RepairUncoloredPalette?.Invoke(result.Section) ?? 0;
+                AfterSectionLoaded(result.Key, result.Section, ref repaired);
             }
             World.InstallLoaded(result.Key, result.Section);
 
@@ -515,10 +852,73 @@ public class LodPipeline
         }
     }
 
+    /// <summary>
+    /// Palette repair and legacy discover-bake after a section is read from disk. Sync and
+    /// async load paths both land here so FlagBaked survives Reclassify and old live-tint
+    /// caches upgrade on revisit without a manual cache wipe.
+    /// </summary>
+    void AfterSectionLoaded(long key, LodSection section, ref int repaired)
+    {
+        repaired += RepairUncoloredPalette?.Invoke(section) ?? 0;
+        if (!DeferLegacyHeal)
+        {
+            if (LodWorld.KeyLevel(key) == 0)
+            {
+                // Live visit bake when chunks load — FlagBaked cells overwrite from
+                // the visual top, including snow that the stored run skipped.
+                ExploreBake.Queue(key, section, false);
+                World.RequestGpuSwap(key);
+                // #region agent log
+                if (++debugLoadDrop <= 16)
+                {
+                    try
+                    {
+                        System.IO.File.AppendAllText(
+                            @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                            "{\"sessionId\":\"40cccb\",\"runId\":\"post-fix-walk\",\"hypothesisId\":\"H-S1\",\"location\":\"LodPipeline.AfterSectionLoaded\",\"message\":\"load-drop-l0\",\"data\":{\"swap\":true,\"sx\":"
+                            + LodWorld.KeySx(key) + ",\"sz\":" + LodWorld.KeySz(key)
+                            + ",\"cols\":" + section.CapturedColumns
+                            + ",\"dirty\":" + World.RenderDirty.Count
+                            + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+                    }
+                    catch { }
+                }
+                // #endregion
+            }
+            else
+            {
+                int healed = HealLegacyPalette?.Invoke(section, key) ?? 0;
+                if (healed > 0)
+                {
+                    repaired += healed;
+                    World.RenderDirty.Add(key);
+                    InvalidateGpuMesh?.Invoke(key);
+                }
+            }
+        }
+    }
+
+    void AfterSectionLoaded(long key, LodSection section)
+    {
+        int repaired = 0;
+        AfterSectionLoaded(key, section, ref repaired);
+        if (repaired > 0)
+        {
+            PaletteEntriesRepaired += repaired;
+            World.MarkChanged(key);
+        }
+    }
+
     // ---- Capture scheduling (world thread gathers refs, worker reads blocks) ----
 
     void ScheduleCaptures()
     {
+        if (Worker.CaptureResults.Count >= MaxCaptureResultBacklog)
+        {
+            DebugBackpressure("schedule-pause");
+            return;
+        }
+
         int chunkYCount = api.World.BlockAccessor.MapSizeY / ChunkSize;
 
         for (int n = 0; n < CaptureSchedulesPerTick
@@ -531,7 +931,20 @@ public class LodPipeline
 
             IMapChunk? mapChunk = api.World.BlockAccessor.GetMapChunk(cx, cz);
             ushort[]? rainMap = mapChunk?.RainHeightMap;
-            if (rainMap == null) continue;
+            if (rainMap == null)
+            {
+                if (mapChunk == null && !HoldUnloadedCaptures)
+                {
+                    DebugBackpressure("rain-drop");
+                }
+                else
+                {
+                    if (queuedColumns.TryAdd(key, 0))
+                        pendingColumns.Enqueue(key);
+                    DebugBackpressure("rain-retry");
+                }
+                continue;
+            }
 
             var chunks = new IWorldChunk?[chunkYCount];
             for (int cy = 0; cy < chunkYCount; cy++)
@@ -539,6 +952,7 @@ public class LodPipeline
                 chunks[cy] = api.World.BlockAccessor.GetChunk(cx, cy, cz);
             }
 
+            captureInFlight[key] = 0;
             Worker.EnqueueCapture(new CaptureJob
             {
                 Cx = cx,
@@ -562,7 +976,7 @@ public class LodPipeline
 
     readonly System.Diagnostics.Stopwatch applyClock = new();
 
-    void ApplyCaptureResults()
+    int ApplyCaptureResults()
     {
         // Idle: one a tick, as always. Backed up: several, until the time budget is
         // spent. The clock is checked between applies, so the floor of one stands even
@@ -571,6 +985,7 @@ public class LodPipeline
         int budget = busy ? CaptureAppliesPerTickBusy : CaptureAppliesPerTick;
         int applied = 0;
         applyClock.Restart();
+        LastAppliedCount = 0;
 
         // Results waiting on a reload get first refusal, so a section that has come back
         // is merged before anything newer touches it.
@@ -581,15 +996,27 @@ public class LodPipeline
             deferredCaptures.RemoveAt(i);
             budget--;
             applied++;
-            if (applyClock.Elapsed.TotalMilliseconds > CaptureApplyBudgetMs) return;
+            if (applyClock.Elapsed.TotalMilliseconds > CaptureApplyBudgetMs)
+            {
+                LastAppliedCount = applied;
+                return CaptureBacklog();
+            }
         }
 
         while (budget-- > 0)
         {
             // Checked before the dequeue, so an over-budget result stays in the worker's
             // queue in order rather than being pulled out and parked ahead of older ones.
-            if (applied > 0 && applyClock.Elapsed.TotalMilliseconds > CaptureApplyBudgetMs) return;
-            if (!Worker.CaptureResults.TryDequeue(out CaptureResult? result)) return;
+            if (applied > 0 && applyClock.Elapsed.TotalMilliseconds > CaptureApplyBudgetMs)
+            {
+                LastAppliedCount = applied;
+                return CaptureBacklog();
+            }
+            if (!Worker.CaptureResults.TryDequeue(out CaptureResult? result))
+            {
+                LastAppliedCount = applied;
+                return CaptureBacklog();
+            }
             applied++;
 
             // An evicted section has to come back from disk before capture may merge into
@@ -619,13 +1046,37 @@ public class LodPipeline
 
             ApplyOneCaptureResult(result);
         }
+
+        LastAppliedCount = applied;
+        return CaptureBacklog();
+    }
+
+    int CaptureBacklog() => Worker.CaptureResults.Count + deferredCaptures.Count;
+
+    void DrainDiscardedCaptures()
+    {
+        while (Worker.DiscardedColumnKeys.TryDequeue(out long key))
+            captureInFlight.TryRemove(key, out _);
     }
 
     void ApplyOneCaptureResult(CaptureResult result)
     {
+        long columnKey = ((long)result.Cz << 32) | (uint)result.Cx;
+        captureInFlight.TryRemove(columnKey, out _);
         LodSection section = World.GetOrCreateSection(result.SectionKey);
+        CurrentCaptureProvisional = result.Provisional;
+        try
+        {
+            ApplyOneCaptureResultCore(result, section);
+        }
+        finally
+        {
+            CurrentCaptureProvisional = false;
+        }
+    }
 
-        var pidByBlockId = new Dictionary<int, int>();
+    void ApplyOneCaptureResultCore(CaptureResult result, LodSection section)
+    {
         ulong[]?[] batch = result.RunsByColumn;
 
         for (int col = 0; col < batch.Length; col++)
@@ -637,15 +1088,9 @@ public class LodPipeline
             for (int i = 0; i < runs.Length; i++)
             {
                 int blockId = LodSection.RunPaletteId(runs[i]); // raw block id from capture
-                if (!pidByBlockId.TryGetValue(blockId, out int pid))
-                {
-                    // One palette entry per block id per section, coloured from the first
-                    // run seen. For chiselled blocks that means one chisel's material mix
-                    // stands in for the whole section - coarse, but theirs, where the
-                    // centre probe answered with the placeholder texture for all of them.
-                    pid = RegisterPaletteEntry(section, result.SectionKey, blockId, col, runs[i]);
-                    pidByBlockId[blockId] = pid;
-                }
+                // Per-column palette registration: same block id at different columns
+                // keeps its own sampled colour instead of one manila fill for the cell.
+                int pid = RegisterPaletteEntry(section, result.SectionKey, blockId, col, runs[i]);
 
                 // Decorative ground cover never becomes terrain: a flower would
                 // otherwise be a solid, pale-grey 1-block cube.
@@ -695,7 +1140,25 @@ public class LodPipeline
         {
             World.ClassifySparseL0(result.SectionKey, section);
             World.MarkChanged(result.SectionKey);
+            ExploreBake.Queue(result.SectionKey, section, DeferLegacyHeal);
+            FinalizeL0DiscoverBake(result.SectionKey, section, result.Provisional);
         }
+    }
+
+    /// <summary>
+    /// Discover apply used to visit-bake and burst 48 mip props here. That stacked
+    /// 20-43 ms onto every new-land column. Capture already painted the section;
+    /// explore drain visit-bakes one ready section per idle tick. This only marks
+    /// the mesh dirty so the GPU remesh can pick it up.
+    /// </summary>
+    void FinalizeL0DiscoverBake(long sectionKey, LodSection section, bool provisional)
+    {
+        if (provisional || DeferLegacyHeal) return;
+        if (LodWorld.KeyLevel(sectionKey) != 0) return;
+        if (api.Side != EnumAppSide.Client || ExploreUntintedOf == null) return;
+        _ = section;
+
+        World.RequestGpuSwap(sectionKey);
     }
 
     /// <summary>
@@ -719,11 +1182,61 @@ public class LodPipeline
     {
         Block block = api.World.Blocks[blockId];
         (int x, int y, int z) = CaptureBlockPos(sectionKey, col, run);
-        (int color, byte tintSlot) = describePalette(blockId, x, y, z);
-        return section.FindOrAddPaletteEntry(blockId, color, LodBlockPolicy.FlagsFor(block), tintSlot);
+        (int color, byte tintSlot, bool baked) = describePalette(blockId, x, y, z);
+        byte flags = LodBlockPolicy.FlagsFor(block);
+        if (baked)
+        {
+            flags |= LodPaletteEntry.FlagBaked;
+            tintSlot = (byte)LodTintRegistry.SlotNone;
+            if (LodSeasonBake.ShouldFlagFrost(
+                    LodSurfaceMix.ProbeFrostW, block, LodSurfaceMix.ProbeTopPath ?? block.Code?.Path))
+                flags |= LodPaletteEntry.FlagFrost;
+        }
+        return section.FindOrAddPaletteEntry(blockId, color, flags, tintSlot);
     }
 
     // ---- Persistence ----
+
+    /// <summary>Coarse LOD parents still absorbing L0 visit captures.</summary>
+    public bool HasPendingLoginMip => World.MipDirty.Count > 0;
+
+    /// <summary>SQLite rows or storage-thread backlog not flushed yet.</summary>
+    public bool HasPendingLoginPersistence =>
+        World.SaveDirty.Count > 0 || (storageThread?.Backlog ?? 0) > 0;
+
+    /// <summary>Push baked L0 colours into parent mips so far LOD matches near.</summary>
+    public void DrainLoginMip(int budget = 48) =>
+        World.ProcessPropagation(budget, InvalidateGpuMesh);
+
+    /// <summary>Swap stale coarse meshes after L0 visit bake — keep GPU until upload.</summary>
+    internal void InvalidateMipAncestors(long key)
+    {
+        int level = LodWorld.KeyLevel(key);
+        long startKey = key;
+        for (int l = level; l < LodWorld.MaxLevel; l++)
+        {
+            key = LodWorld.ParentKey(key);
+            World.RequestGpuSwap(key);
+        }
+        // #region agent log
+        if (++debugMipDrop <= 16)
+        {
+            try
+            {
+                System.IO.File.AppendAllText(
+                    @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                    "{\"sessionId\":\"40cccb\",\"runId\":\"post-fix-walk\",\"hypothesisId\":\"H-S5\",\"location\":\"LodPipeline.InvalidateMipAncestors\",\"message\":\"drop-parent-chain\",\"data\":{\"swap\":true,\"fromLvl\":"
+                    + LodWorld.KeyLevel(startKey) + ",\"sx\":" + LodWorld.KeySx(startKey)
+                    + ",\"sz\":" + LodWorld.KeySz(startKey)
+                    + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+            }
+            catch { }
+        }
+        // #endregion
+    }
+
+    /// <summary>Queue dirty sections to the storage thread after visit sweep.</summary>
+    public void DrainLoginPersistence(int budget = 16) => SaveSomeDirtySections(budget);
 
     void SaveSomeDirtySections(int budget)
     {
@@ -783,6 +1296,8 @@ public class LodPipeline
 
         queuedColumns.Clear();
         pendingColumns.Clear();
+        captureInFlight.Clear();
+        HoldUnloadedCaptures = false;
         Remote.Clear();
         // Results for the world we are leaving must not be applied to the next one.
         // Both queues, or a result held back for a reload would cross worlds.

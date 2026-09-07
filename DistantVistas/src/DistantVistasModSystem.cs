@@ -1,5 +1,6 @@
-using Vintagestory.API.Client;
+﻿using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
 using Vintagestory.Client.NoObf;
@@ -57,6 +58,24 @@ public class DistantVistasConfig
     /// future toggle that can skip shipping or hot-swap.
     /// </summary>
     public bool PatchVanillaEdgeFade = true;
+    /// <summary>Potato FOV heightfield occlusion at draw-submit (L0/L1). Default on.</summary>
+    public bool FovOcclusion = true;
+
+    /// <summary>Samples along camera-to-tile XZ ray for FOV occlusion (4..16). Default 6 for turn cost.</summary>
+    public int FovOcclusionSamples = 6;
+
+    /// <summary>Height slack (blocks) so peaks/towers that clear a ridge still draw.</summary>
+    public int FovOcclusionPeekMargin = 32;
+
+    /// <summary>Fresh occlusion ray tests per frame (cached results free). Default 48.</summary>
+    public int FovOcclusionMaxTestsPerFrame = 48;
+
+    /// <summary>
+    /// Login visit sweep on join (overlay + teleports + season bake). ON by default —
+    /// skipped automatically when the visited canvas is complete within the 30-day window.
+    /// Set false in distantvistas.json for immediate 0.7.78-style play without overlay.
+    /// </summary>
+    public bool LoginVisitSweepEnabled = true;
 }
 
 /// <summary>
@@ -76,6 +95,7 @@ public class DistantVistasModSystem : ModSystem
     /// <summary>Block -> live tint slot; shared by capture, cache loads and the renderer.</summary>
     readonly LodTintRegistry tints = new();
     long tickListenerId;
+    SessionTelemetry? sessionTelemetry;
 
     readonly BlockPos paletteSamplePos = new(0, 0, 0);
     readonly BlockPos colorProbePos = new(0, 0, 0);
@@ -92,18 +112,58 @@ public class DistantVistasModSystem : ModSystem
 
     public override bool ShouldLoad(EnumAppSide forSide) => forSide == EnumAppSide.Client;
 
+    /// <summary>
+    /// After Farseer's default 0.1 so AssetsLoaded can patch region.vsh before they
+    /// compile, and StartClientSide can log the marker after that compile.
+    /// </summary>
+    public override double ExecuteOrder() => 0.6;
+
     /// <summary>Everything the config file holds, so a partial save cannot drop a setting.</summary>
     DistantVistasConfig config = new();
 
     /// <summary>Set when another LOD mod is drawing; we then stay out of its way.</summary>
     string? deferringTo;
 
+    /// <summary>Farseer is loaded and switched on: unvisited land is their silhouette.</summary>
+    bool farseerCompanion;
+
     /// <summary>
-    /// Optional server assist (DESIGN.md Â§10). Created even while deferring, because the
+    /// Optional server assist (DESIGN.md Ã‚Â§10). Created even while deferring, because the
     /// channel has to be registered before the handshake either way; it simply never
     /// greets, so it stays silent.
     /// </summary>
     LodAssistClient? assist;
+
+    LodLoginBakeOverlay? loginBakeOverlay;
+    LodLoginBakePulse? loginBakePulse;
+    LodLoginBake? loginBake;
+    // #region agent log
+    static int creamDiscoverLogs;
+    static int grayTexLogs;
+    static int grayRefreshLogs;
+    // #endregion
+    long? loginSweepDeferListenerId;
+    bool loginSweepDeferred;
+    bool joinAtlasResolved;
+
+    public override void AssetsLoaded(ICoreAPI api)
+    {
+        if (api.Side != EnumAppSide.Client) return;
+        if (api is ICoreClientAPI clientApi)
+            ClampJoinAtlasSize(clientApi);
+        if (!FarseerShaderOverlay.OverlayActive) return;
+        if (!api.ModLoader.IsModEnabled("farseer")) return;
+        if (FarseerShaderOverlay.ApplyBytes(api, Mod.Logger))
+        {
+            Mod.Logger.Notification("Farseer overlay bytes written. {0}",
+                FarseerShaderOverlay.Describe(api));
+        }
+        else
+        {
+            Mod.Logger.Warning("Farseer overlay did not apply. {0}",
+                FarseerShaderOverlay.Describe(api));
+        }
+    }
 
     public override void StartClientSide(ICoreClientAPI api)
     {
@@ -147,6 +207,7 @@ public class DistantVistasModSystem : ModSystem
             // is wired straight to the event here. Without it the matrix cannot drive
             // '.dvdefer off' from the state that command exists for.
             capi.Event.LevelFinalize += RegisterAutoCommand;
+            FinishFarseerOverlay();
             return;
         }
 
@@ -160,7 +221,9 @@ public class DistantVistasModSystem : ModSystem
         // Refreshes old stable colours as well as empty server colours. Client-side only:
         // this needs the texture atlas and topsoil textures; a server stores 0 on purpose.
         pipeline.RepairUncoloredPalette = RefreshStoredPalette;
-        bool farseerBehind = capi.ModLoader.IsModEnabled("farseer");
+        pipeline.HealLegacyPalette = HealLegacySection;
+        pipeline.ExplorePlantTintFallback = tints.PlantTintFallback;
+        pipeline.ExploreUntintedOf = UntintedForRebake;
         renderer = new LodTerrainRenderer(capi, pipeline.World, pipeline.Worker, tints)
         {
             AutoUnpause = Environment.GetEnvironmentVariable("VINTAGEHORIZONS_AUTOUNPAUSE") == "1",
@@ -170,8 +233,15 @@ public class DistantVistasModSystem : ModSystem
             SkyFadeStart = config.SkyFadeStart,
             PastViewHaze = config.PastViewHaze,
             OverdrawStart = config.OverdrawStart,
-            DrawAfterCompanion = farseerBehind,
+            DrawAfterCompanion = farseerCompanion,
         };
+        renderer.HeightOcclusion.Enabled = config.FovOcclusion;
+        renderer.HeightOcclusion.SampleCount = config.FovOcclusionSamples;
+        renderer.HeightOcclusion.PeekMarginBlocks = config.FovOcclusionPeekMargin;
+        renderer.HeightOcclusion.MaxTestsPerFrame = config.FovOcclusionMaxTestsPerFrame;
+        pipeline.InvalidateGpuMesh = renderer.InvalidateGpuMesh;
+        loginBakePulse = new LodLoginBakePulse();
+        loginBakeOverlay = new LodLoginBakeOverlay(capi);
         // Real holes (captured land with no mesh at any rung) are reported with
         // the state of the keys involved, so a screenshot of sky has a log line.
         renderer.SetHoleLogger(msg => Mod.Logger.Notification(msg));
@@ -181,10 +251,78 @@ public class DistantVistasModSystem : ModSystem
         capi.Event.LeaveWorld += OnLeaveWorld;
 
         tickListenerId = capi.Event.RegisterGameTickListener(OnGameTick, 50);
+        sessionTelemetry = new SessionTelemetry(capi);
 
         RegisterCommands();
 
+        FinishFarseerOverlay();
+        if (!FarseerShaderOverlay.OverlayActive)
+        {
+            Mod.Logger.Notification(
+                "Farseer overlay is off. We draw the hills. Their heightmaps are the far silhouettes.");
+        }
         Mod.Logger.Notification("DistantVistas {0} loaded (client-only)", Mod.Info.Version);
+        try
+        {
+            Mod.Logger.Notification(
+                "DistantVistas origin: {0} ({1})",
+                Mod.FileName ?? "(unnamed)",
+                Mod.SourcePath ?? "(unknown path)");
+        }
+        catch
+        {
+            // Diagnostic only.
+        }
+        // #region agent log
+        try
+        {
+            System.IO.File.AppendAllText(
+                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                "{\"sessionId\":\"40cccb\",\"runId\":\"dead-rejoin\",\"hypothesisId\":\"H-DEAD-REJOIN\",\"location\":\"DistantVistasModSystem.StartClientSide\",\"message\":\"mod-alive\",\"data\":{\"version\":\""
+                + (Mod.Info.Version ?? "")
+                + "\",\"file\":\"" + (Mod.FileName ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"")
+                + "\"},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+        }
+        catch { }
+        // #endregion
+        // #region agent log
+        try
+        {
+            IAsset? chunkVsh = capi.Assets.TryGet(new AssetLocation("game", "shaders/chunkopaque.vsh"));
+            string shaderText = chunkVsh?.ToText() ?? "";
+            bool patched = shaderText.IndexOf("Distant Vistas: disable vanilla", StringComparison.Ordinal) >= 0;
+            System.IO.File.AppendAllText(
+                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                "{\"sessionId\":\"40cccb\",\"hypothesisId\":\"H-FOG-2\",\"location\":\"DistantVistasModSystem.StartClientSide\",\"message\":\"chunk-shader-origin\",\"data\":{\"patched\":"
+                + (patched ? "true" : "false")
+                + ",\"hasAsset\":" + (chunkVsh != null ? "true" : "false")
+                + ",\"farseerOverlay\":" + (FarseerShaderOverlay.OverlayActive ? "true" : "false")
+                + ",\"version\":\"" + (Mod.Info.Version ?? "")
+                + "\"},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+        }
+        catch { }
+        // #endregion
+    }
+
+    /// <summary>
+    /// AssetsLoaded already wrote the bytes. Do not re-register Farseer's region
+    /// program. ReloadShader re-apply is FarseerOverlayEarlyHook (0.05).
+    /// </summary>
+    void FinishFarseerOverlay()
+    {
+        if (!FarseerShaderOverlay.OverlayActive) return;
+        if (!capi.ModLoader.IsModEnabled("farseer")) return;
+        FarseerShaderOverlay.ApplyBytes(capi, Mod.Logger);
+        if (FarseerShaderOverlay.MarkerPresent(capi))
+        {
+            Mod.Logger.Notification("Farseer overlay in place (no region re-register). {0}",
+                FarseerShaderOverlay.Describe(capi));
+        }
+        else
+        {
+            Mod.Logger.Warning("Farseer overlay marker MISSING after ApplyBytes. {0}",
+                FarseerShaderOverlay.Describe(capi));
+        }
     }
 
     /// <summary>
@@ -247,6 +385,7 @@ public class DistantVistasModSystem : ModSystem
     {
         (string? drawing, string[] switchedOff, string[] companions) =
             OtherLodMods.Inspect(capi.ModLoader.IsModEnabled, ReadOtherModSwitch);
+        farseerCompanion = false;
 
         if (switchedOff.Length > 0)
         {
@@ -257,9 +396,11 @@ public class DistantVistasModSystem : ModSystem
 
         if (companions.Length > 0)
         {
+            farseerCompanion = companions.Any(id =>
+                string.Equals(id, "farseer", StringComparison.OrdinalIgnoreCase));
             Mod.Logger.Notification(
-                "Drawing with background LOD (Farseer stays behind; Distant Vistas takes "
-                + "any tile it has): {0}", string.Join(", ", companions));
+                "Drawing our land. Companion LOD sits behind for far silhouettes: {0}",
+                string.Join(", ", companions));
         }
 
         if (drawing != null && config.IgnoreOtherLodMods)
@@ -293,25 +434,134 @@ public class DistantVistasModSystem : ModSystem
 
     void OnChunkDirty(Vec3i chunkCoord, IWorldChunk chunk, EnumChunkDirtyReason reason)
     {
+        try
+        {
+            EntityPos pos = capi.World.Player.Entity.Pos;
+            int cs = GlobalConstants.ChunkSize;
+            pipeline.NotePlayerColumn(
+                (int)Math.Floor(pos.X / cs),
+                (int)Math.Floor(pos.Z / cs));
+        }
+        catch
+        {
+        }
+        // NeedsCapture only. Force-recapture of FlagBaked land remeshed the
+        // same L0 on every quadrant while walking and punched holes.
         pipeline.QueueColumn(chunkCoord.X, chunkCoord.Z);
     }
 
-    void OnGameTick(float dt)
+    void PumpLoginBakeWhileSweeping()
     {
-        if (!pipeline.Active) return;
-
-        ReportFillIn();
         PumpServerAssist();
         PumpLocalOffers();
         pipeline.Tick();
+    }
+
+    int playTickCount;
+
+    void OnGameTick(float dt)
+    {
+        if (renderer.LoginBakeBlocked) return;
+        if (!pipeline.Active) return;
+
+        if (loginBake?.Active == true)
+        {
+            loginBakePulse?.Pulse(dt);
+            return;
+        }
+
+        playTickCount++;
+        long playTickEnter = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        bool logPlay = playTickCount <= 12 || playTickCount % 20 == 0;
+        int chunkSize = GlobalConstants.ChunkSize;
+        int sweepRadius = Math.Max(4, (int)Math.Ceiling(renderer.LiveViewDistance / chunkSize) + 2);
+        int lastApproved = 0;
+        try { lastApproved = capi.World.Player.WorldData.LastApprovedViewDistance; } catch { }
+        // #region agent log
+        if (logPlay)
+        {
+            AgentPlayTickLog("play-tick-enter", playTickCount, playTickEnter,
+                "\"suppressDrain\":" + (LodJoinQuiet.SuppressVaoDrain ? "true" : "false")
+                + ",\"liveVd\":" + renderer.LiveViewDistance.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"sweepR\":" + sweepRadius
+                + ",\"lastApproved\":" + lastApproved
+                + ",\"mipDirty\":" + pipeline.World.MipDirty.Count
+                + ",\"renderDirty\":" + pipeline.World.RenderDirty.Count
+                + ",\"pending\":" + pipeline.PendingColumns
+                + ",\"capRes\":" + pipeline.Worker.CaptureResults.Count
+                + ",\"offers\":" + (localOffers != null ? "true" : "false")
+                + ",\"freeze\":" + (pipeline.FreezeCapture ? "true" : "false"));
+        }
+        // #endregion
+
+        sessionTelemetry?.Tick(pipeline, renderer, deferringTo, Mod.Info.Version);
+        ReportFillIn();
+        PumpServerAssist();
+        // #region agent log
+        if (logPlay) AgentPlayTickLog("after-assist", playTickCount, playTickEnter, "\"ok\":true");
+        // #endregion
+        PumpLocalOffers();
+        // #region agent log
+        if (logPlay) AgentPlayTickLog("after-offers", playTickCount, playTickEnter, "\"ok\":true");
+        // #endregion
+        pipeline.DebugPlayTick = playTickCount;
+        pipeline.Tick();
+        pipeline.DebugPlayTick = 0;
+        long afterPipelineMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - playTickEnter;
+        // #region agent log
+        if (logPlay || afterPipelineMs > 80)
+        {
+            AgentPlayTickLog("after-pipeline", playTickCount, playTickEnter,
+                "\"mipDirty\":" + pipeline.World.MipDirty.Count
+                + ",\"renderDirty\":" + pipeline.World.RenderDirty.Count
+                + ",\"pending\":" + pipeline.PendingColumns
+                + ",\"capRes\":" + pipeline.Worker.CaptureResults.Count
+                + ",\"lastApproved\":" + lastApproved
+                + ",\"freeze\":" + (pipeline.FreezeCapture ? "true" : "false")
+                + ",\"spike\":" + (afterPipelineMs > 80 ? "true" : "false")
+                + ",\"explorePending\":" + pipeline.ExploreBake.PendingCount
+                + ",\"drainSpins\":" + pipeline.ExploreBake.LastDrainSpins
+                + ",\"applied\":" + pipeline.LastAppliedCount
+                + ",\"applyMs\":" + pipeline.LastApplyMs.ToString("0.0", System.Globalization.CultureInfo.InvariantCulture));
+        }
+        // #endregion
 
         var pos = capi.World.Player.Entity.Pos;
-        int chunkSize = GlobalConstants.ChunkSize;
         int sweepCx = (int)Math.Floor(pos.X / chunkSize);
         int sweepCz = (int)Math.Floor(pos.Z / chunkSize);
-        int sweepRadius = Math.Max(4, (int)Math.Ceiling(renderer.LiveViewDistance / chunkSize) + 2);
+        pipeline.NotePlayerColumn(sweepCx, sweepCz);
         pipeline.SweepLoadedColumns(sweepCx, sweepCz, sweepRadius);
-        if (pipeline.MaybeEvictAround(pos.X, pos.Z))
+        QueueExploreBakeNearPlayer();
+        // #region agent log
+        if (logPlay) AgentPlayTickLog("after-sweep", playTickCount, playTickEnter,
+            "\"ok\":true,\"frozen\":" + (pipeline.FreezeCapture ? "true" : "false"));
+        if (logPlay || afterPipelineMs > 80)
+        {
+            try
+            {
+                System.IO.File.AppendAllText(
+                    @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                    "{\"sessionId\":\"40cccb\",\"runId\":\"post-fix-3\",\"hypothesisId\":\"H-P-discover\",\"location\":\"DistantVistasModSystem.OnGameTick\",\"message\":\"after-discover\",\"data\":{\"n\":"
+                    + playTickCount + ",\"discoverOnly\":" + (pipeline.DiscoverOnly ? "true" : "false")
+                    + ",\"pending\":" + pipeline.PendingColumns
+                    + ",\"capRes\":" + pipeline.Worker.CaptureResults.Count
+                    + ",\"swept\":" + pipeline.ColumnsSwept
+                    + ",\"explorePending\":" + pipeline.ExploreBake.PendingCount
+                    + ",\"drainSpins\":" + pipeline.ExploreBake.LastDrainSpins
+                    + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+            }
+            catch { }
+        }
+        // #endregion
+        // #region agent log
+        if (logPlay)
+        {
+            AgentPlayTickLog("play-tick-exit", playTickCount, playTickEnter,
+                "\"ms\":" + (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - playTickEnter));
+        }
+        // #endregion
+        // Cold RAM section spill only under mesh pressure — never distance-alone.
+        if (renderer.MeshPressureActive && pipeline.MaybeEvictAround(pos.X, pos.Z))
         {
             LodWorld world = pipeline.World;
             Mod.Logger.Notification("Evict sweep at {0},{1}: checked {2}, pinned {3}, cold {4}, total evicted {5}",
@@ -319,6 +569,19 @@ public class DistantVistasModSystem : ModSystem
                 world.LastSweepCold, world.EvictedSectionsTotal);
         }
     }
+
+    // #region agent log
+    static void AgentPlayTickLog(string message, int n, long enterMs, string extra)
+    {
+        try
+        {
+            System.IO.File.AppendAllText(
+                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                "{\"sessionId\":\"40cccb\",\"runId\":\"post-fix-3\",\"hypothesisId\":\"H-P-freeze\",\"location\":\"DistantVistasModSystem.OnGameTick\",\"message\":\"" + message + "\",\"data\":{\"n\":" + n + ",\"ms\":" + (DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - enterMs) + "," + extra + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+        }
+        catch { }
+    }
+    // #endregion
 
     /// <summary>
     /// Adopt whatever the server sent, then ask for what the render path now wants.
@@ -486,7 +749,7 @@ public class DistantVistasModSystem : ModSystem
 
     /// <summary>
     /// Fill in palette colours for a section captured by a server, which had no texture
-    /// atlas and stored 0 for every one of them (DESIGN.md Â§10.4). Block ids are already
+    /// atlas and stored 0 for every one of them (DESIGN.md Ã‚Â§10.4). Block ids are already
     /// resolved from codes by the deserializer, so this only needs the atlas.
     /// </summary>
     void RecolorForeignSection(LodSection section)
@@ -534,20 +797,55 @@ public class DistantVistasModSystem : ModSystem
             return block.EntityClass == null ? StableColorOf(block) : null;
         });
 
-        return refreshed + LodPaletteRepair.Fill(section, AtlasColorOf);
+        int filled = LodPaletteRepair.Fill(section, AtlasColorOf);
+        // #region agent log
+        if (grayRefreshLogs < 4)
+        {
+            int bakedLeaf = 0, liveLeaf = 0, grayBaked = 0, greenBaked = 0;
+            for (int i = 0; i < section.Palette.Count; i++)
+            {
+                LodPaletteEntry e = section.Palette[i];
+                if (e.BlockId <= 0 || e.BlockId >= capi.World.Blocks.Count) continue;
+                string? p = capi.World.Blocks[e.BlockId].Code?.Path;
+                if (p == null || !p.Contains("leaves", StringComparison.Ordinal)) continue;
+                bool baked = (e.Flags & LodPaletteEntry.FlagBaked) != 0;
+                if (baked) bakedLeaf++; else liveLeaf++;
+                LodPaletteRepair.Channels(e.Color, out int r, out int g, out _, out _, out int chroma);
+                if (baked && chroma <= 40 && g <= r + 8) grayBaked++;
+                if (baked && g >= r + 12) greenBaked++;
+            }
+            if (bakedLeaf + liveLeaf > 0)
+            {
+                grayRefreshLogs++;
+                try
+                {
+                    System.IO.File.AppendAllText(
+                        @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                        "{\"sessionId\":\"40cccb\",\"runId\":\"gray-1\",\"hypothesisId\":\"H-GRAY-2\",\"location\":\"DistantVistasModSystem.RefreshStoredPalette\",\"message\":\"leaf-refresh\",\"data\":{\"refreshed\":"
+                        + refreshed + ",\"filled\":" + filled + ",\"bakedLeaf\":" + bakedLeaf
+                        + ",\"liveLeaf\":" + liveLeaf + ",\"grayBaked\":" + grayBaked
+                        + ",\"greenBaked\":" + greenBaked
+                        + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+                }
+                catch { }
+            }
+        }
+        // #endregion
+        return refreshed + filled;
     }
 
+    int HealLegacySection(LodSection section, long sectionKey) =>
+        LodSeasonBake.UpgradeLegacyEntries(
+            capi, section, sectionKey, tints.PlantTintFallback, UntintedForRebake);
+
     /// <summary>
-    /// The client half of palette registration: the untinted average colour from the
-    /// texture atlas, plus which live tint applies. Stored untinted on purpose, so the
-    /// shader can follow the calendar instead of freezing the season it was captured in.
-    /// A server has no atlas and cannot answer this at all (DESIGN.md Â§10.4).
-    ///
-    /// The position is used ONLY for blocks whose colour depends on a block entity
-    /// (chisels). Everything else is a stable atlas mean so the near LOD ring does not
-    /// tile random grass pixels against the foreground.
+    /// Client palette registration for newly captured blocks. Explore/discover with
+    /// resident map chunks uses the same live <c>GetColor</c> visit bake as login
+    /// sweep (<see cref="LodSeasonBake.BakeSectionFromVisit"/>) — FlagBaked + SlotNone
+    /// so far LOD keeps the current season's paint after leave. Provisional peeks and
+    /// the login sweep defer to their own paths. Server has no atlas (DESIGN.md §10.4).
     /// </summary>
-    (int Color, byte TintSlot) DescribePalette(int blockId, int blockX, int blockY, int blockZ)
+    (int Color, byte TintSlot, bool Baked) DescribePalette(int blockId, int blockX, int blockY, int blockZ)
     {
         Block block = capi.World.Blocks[blockId];
 
@@ -571,11 +869,97 @@ public class DistantVistasModSystem : ModSystem
 
         color = LodPaletteRepair.KeepCapturedColor(
             color, terrainFallbackColor, LodBlockPolicy.IsClimateUntinted(block));
+
+        if (TryDiscoverBake(block, blockX, blockY, blockZ, color, out int bakedColor))
+            return (bakedColor, (byte)LodTintRegistry.SlotNone, true);
+
         byte slot = LodPaletteRepair.IsRockLikeAlbedo(color) || LodPaletteRepair.IsSnowOrIceAlbedo(color)
             ? (byte)LodTintRegistry.SlotNone
             : (byte)TintSlotOf(block);
-        return (color, slot);
+        return (color, slot, false);
     }
+
+    /// <summary>
+    /// Per-column live visit bake at capture registration — same <c>GetColor</c> as
+    /// <see cref="LodSeasonBake.SampleVanillaColor"/> / login sweep. Only when the map
+    /// chunk is resident; otherwise leave live tint for <see cref="LodExploreBake"/> to
+    /// visit-bake when chunks load. No <c>BakePaletteColor</c> shader repro on discover:
+    /// that path is legacy disk heal only, not a substitute for seasonal live paint.
+    /// </summary>
+    bool TryDiscoverBake(Block block, int x, int y, int z, int untintedColor, out int bakedColor)
+    {
+        bakedColor = 0;
+        if (loginBake?.Active == true) return false;
+        if (pipeline.CurrentCaptureProvisional) return false;
+        if (!IsCaptureColumnMapLoaded(x, z)) return false;
+
+        if (!LodSeasonBake.CanVisitBake(block, untintedColor, tints.PlantTintFallback)
+            && !LodSeasonBake.ColumnSurfaceIsSnowy(block)
+            && !LodPaletteRepair.IsSnowOrIceAlbedo(untintedColor))
+            return false;
+
+        IBlockAccessor acc = capi.World.BlockAccessor;
+        int startY = y;
+        if (LodSeasonBake.TryResolveLiveSurface(acc, x, y, z, acc.MapSizeY, out Block? live, out int liveY)
+            && live != null)
+            startY = liveY;
+
+        bakedColor = LodSurfaceMix.SampleColumnStack(
+            capi, acc, x, startY, z, out bool water, out _);
+        if (bakedColor == 0)
+            bakedColor = LodSeasonBake.SampleVanillaColor(capi, block, x, y, z);
+        if (bakedColor == 0) return false;
+
+        int beforeKeep = bakedColor;
+        bakedColor = LodPaletteRepair.KeepCapturedColor(
+            bakedColor, untintedColor,
+            LodSeasonBake.KeepVisitSnowColor(block, water));
+        // #region agent log
+        if (creamDiscoverLogs < 8)
+        {
+            creamDiscoverLogs++;
+            try
+            {
+                LodSurfaceMix.Unpack(LodSurfaceMix.ProbeTopRgb, out int tr, out int tg, out int tb);
+                LodSurfaceMix.Unpack(LodSurfaceMix.ProbeMixRgb, out int mr, out int mg, out int mb);
+                LodSurfaceMix.Unpack(bakedColor, out int fr, out int fg, out int fb);
+                System.IO.File.AppendAllText(
+                    @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                    "{\"sessionId\":\"40cccb\",\"runId\":\"cream-1\",\"hypothesisId\":\"H-WHITE-1\",\"location\":\"DistantVistasModSystem.TryDiscoverBake\",\"message\":\"discover-stack\",\"data\":{\"path\":\""
+                    + (LodSurfaceMix.ProbeTopPath ?? "")
+                    + "\",\"kind\":\"" + LodSurfaceMix.ProbeTopKind
+                    + "\",\"kindSnow\":" + (LodSurfaceMix.ProbeTopKind == LodSurfaceMix.Kind.Snow).ToString().ToLowerInvariant()
+                    + ",\"columnSnowy\":" + LodSeasonBake.ColumnSurfaceIsSnowy(block).ToString().ToLowerInvariant()
+                    + ",\"climateUntinted\":" + LodBlockPolicy.IsClimateUntinted(block).ToString().ToLowerInvariant()
+                    + ",\"blendToward\":false"
+                    + ",\"visit\":\"walk\""
+                    + ",\"topR\":" + tr + ",\"topG\":" + tg + ",\"topB\":" + tb
+                    + ",\"mixR\":" + mr + ",\"mixG\":" + mg + ",\"mixB\":" + mb
+                    + ",\"finalR\":" + fr + ",\"finalG\":" + fg + ",\"finalB\":" + fb
+                    + ",\"texGroundRgb\":" + LodSurfaceMix.ProbeTexGroundRgb
+                    + ",\"texPlantRgb\":" + LodSurfaceMix.ProbeTexPlantRgb
+                    + ",\"seasonRel\":" + LodSurfaceMix.ProbeSeasonRel.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + ",\"winter\":" + LodSurfaceMix.ProbeWinter.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                    + ",\"snowLayers\":" + LodSurfaceMix.ProbeSnowLayers
+                    + ",\"snowL\":" + LodSurfaceMix.ProbeSnowLayers
+                    + ",\"groundL\":" + LodSurfaceMix.ProbeGroundLayers
+                    + ",\"plantL\":" + LodSurfaceMix.ProbePlantLayers
+                    + ",\"skipped\":" + LodSurfaceMix.ProbeSkipped
+                    + ",\"keepChanged\":" + (beforeKeep != bakedColor).ToString().ToLowerInvariant()
+                    + ",\"snowAlbedo\":" + LodPaletteRepair.IsSnowOrIceAlbedo(bakedColor).ToString().ToLowerInvariant()
+                    + ",\"brightCap\":" + LodPaletteRepair.IsBrightCap(bakedColor).ToString().ToLowerInvariant()
+                    + ",\"missingW\":" + LodPaletteRepair.IsMissingTextureWhite(bakedColor).ToString().ToLowerInvariant()
+                    + ",\"water\":" + water.ToString().ToLowerInvariant()
+                    + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+            }
+            catch { }
+        }
+        // #endregion
+        return bakedColor != 0;
+    }
+
+    bool IsCaptureColumnMapLoaded(int x, int z) =>
+        LodSeasonBake.IsColumnMapLoaded(capi.World.BlockAccessor, x, z);
 
     /// <summary>
     /// One colour per block id so neighbouring sections agree. GetColorWithoutTint on
@@ -586,7 +970,7 @@ public class DistantVistasModSystem : ModSystem
     {
         if (stableColorByBlockId.TryGetValue(block.BlockId, out int cached)) return cached;
 
-        if (TryTopSoilColor(block, out int composite, out _))
+        if (TryTopSoilColor(block, out int composite, out _, legacyGreenerBias: true))
         {
             stableColorByBlockId[block.BlockId] = composite;
             return composite;
@@ -644,7 +1028,8 @@ public class DistantVistasModSystem : ModSystem
     /// LOD has one vertex colour, so store that composite and dilute the live tint by
     /// the dirt share that must stay untinted (winter brown grass must not brown the dirt).
     /// </summary>
-    bool TryTopSoilColor(Block block, out int composite, out LodUntintedShare share)
+    bool TryTopSoilColor(Block block, out int composite, out LodUntintedShare share,
+        bool legacyGreenerBias = false)
     {
         composite = 0;
         share = LodUntintedShare.None;
@@ -661,7 +1046,9 @@ public class DistantVistasModSystem : ModSystem
         TextureMean grass = MeanOf(overlay, overlayId);
         if (grass.Coverage <= 0f) return false;
 
-        float a = grass.Coverage;
+        float a = legacyGreenerBias
+            ? LodTopSoil.GreenerCoverage(grass.Coverage)
+            : grass.Coverage;
         composite = unchecked((int)0xFF000000)
             | Channel(soil.B, grass.B, a) << 16 | Channel(soil.G, grass.G, a) << 8 | Channel(soil.R, grass.R, a);
         share = new LodUntintedShare(
@@ -863,8 +1250,31 @@ public class DistantVistasModSystem : ModSystem
                 block.Code);
         }
         int pick = found != 0 ? found : fallback;
-        return LodPaletteRepair.KeepCapturedColor(
+        pick = LodPaletteRepair.KeepCapturedColor(
             pick, fallback, LodBlockPolicy.IsClimateUntinted(block));
+        // #region agent log
+        if (grayTexLogs < 8)
+        {
+            grayTexLogs++;
+            try
+            {
+                string path = block.Code?.Path ?? "";
+                LodPaletteRepair.Channels(pick, out int r, out int g, out int b, out int luma, out int chroma);
+                System.IO.File.AppendAllText(
+                    @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                    "{\"sessionId\":\"40cccb\",\"runId\":\"gray-1\",\"hypothesisId\":\"H-GRAY-1\",\"location\":\"DistantVistasModSystem.ColorFromAnyTexture\",\"message\":\"missing-tex\",\"data\":{\"path\":\""
+                    + path.Replace("\\", "/").Replace("\"", "'")
+                    + "\",\"found\":" + found + ",\"fallback\":" + fallback + ",\"pick\":" + pick
+                    + ",\"r\":" + r + ",\"g\":" + g + ",\"b\":" + b
+                    + ",\"luma\":" + luma + ",\"chroma\":" + chroma
+                    + ",\"usedFallback\":" + (found == 0 ? "true" : "false")
+                    + ",\"isLeaf\":" + (path.Contains("leaves", StringComparison.Ordinal) ? "true" : "false")
+                    + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+            }
+            catch { }
+        }
+        // #endregion
+        return pick;
     }
 
     void ResolveTerrainFallbackColor()
@@ -927,17 +1337,80 @@ public class DistantVistasModSystem : ModSystem
         }
     }
 
-    void OnLevelFinalize()
+    bool LoginVisitSweepEnabled() =>
+        config.LoginVisitSweepEnabled
+        || Environment.GetEnvironmentVariable("VINTAGEHORIZONS_LOGIN_SWEEP") == "1";
+
+    void DeferLoginVisitSweep()
     {
-        ResolvePlantTintFallback();
-        unknownTextureColor = capi.BlockTextureAtlas.UnknownTexturePosition.AvgColor;
-        ResolveTerrainFallbackColor();
+        if (loginSweepDeferred) return;
+
+        loginSweepDeferred = true;
+        renderer.LoginBakeBlocked = true;
         Mod.Logger.Notification(
-            "Missing-texture colour is {0:X8}{1}; LOD terrain fallback is {2:X8} (never paints near-white missing tex)",
-            unknownTextureColor,
-            unknownTextureColor == 0 ? " (zero: exact-match salvage disabled)" : "",
-            terrainFallbackColor);
-        renderer.ApplyZFar();
+            "[DistantVistas] Login visit sweep deferred — waiting for a safe present (and character creation if it is open).");
+        if (loginSweepDeferListenerId == null)
+            loginSweepDeferListenerId = capi.Event.RegisterGameTickListener(OnLoginSweepDeferTick, 250);
+    }
+
+    void OnLoginSweepDeferTick(float dt)
+    {
+        if (!loginSweepDeferred) return;
+        if (LodLoginBakeCharacterWait.IsPending(capi)) return;
+
+        try
+        {
+            renderer.EnsureJoinRenderer();
+            EnsureJoinPipelineOpen();
+            EnsureJoinAtlasColors();
+
+            if (!LoginVisitSweepEnabled())
+            {
+                StopLoginSweepDeferListener();
+                renderer.LoginBakeComplete = true;
+                renderer.LoginBakeBlocked = false;
+                try { LodLoginBakeViewBoost.RecoverPlayerViewIfNeeded(capi); } catch { }
+                try { LodLoginBakeAudioMute.ForceUnmuteIfSilent(capi); } catch { }
+                Mod.Logger.Notification(
+                    "[DistantVistas] Login visit sweep disabled in config — entering play without overlay.");
+                return;
+            }
+
+            StopLoginSweepDeferListener();
+            StartLoginVisitSweepIfNeeded();
+        }
+        catch (Exception ex)
+        {
+            try { renderer.EnsureJoinRenderer(); } catch { /* play LOD still needs a program */ }
+            try { EnsureJoinPipelineOpen(); } catch { /* play LOD still needs a cache; sweep already failed */ }
+            StopLoginSweepDeferListener();
+            renderer.LoginBakeComplete = true;
+            renderer.LoginBakeBlocked = false;
+            try { LodLoginBakeAudioMute.ForceUnmuteIfSilent(capi); } catch { }
+            Mod.Logger.Error(
+                "[DistantVistas] Login visit sweep setup failed ({0}) — entering play without overlay.",
+                ex);
+        }
+    }
+
+    void StopLoginSweepDeferListener()
+    {
+        loginSweepDeferred = false;
+        if (loginSweepDeferListenerId == null) return;
+
+        capi.Event.UnregisterGameTickListener(loginSweepDeferListenerId.Value);
+        loginSweepDeferListenerId = null;
+    }
+
+    void CancelLoginSweepDefer()
+    {
+        StopLoginSweepDeferListener();
+    }
+
+    void EnsureJoinPipelineOpen()
+    {
+        if (pipeline.Active) return;
+
         pipeline.Open("ModData/distantvistas");
         joinClock.Restart();
         nextMilestone = 0;
@@ -946,19 +1419,190 @@ public class DistantVistasModSystem : ModSystem
         // in a sibling cache. Nothing to open on a dedicated server, where the same
         // sections arrive over the network instead.
         if (pipeline.DbPath is string dbPath)
-        {
             localOffers = LodLocalOfferSource.TryOpen(dbPath, Mod.Logger);
+    }
+
+    void EnsureJoinAtlasColors()
+    {
+        if (joinAtlasResolved) return;
+
+        unknownTextureColor = capi.BlockTextureAtlas.UnknownTexturePosition.AvgColor;
+        ResolveTerrainFallbackColor();
+        joinAtlasResolved = true;
+        Mod.Logger.Notification(
+            "Missing-texture colour is {0:X8}{1}; LOD terrain fallback is {2:X8} (never paints near-white missing tex)",
+            unknownTextureColor,
+            unknownTextureColor == 0 ? " (zero: exact-match salvage disabled)" : "",
+            terrainFallbackColor);
+        // #region agent log
+        try
+        {
+            LodPaletteRepair.Channels(terrainFallbackColor, out int fr, out int fg, out int fb, out int fLuma, out int fChroma);
+            LodPaletteRepair.Channels(unknownTextureColor, out int ur, out int ug, out int ub, out int uLuma, out _);
+            System.IO.File.AppendAllText(
+                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                "{\"sessionId\":\"40cccb\",\"runId\":\"gray-1\",\"hypothesisId\":\"H-GRAY-1\",\"location\":\"DistantVistasModSystem.EnsureJoinAtlasColors\",\"message\":\"terrain-fallback\",\"data\":{\"fallback\":"
+                + terrainFallbackColor + ",\"fr\":" + fr + ",\"fg\":" + fg + ",\"fb\":" + fb
+                + ",\"fLuma\":" + fLuma + ",\"fChroma\":" + fChroma
+                + ",\"unknown\":" + unknownTextureColor + ",\"ur\":" + ur + ",\"ug\":" + ug
+                + ",\"ub\":" + ub + ",\"uLuma\":" + uLuma
+                + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+        }
+        catch { }
+        // #endregion
+    }
+
+    /// <summary>
+    /// TrueScale 128 + client maxTextureAtlas 16384 makes one 16k atlas per
+    /// class. StageB GenerateMipmap then AVs in GL.BindTexture (coreclr
+    /// 0xc0000005, no CrashReporter). Size is baked in TextureAtlasManager
+    /// ctor before AssetsLoaded; CreateNewAtlas reads that Size after we
+    /// return, so overwrite the live managers here. 8192 still fits 128px tiles.
+    /// StageB GenerateMipmap on the worker thread still AVs at 8192 on this GPU;
+    /// vsvaogc 1.1.8 skips BuildMipMaps off the GL thread.
+    /// </summary>
+    const int SafeJoinAtlasEdge = 8192;
+
+    void ClampJoinAtlasSize(ICoreClientAPI clientApi)
+    {
+        int oldW = clientApi.Settings.Int["maxTextureAtlasWidth"];
+        int oldH = clientApi.Settings.Int["maxTextureAtlasHeight"];
+        int newW = oldW > SafeJoinAtlasEdge ? SafeJoinAtlasEdge : oldW;
+        int newH = oldH > SafeJoinAtlasEdge ? SafeJoinAtlasEdge : oldH;
+        if (newW != oldW)
+            clientApi.Settings.Int["maxTextureAtlasWidth"] = newW;
+        if (newH != oldH)
+            clientApi.Settings.Int["maxTextureAtlasHeight"] = newH;
+
+        Size2i size = new(newW, newH);
+        SetAtlasSize(clientApi.BlockTextureAtlas, size);
+        SetAtlasSize(clientApi.ItemTextureAtlas, size);
+        SetAtlasSize(clientApi.EntityTextureAtlas, size);
+
+        if (oldW != newW || oldH != newH)
+        {
+            clientApi.Logger.Notification(
+                "[DistantVistas] Atlas cap {0}x{1} -> {2}x{3} (16k mipmaps AV on this GPU).",
+                oldW, oldH, newW, newH);
+        }
+    }
+
+    static void SetAtlasSize(ITextureAtlasAPI? atlas, Size2i size)
+    {
+        if (atlas is TextureAtlasManager mgr)
+            mgr.Size = size;
+    }
+
+    void AllowLodDraws() => renderer.LoginBakeBlocked = false;
+
+    /// <summary>
+    /// High Clouds / vanilla cloudmap compile during LevelFinalize leaves an FBO
+    /// bound. Character-create's first present often skips 3D (no rebind of
+    /// Primary) and glfwSwapBuffers then errors: GL_BACK is missing on an FBO.
+    /// Null is the window framebuffer. Not the GUI ortho path, not a framebuffer clear.
+    /// </summary>
+    void RestorePresentFramebuffer()
+    {
+        try
+        {
+            capi.Render.CurrentFrameBuffer = null;
+            Mod.Logger.Notification(
+                "[DistantVistas] Default framebuffer restored after level finalize.");
+        }
+        catch (Exception ex)
+        {
+            Mod.Logger.Warning(
+                "[DistantVistas] Could not restore default framebuffer after level finalize ({0}).",
+                ex.Message);
+        }
+    }
+
+    void StartLoginVisitSweepIfNeeded()
+    {
+        renderer.EnsureJoinRenderer();
+        EnsureJoinPipelineOpen();
+        EnsureJoinAtlasColors();
+
+        LodLoginSweepGate.Result sweepGate = LodLoginSweepGate.Decide(
+            capi, pipeline.World, pipeline, capi.World.Blocks,
+            tints.PlantTintFallback, UntintedForRebake);
+
+        if (!sweepGate.RunSweep)
+        {
+            renderer.LoginBakeComplete = true;
+            AllowLodDraws();
+            try { LodLoginBakeViewBoost.RecoverPlayerViewIfNeeded(capi); } catch { }
+            try { LodLoginBakeAudioMute.ForceUnmuteIfSilent(capi); } catch { }
+            // #region agent log
+            try
+            {
+                System.IO.File.AppendAllText(
+                    @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                    "{\"sessionId\":\"40cccb\",\"runId\":\"post-fix\",\"hypothesisId\":\"H-G-SKIP-MESH\",\"location\":\"DistantVistasModSystem.StartLoginVisitSweepIfNeeded\",\"message\":\"skip-no-rebake\",\"data\":{\"reason\":\""
+                    + (sweepGate.Reason ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"")
+                    + "\",\"cachedSections\":" + pipeline.CachedSectionsLoaded
+                    + ",\"meshes\":" + renderer.MeshCount
+                    + ",\"complete\":true"
+                    + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+            }
+            catch { }
+            // #endregion
+            Mod.Logger.Notification(
+                "[DistantVistas] Login visit sweep skipped — {0}. Entering play ({1} sections in cache).",
+                sweepGate.Reason, pipeline.CachedSectionsLoaded);
+            return;
         }
 
-        // Last, and after the pipeline is live. An exception in a LevelFinalize handler
-        // skips everything the handler has left to do, so an optional extra must not sit
-        // upstream of the mod's actual job -- it did, and it broke exactly the
-        // vanilla-server case it exists to stay out of the way of.
-        assist?.Greet();
+        try { LodLoginBakeViewBoost.RecoverPlayerViewIfNeeded(capi); } catch { }
+
+        loginBakeOverlay!.Show();
+        loginBake = new LodLoginBake(
+            capi, pipeline, renderer, loginBakeOverlay!,
+            tints.PlantTintFallback, UntintedForRebake);
+        loginBakePulse!.Bind(loginBake, PumpLoginBakeWhileSweeping);
+        loginBake.Begin();
+        capi.Event.RegisterCallback(_ => loginBakePulse.Pulse(0.05f), 0);
 
         Mod.Logger.Notification(
-            "Level finalized. LOD capture active (render distance: unlimited, {0} sections from cache{1}).",
-            pipeline.CachedSectionsLoaded, renderer.AutoUnpause ? ", auto-unpause on" : "");
+            "[DistantVistas] Login visit sweep starting ({0} sections in cache). Reason: {1}",
+            pipeline.CachedSectionsLoaded, sweepGate.Reason);
+    }
+
+    void OnLevelFinalize()
+    {
+        ResolvePlantTintFallback();
+
+        // Last among LevelFinalize extras. An exception here skips everything the
+        // handler has left to do, so an optional extra must not sit upstream of the
+        // mod's actual job -- it did, and it broke exactly the vanilla-server case
+        // it exists to stay out of the way of. The LOD cache opens later, after
+        // character UI, from OnLoginSweepDeferTick.
+        assist?.Greet();
+
+        renderer.LoginBakeBlocked = true;
+        try
+        {
+            if (!LoginVisitSweepEnabled())
+            {
+                renderer.LoginBakeComplete = true;
+                Mod.Logger.Notification(
+                    "[DistantVistas] Login visit sweep disabled in config — delaying play GL until after the first present.");
+            }
+
+            DeferLoginVisitSweep();
+        }
+        catch (Exception ex)
+        {
+            Mod.Logger.Error(
+                "[DistantVistas] Login visit sweep setup failed ({0}) — delaying play GL until after the first present.",
+                ex);
+            renderer.LoginBakeComplete = true;
+            DeferLoginVisitSweep();
+        }
+        finally
+        {
+            RestorePresentFramebuffer();
+        }
 
         capi.Event.RegisterCallback(_ => LogStats("Stats after 30s"), 30000);
 
@@ -1048,7 +1692,7 @@ public class DistantVistasModSystem : ModSystem
 
         Mod.Logger.Notification(
             "{0}: {1} sections resident [{2}] ({3} RAM-evicted, {4} from cache), {5} meshes ({6} evicted), " +
-            "{7} selected [{8}] minus {9} frustum-culled, {19} gap fills, {20} unfilled gaps, {10} columns captured, {11} pending, " +
+            "{7} selected [{8}] minus {9} frustum-culled, {25} occCull, {19} gap fills, {20} unfilled gaps, {10} columns captured, {11} pending, " +
             "{21} dropped, {22} swept, {23} peek-confirmed, {24} provisional L0, " +
             "worker: {12} captures / {13} meshes queued / {14}+{15} errors, {16} awaiting mip, {17} render-dirty, {18} unsaved",
             prefix, world.Sections.Count, world.DescribeLevels(), world.EvictedSectionsTotal, pipeline.CachedSectionsLoaded,
@@ -1057,7 +1701,16 @@ public class DistantVistasModSystem : ModSystem
             worker.CaptureErrors, worker.MeshErrors, world.MipDirty.Count, world.RenderDirty.Count,
             world.SaveDirty.Count, renderer.LastGapDrawCount, renderer.LastUnfilledGaps,
             pipeline.ColumnsDropped, pipeline.ColumnsSwept, pipeline.ProvisionalQuadrantsConfirmed,
-            world.ProvisionalL0Keys.Count);
+            world.ProvisionalL0Keys.Count, renderer.LastOccludedCount);
+
+        if (renderer.DrawAfterCompanion)
+        {
+            Mod.Logger.Notification(
+                "  farseer yield: meshes {0}/{1}{2}, handed off {3} ({4} far walked)",
+                renderer.MeshCount, LodMemoryBudget.MaxResidentMeshes,
+                renderer.MeshPressureActive ? ", mesh pressure on" : (renderer.PressureYieldActive ? ", pressure yield on" : ""),
+                renderer.LastCompanionYieldCount, renderer.LastPressureYieldCount);
+        }
 
         Mod.Logger.Notification("  L0 parity/fill: {0}", renderer.DescribeL0ParityAndFill());
 
@@ -1151,8 +1804,62 @@ public class DistantVistasModSystem : ModSystem
         renderer?.ResetPhaseCosts();
     }
 
+    (int Color, LodUntintedShare Share) UntintedForRebake(Block block)
+    {
+        if (TryTopSoilColor(block, out int composite, out LodUntintedShare share))
+            return (composite, share);
+        return (StableColorOf(block), LodUntintedShare.None);
+    }
+
+    /// <summary>Re-queue L0 under the player so walk-back areas bake live tops while chunks load.</summary>
+    void QueueExploreBakeNearPlayer()
+    {
+        if (loginBake?.Active == true || !pipeline.Active) return;
+
+        EntityPos pos = capi.World.Player.Entity.Pos;
+        int footprint = LodSection.SectionBlocks;
+        int sx = (int)Math.Floor(pos.X / footprint);
+        int sz = (int)Math.Floor(pos.Z / footprint);
+        for (int dz = -1; dz <= 1; dz++)
+        {
+            for (int dx = -1; dx <= 1; dx++)
+            {
+                if (sx + dx < 0 || sz + dz < 0) continue;
+                long key = LodWorld.SectionKey(0, sx + dx, sz + dz);
+                if (!pipeline.World.Sections.TryGetValue(key, out LodSection? section)) continue;
+                pipeline.ExploreBake.Queue(key, section, pipeline.DeferLegacyHeal);
+            }
+        }
+    }
+
     void OnLeaveWorld()
     {
+        // #region agent log
+        try
+        {
+            System.IO.File.AppendAllText(
+                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                "{\"sessionId\":\"40cccb\",\"hypothesisId\":\"H-FOG-5\",\"location\":\"DistantVistasModSystem.OnLeaveWorld\",\"message\":\"leave-world\",\"data\":{\"complete\":"
+                + (renderer.LoginBakeComplete ? "true" : "false")
+                + ",\"blocked\":" + (renderer.LoginBakeBlocked ? "true" : "false")
+                + ",\"joinReady\":" + (renderer.JoinRendererReady ? "true" : "false")
+                + ",\"meshes\":" + renderer.MeshCount
+                + ",\"drawn\":" + renderer.LastDrawCount
+                + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+        }
+        catch { }
+        // #endregion
+        CancelLoginSweepDefer();
+        loginBake?.Dispose();
+        loginBake = null;
+        loginBakePulse?.Bind(null, PumpLoginBakeWhileSweeping);
+        renderer.LoginBakeComplete = false;
+        pipeline.ResetDiscover();
+        pipeline.DeferLegacyHeal = false;
+        pipeline.ExploreBake.Clear();
+        renderer.LoginBakeOverlayActive = false;
+        renderer.LoginBakeBlocked = true;
+        joinAtlasResolved = false;
         assist?.Reset();
         // Belongs to the world being left: the next one is a different savegame with a
         // different sibling cache, and holding this open would keep a file handle on a
@@ -1179,6 +1886,7 @@ public class DistantVistasModSystem : ModSystem
                 $"[distantvistas] sections: {pipeline.World.Sections.Count} [{pipeline.World.DescribeLevels()}] " +
                 $"({pipeline.CachedSectionsLoaded} from cache), meshes: {renderer.MeshCount}, " +
                 $"drawn: {renderer.LastDrawCount} [{renderer.DescribeDrawnLevels()}], " +
+                $"occCull: {renderer.LastOccludedCount}, " +
                 $"gap fills: {renderer.LastGapDrawCount}, unfilled gaps: {renderer.LastUnfilledGaps}, " +
                 $"columns captured: {pipeline.ColumnsCaptured}, pending: {pipeline.PendingColumns}, " +
                 $"dropped: {pipeline.ColumnsDropped}, swept: {pipeline.ColumnsSwept}, " +
@@ -1190,6 +1898,11 @@ public class DistantVistasModSystem : ModSystem
                 $"current far edge: {(int)renderer.EffectiveFarDistance}, " +
                 $"detail distance: {(int)LodWorld.DetailDistance} (.dvdetail to change), " +
                 $"coarsest visible: L{LodWorld.MaxVisualLevel} ({LodWorld.ColumnStepBlocks(LodWorld.MaxVisualLevel)} blocks/column), " +
+                $"farseer: meshes {renderer.MeshCount}/{LodMemoryBudget.MaxResidentMeshes}" +
+                (renderer.DrawAfterCompanion
+                    ? (renderer.MeshPressureActive ? ", mesh pressure on" : ", mesh pressure off")
+                      + $", handed off {renderer.LastCompanionYieldCount} ({renderer.LastPressureYieldCount} far walked)"
+                    : ", off") + ", " +
                 $"server assist: {assist?.Status ?? "off"}" +
                 (assist != null && assist.RemoteKeys.Count > 0
                     ? $", server offers {assist.RemoteKeys.Count} sections " +
@@ -1200,6 +1913,11 @@ public class DistantVistasModSystem : ModSystem
 
         // Registered in both states on purpose: the player who most needs this one is the
         // player we are currently idle for.
+        capi.ChatCommands.Create("dvfarseer")
+            .WithDescription("Show whether Distant Vistas overwrote Farseer's region shaders")
+            .HandleWith(_ => TextCommandResult.Success(
+                "[distantvistas] " + FarseerShaderOverlay.Describe(capi)));
+
         capi.ChatCommands.Create("dvdefer")
             .WithDescription("Stay idle when another LOD mod draws. Default on. Off draws anyway.")
             .WithArgs(capi.ChatCommands.Parsers.OptionalBool("on"))
@@ -1310,11 +2028,14 @@ public class DistantVistasModSystem : ModSystem
 
             // Nothing to unregister while deferring: that path registers no listener.
             if (deferringTo == null) capi.Event.UnregisterGameTickListener(tickListenerId);
+            if (loginSweepDeferListenerId != null)
+                capi.Event.UnregisterGameTickListener(loginSweepDeferListenerId.Value);
         });
 
         // Stops the storage writer before the connection it writes through.
         Quietly(() => pipeline?.Dispose());
         Quietly(() => renderer?.Dispose());
+        Quietly(() => loginBakeOverlay?.Dispose());
     }
 
     /// <summary>
@@ -1335,6 +2056,9 @@ public class DistantVistasModSystem : ModSystem
         }
     }
 }
+
+
+
 
 
 

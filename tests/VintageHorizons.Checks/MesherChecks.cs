@@ -24,6 +24,21 @@ public static class MesherChecks
         UncapturedColumnDoesNotBecomeCliff(c);
         AntiFloaterSkipsPlantScrapsOnly(c);
         SkipFlagIsNotGeometry(c);
+        FrostedCanopyUpIsPaler(c);
+    }
+
+    static void FrostedCanopyUpIsPaler(Check c)
+    {
+        int stored = LodSurfaceMix.Pack(103, 103, 86);
+        byte frost = (byte)(LodPaletteEntry.FlagBaked | LodPaletteEntry.FlagFrost);
+        int wall = LodMesher.FrostFaceColor(stored, frost, upFace: false);
+        int up = LodMesher.FrostFaceColor(stored, frost, upFace: true);
+        c.Eq(stored, wall, "frosted walls keep the stored side colour");
+        LodPaletteRepair.Channels(up, out _, out _, out _, out int upLuma, out _);
+        LodPaletteRepair.Channels(stored, out _, out _, out _, out int sideLuma, out _);
+        c.True(upLuma > sideLuma + 20, "frosted UP faces extra-mix toward white");
+        c.Eq(stored, LodMesher.FrostFaceColor(stored, LodPaletteEntry.FlagBaked, upFace: true),
+            "FlagBaked without FlagFrost does not extra-white UP");
     }
 
     static void SkipFlagIsNotGeometry(Check c)
@@ -221,6 +236,12 @@ public static class MesherChecks
             "missing-tex water is forced to lake blue");
         c.Eq((byte)5, AlphaOf(Column(flags: 0, tintSlot: 5)),
             "ordinary grey-green tops keep the climate slot");
+        c.Eq((byte)(LodTintRegistry.MaxSlots * 3),
+            AlphaOf(Column(LodPaletteEntry.FlagBaked, tintSlot: 5)),
+            "baked opaque land uses band 3 with identity tint");
+        c.Eq((byte)(LodTintRegistry.MaxSlots * 3),
+            AlphaOf(Column(LodPaletteEntry.FlagBaked | LodPaletteEntry.FlagThin, tintSlot: 5)),
+            "visit-baked thin cover uses band 3 so canopy RGB is not live-tinted");
     }
 
     static void WaterIsASeparatePass(Check c)
