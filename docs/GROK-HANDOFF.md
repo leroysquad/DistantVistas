@@ -1,34 +1,18 @@
-# Grok Handoff — Distant Vistas 1.0.32 (all numbers + save instructions)
+# Distant Vistas 1.0.32 — Complete Numbers (local copy)
 
-**For Grokbot:** Save this file locally. User save path:
+Keep this file on your PC (not in a remote VM). Local docs folder:
 
-`C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\docs\GROK-HANDOFF.md`
+`C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\docs\`
 
-Also update sibling files in that folder:
+Sibling files in that folder:
 
 - `CODEBASE-AUTHORSHIP.md`
 - `OFFICIAL-DESCRIPTION.md`
 - `ARCHITECTURE-AND-OVERHAULS.md`
+- `GROK-HANDOFF.md` (this file)
 
-Optional Playwright task: open ModDB listing editor at
-https://mods.vintagestory.at/distantvistas — user will log in through Grok VRM.
-
----
-
-## Message to paste to Grokbot
-
-```
-Grok — save the markdown below to:
-C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\docs\GROK-HANDOFF.md
-
-Split into separate files if you want:
-- CODEBASE-AUTHORSHIP.md (authorship tables only)
-- OFFICIAL-DESCRIPTION.md (mod description)
-- ARCHITECTURE-AND-OVERHAULS.md (architecture — ask Cursor for full text or pull from GitHub branch cursor/official-description-6148)
-
-If Playwright is available on my PC: open https://mods.vintagestory.at/distantvistas edit page.
-I will log in through your VRM. Do not submit until I confirm. Paste OFFICIAL-DESCRIPTION + numbers into the listing when ready.
-```
+**ModDB:** edit manually in your own browser, or run Playwright **on your computer** with
+your normal logged-in session. Grok VM / VRM login does not work for mods.vintagestory.at.
 
 ---
 
@@ -204,14 +188,15 @@ Official 1.0.32. 47,427 lines across 171 files: 28,852 IllLeroySquad, 18,575 Ali
 
 ---
 
-## Playwright checklist (Grok on user's PC)
+## ModDB on your PC (manual or local Playwright)
 
-1. Launch browser (user logs in via Grok VRM if needed).
-2. Navigate: https://mods.vintagestory.at/distantvistas
-3. Open edit / description field (after login).
-4. Paste content from `OFFICIAL-DESCRIPTION.md` + authorship summary table.
-5. **Wait for user confirm before save/submit.**
-6. Save local markdown copies to `ClientMods\distantvistas\docs\`.
+1. Open **your** browser (Chrome/Edge) — already logged into mods.vintagestory.at if possible.
+2. Go to https://mods.vintagestory.at/distantvistas → edit listing.
+3. Paste from `OFFICIAL-DESCRIPTION.md` and/or `docs/community/moddb-1.0.32-listing.html`.
+4. Save when ready (1.0.32 is still pre-release until you ship the zip).
+
+If you use Playwright locally, point it at your user profile or log in once in the headed
+browser — do not use a remote VM session for Vintage Story ModDB auth.
 
 ---
 
