@@ -14,7 +14,7 @@ public static class LodScoutSeqDiag
 
     const string HypothesisId = "H-SCOUT-SEQ";
     const string SessionId = "40cccb";
-    const string RunId = "1036";
+    const string RunId = "1037";
 
     const int ThrashMaxTicks = 5;
     const long ThrashRespawnMs = 2000;
@@ -33,6 +33,7 @@ public static class LodScoutSeqDiag
     static double paintMaxWallMs;
     static int paintScoutReady;
     static int paintStarveTicks;
+    static bool chunkPressureActive;
 
     static readonly Dictionary<long, long> lastReleaseMsByKey = new();
     static readonly Dictionary<int, (LodScoutEntity.Phase Phase, long Ms)> lastPhaseLogBySlot = new();
@@ -54,6 +55,7 @@ public static class LodScoutSeqDiag
         paintMaxWallMs = 0;
         paintScoutReady = 0;
         paintStarveTicks = 0;
+        chunkPressureActive = false;
         lastReleaseMsByKey.Clear();
         lastPhaseLogBySlot.Clear();
         lastHostUpMsByKey.Clear();
@@ -69,6 +71,8 @@ public static class LodScoutSeqDiag
     }
 
     public static void NotePaintStarve(int ticks) => paintStarveTicks = ticks;
+
+    public static void NoteChunkPressure(bool active) => chunkPressureActive = active;
 
     public static void LogSpawn(
         int slot,
@@ -208,6 +212,7 @@ public static class LodScoutSeqDiag
             + ",\"maxPaintWallMs\":" + paintMaxWallMs.ToString("0.#", Inv)
             + ",\"paintReadyQueued\":" + paintScoutReady
             + ",\"paintStarveTicks\":" + paintStarveTicks
+            + ",\"chunkPressure\":" + Bool(chunkPressureActive)
             + "}");
 
         spawnsWindow = 0;

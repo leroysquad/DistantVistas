@@ -1,3 +1,9 @@
+## 1.0.37
+- **Cheaper-compute A-tier (same colors + full 4075 disk).** Implements research `docs/plans/login-bake-cheaper-compute-research.md` on 1.0.36: **A2 cliff breaker** — chunk-residency-aware pending pick (`CountLoadedMapChunks` scoring), **hot-key cooldown** after `maxWait`/`captureStall`, **IO pressure governor** when `paintStarveTicks≥8` and ≥12 scouts WaitChunks (`chunkPressure` telemetry). **A1** — overlay-wide GetColor / climate-untinted dedup cache (`BeginOverlayGetColorCache`) with H-PAINT hit/miss stats. **A3** — resume snapshot list reuse, overlay cache lifecycle. Details: `docs/plans/login-bake-walltime-1033.md` § 1.0.37.
+- Player still does not teleport. Exact pickup XYZ. Gray tent + black tips. No SIMD inside GetColor. No false-complete. Look lock intact.
+- Drop `distantvistas_1.0.37.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+- **Verify:** `finished` climbs past **358** without dead-end; `paintReadyQueued>0` most seconds; `painted` ≫ `maxWait`; `chunkPressure` logs during rim stall; `getColorHits` rises in H-PAINT; no color/VD regression.
+
 ## 1.0.36
 - **Hard WaitChunks / scout wait cuts.** 1.0.35 unblocked total freeze but playtest still showed WaitChunks avg **55 ticks**, `paintReadyQueued` zero **~96%** of samples, **maxWait ≈ painted**. 1.0.36: **Capture at 8 ticks** (no full-map gate), paint handoff from **4 ticks** with aggressive `PartialCaptureMin`, `MaxWaitTicks` **24** / `MaxCaptureWaitTicks` **6**, near WaitChunks cap **4** + **far cap 6**, pile-up rotate at **6 scouts @ 16 ticks**, faster reveal/retry, **`captureStall`** slot release. Details: `docs/plans/login-bake-walltime-1033.md` § 1.0.36.
 - Player still does not teleport. Exact pickup XYZ. Gray tent + black tips. No SIMD inside GetColor. No false-complete. Look lock intact.

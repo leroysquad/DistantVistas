@@ -701,6 +701,20 @@ public static class LoginSweepChecks
             "resident sections with full footprint skip WaitChunks");
         c.Eq(4, LodLoginScoutFill.PaintStarveForceCaptureTicks,
             "starving scouts force Capture at ~200ms");
+        c.Eq(4, LodLoginScoutFill.MaxWaitHotKeyCooldown,
+            "maxWait hot keys defer respawn for 4 ticks");
+        c.Eq(12, LodLoginScoutFill.ChunkPressureWaitChunksMin,
+            "IO governor engages when 12+ scouts WaitChunks while paint starves");
+        c.True(scoutFill.Contains("PendingPickScore"),
+            "pending pick scores chunk residency before cold rim keys");
+        c.True(scoutFill.Contains("spawnCooldown"),
+            "maxWait keys enter hot-key cooldown instead of immediate respawn");
+        c.True(bakeScratch.Contains("BeginOverlayGetColorCache"),
+            "overlay-wide GetColor dedup cache spans L0 sections");
+        c.True(bakeScratch.Contains("TryGetOverlayGetColor"),
+            "SampleVanillaColor checks overlay cache before section cache");
+        c.True(bake.Contains("resumePendingScratch"),
+            "resume snapshot reuses pending scratch instead of new List each save");
         c.True(bake.Contains("paintStarveTicks"),
             "overlay detects empty paint queue while scouts live");
         c.True(File.ReadAllText(Path.Combine(

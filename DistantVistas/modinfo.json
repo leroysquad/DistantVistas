@@ -2,11 +2,11 @@
     "type":  "code",
     "modid":  "distantvistas",
     "name":  "Distant Vistas",
-    "version":  "1.0.36",
+    "version":  "1.0.37",
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.36. Hard WaitChunks wait cuts: Capture at 8 ticks, paint handoff from 4 ticks, near/far WaitChunks caps, faster reveal/retry. Builds on 1.0.35 speed + scout unblock. Farseer gray tent + black tips. Vintage Horizons fork.",
+    "description":  "Official 1.0.37. Cheaper-compute A-tier: chunk-residency cliff breaker, overlay GetColor dedup cache, GC hygiene on bake path. Builds on 1.0.36 wait cuts + ~358 resident handoff. Farseer gray tent + black tips. Vintage Horizons fork.",
     "authors":  [
                     "IllLeroySquad"
                 ],

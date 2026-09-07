@@ -123,6 +123,7 @@ public sealed class LodLoginBake
     int stopTicks;
     bool restoreCaptured;
     bool resuming;
+    bool overlayPaintCachesActive;
     bool loggedTeleportBegin;
     bool loggedWarmupComplete;
     bool escWasDown;
@@ -137,6 +138,8 @@ public sealed class LodLoginBake
     readonly Queue<long> scoutReady = new();
     readonly Dictionary<long, int> paintResumeCol = new();
     readonly List<long> paintOrderScratch = new(64);
+    readonly List<long> resumePendingScratch = new(2048);
+    readonly List<long> resumeCompletedScratch = new(2048);
     int lastResumeSavedFinished;
     long lastResumeSaveMs;
     int sweepingTicks;
@@ -304,6 +307,7 @@ public sealed class LodLoginBake
         paintResumeCol.Clear();
         sweepingTicks = 0;
         paintStarveTicks = 0;
+        overlayPaintCachesActive = false;
 
         overlay.Show();
         renderer.LoginBakeOverlayActive = true;
@@ -725,12 +729,21 @@ public sealed class LodLoginBake
         }
 
         phase = Phase.Sweeping;
+        EnterSweepingCaches();
         sweepTiming.Begin(resetSamples: false);
         LodScoutSeqDiag.SetOverlayActive(true);
         LogTeleportBegin();
         statusWriter.TouchAdvance("teleports-begin");
         UpdateProgress(Progress,
             StatusWithEta($"{VisitPrefix()}scouting regions… ({Pct(finished, total)})"));
+    }
+
+    void EnterSweepingCaches()
+    {
+        if (overlayPaintCachesActive) return;
+        overlayPaintCachesActive = true;
+        LodBakeScratch.BeginOverlayGetColorCache();
+        ColorPathDiag.ResetOverlayCacheStats();
     }
 
     void LogTeleportBegin()
@@ -763,6 +776,7 @@ public sealed class LodLoginBake
             LodLoginScoutFill.LocalVisitRevealChunks,
             viewBoost.ChunkVisibleRadius,
             pickupX, pickupZ);
+        LodScoutSeqDiag.NoteChunkPressure(scoutFill.ChunkPressureActive);
         PinPickupPose();
         for (int i = 0; i < ready.Count; i++)
             scoutReady.Enqueue(ready[i]);
@@ -884,6 +898,7 @@ public sealed class LodLoginBake
             sweepTiming.NoteFinished(finished);
             statusWriter.TouchAdvance($"region-{finished}-of-{total}");
             LogPaintBatch(completed, painted, getColorCalls, resumeKeys, queued);
+            ColorPathDiag.NoteOverlayGetColorBatch();
         }
     }
 
@@ -1424,6 +1439,11 @@ public sealed class LodLoginBake
         releaseKeepResume = keepResume;
         released = true;
         phase = Phase.Done;
+        if (overlayPaintCachesActive)
+        {
+            LodBakeScratch.EndOverlayGetColorCache();
+            overlayPaintCachesActive = false;
+        }
         LodScoutSeqDiag.SetOverlayActive(false);
         if (success)
         {
@@ -1662,10 +1682,12 @@ public sealed class LodLoginBake
         {
             System.IO.File.AppendAllText(
                 @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
-                "{\"sessionId\":\"40cccb\",\"runId\":\"1036\",\"hypothesisId\":\"H-PAINT\",\"location\":\"LodLoginBake.PaintReadyScouts\",\"message\":\"paint-scout-batch\",\"data\":{"
+                "{\"sessionId\":\"40cccb\",\"runId\":\"1037\",\"hypothesisId\":\"H-PAINT\",\"location\":\"LodLoginBake.PaintReadyScouts\",\"message\":\"paint-scout-batch\",\"data\":{"
                 + "\"completed\":" + completed
                 + ",\"attempted\":" + attempted
                 + ",\"getColorCalls\":" + getColorCalls
+                + ",\"getColorHits\":" + LodBakeScratch.OverlayGetColorHits
+                + ",\"getColorMisses\":" + LodBakeScratch.OverlayGetColorMisses
                 + ",\"finished\":" + finished
                 + ",\"total\":" + total
                 + ",\"pending\":" + pending.Count
@@ -1805,16 +1827,21 @@ public sealed class LodLoginBake
         snap.ResweepRound = resweepRound;
         snap.RetryingMisses = retryingMisses;
         snap.ExpireRecapture = expireRecapture;
-        snap.Completed = completedKeys.ToList();
+        resumeCompletedScratch.Clear();
+        foreach (long key in completedKeys)
+            resumeCompletedScratch.Add(key);
+        snap.Completed = resumeCompletedScratch;
 
-        var pendingList = new List<long>(pending);
-        scoutFill.CopyLiveKeys(pendingList);
-        scoutFill.CopyHeldKeys(pendingList);
+        resumePendingScratch.Clear();
+        foreach (long key in pending)
+            resumePendingScratch.Add(key);
+        scoutFill.CopyLiveKeys(resumePendingScratch);
+        scoutFill.CopyHeldKeys(resumePendingScratch);
         foreach (long key in scoutReady)
-            pendingList.Add(key);
+            resumePendingScratch.Add(key);
         if (currentKey != null)
-            pendingList.Insert(0, currentKey.Value);
-        snap.Pending = pendingList;
+            resumePendingScratch.Insert(0, currentKey.Value);
+        snap.Pending = resumePendingScratch;
 
         if (restoreCaptured)
         {

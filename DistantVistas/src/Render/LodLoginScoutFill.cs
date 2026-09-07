@@ -38,6 +38,13 @@ public sealed class LodLoginScoutFill
     public const int ResidentFastHandoffCols = 64;
     /// <summary>Paint queue empty while scouts live — tighten waits further.</summary>
     public const int PaintStarveForceCaptureTicks = 4;
+    /// <summary>Skip respawning a key for this many ticks after maxWait / captureStall.</summary>
+    public const int MaxWaitHotKeyCooldown = 4;
+    /// <summary>When this many scouts WaitChunks with empty paint queue, IO governor engages.</summary>
+    public const int ChunkPressureWaitChunksMin = 12;
+    /// <summary>Under chunk pressure, force Capture even sooner (~150 ms).</summary>
+    public const int ChunkPressureForceCaptureTicks = 3;
+    public const int MapChunksPerL0 = 4;
     public const int ChunkVisibleRadius = 2;
     public const int SweepRadiusChunks = 2;
     public const int SweepRowsPerCall = 1;
@@ -60,11 +67,15 @@ public sealed class LodLoginScoutFill
     readonly Queue<long> heldFar = new();
     readonly List<long> readyScratch = new(MaxConcurrent);
     readonly List<long> pendingScratch = new(256);
+    readonly List<long> cooldownScratch = new(64);
     readonly Dictionary<long, int> waitRetries = new();
+    readonly Dictionary<long, int> spawnCooldown = new();
     bool paintStarving;
+    bool chunkPressure;
     int liveCount;
 
     public void SetPaintStarving(bool starving) => paintStarving = starving;
+    public bool ChunkPressureActive => chunkPressure;
 
     public int LiveCount => liveCount;
     public int HeldCount => heldNear.Count + heldFar.Count;
@@ -83,7 +94,9 @@ public sealed class LodLoginScoutFill
         readyScratch.Clear();
         pendingScratch.Clear();
         waitRetries.Clear();
+        spawnCooldown.Clear();
         paintStarving = false;
+        chunkPressure = false;
         liveCount = 0;
         FinishedThisTick = 0;
         LastFinishedKey = null;
@@ -147,9 +160,14 @@ public sealed class LodLoginScoutFill
         LastFinishedKey = null;
         readyScratch.Clear();
         FlushHeldToPending(pending);
-        int forceCaptureTicks = paintStarving ? PaintStarveForceCaptureTicks : WaitChunksForceCaptureTicks;
-        int rotateTicks = paintStarving ? 8 : WaitChunksRotateTicks;
-        int rotateMinLive = paintStarving ? 4 : WaitChunksRotateMinLive;
+        int waitChunksLive = CountPhase(LodScoutEntity.Phase.WaitChunks);
+        chunkPressure = paintStarving && waitChunksLive >= ChunkPressureWaitChunksMin;
+        int forceCaptureTicks = chunkPressure
+            ? ChunkPressureForceCaptureTicks
+            : paintStarving ? PaintStarveForceCaptureTicks : WaitChunksForceCaptureTicks;
+        int rotateTicks = chunkPressure ? 6 : paintStarving ? 8 : WaitChunksRotateTicks;
+        int rotateMinLive = chunkPressure ? 3 : paintStarving ? 4 : WaitChunksRotateMinLive;
+        TickDownSpawnCooldowns();
         int targetCap = Math.Min(
             LocalVisitRevealChunks,
             Math.Max(ChunkVisibleRadius, chunkVisibleTarget));
@@ -269,6 +287,7 @@ public sealed class LodLoginScoutFill
 
                 waitRetries.TryGetValue(key, out int retries);
                 waitRetries[key] = retries + 1;
+                spawnCooldown[key] = MaxWaitHotKeyCooldown;
                 RequeuePending(pending, key);
                 ReleaseSlot(capi, i, renderer, pipeline, "maxWait");
                 continue;
@@ -298,6 +317,7 @@ public sealed class LodLoginScoutFill
 
                         waitRetries.TryGetValue(key, out int captureRetries);
                         waitRetries[key] = captureRetries + 1;
+                        spawnCooldown[key] = MaxWaitHotKeyCooldown;
                         RequeuePending(pending, key);
                         ReleaseSlot(capi, i, renderer, pipeline, "captureStall");
                         continue;
@@ -391,54 +411,107 @@ public sealed class LodLoginScoutFill
         int nearWaitChunksLive,
         int farWaitChunksLive)
     {
+        var blockAccessor = capi.World.BlockAccessor;
         int best = -1;
-        int bestRetries = int.MaxValue;
-        int bestResidentCols = -1;
-        bool bestNear = false;
+        int bestScore = int.MinValue;
         int fallback = -1;
+        int fallbackScore = int.MinValue;
 
         for (int i = 0; i < keys.Count; i++)
         {
             long key = keys[i];
             if (completedKeys.Contains(key)) continue;
             waitRetries.TryGetValue(key, out int retries);
+            spawnCooldown.TryGetValue(key, out int cooldown);
             bool near = VisitIsNear(capi, key, pickupX, pickupZ);
             int residentCols = ResidentCaptureCols(pipeline, key);
+            int loadedChunks = CountLoadedMapChunks(blockAccessor, key);
+            int score = PendingPickScore(loadedChunks, residentCols, retries, near);
 
-            if (!paintStarving)
+            if (cooldown > 0)
+            {
+                if (fallback < 0 || score > fallbackScore)
+                {
+                    fallback = i;
+                    fallbackScore = score;
+                }
+                continue;
+            }
+
+            if (!paintStarving && !chunkPressure)
             {
                 if (nearWaitChunksLive >= MaxNearWaitChunksLive && near)
                 {
-                    if (fallback < 0) fallback = i;
+                    if (fallback < 0 || score > fallbackScore)
+                    {
+                        fallback = i;
+                        fallbackScore = score;
+                    }
                     continue;
                 }
 
                 if (farWaitChunksLive >= MaxFarWaitChunksLive && !near)
                 {
-                    if (fallback < 0) fallback = i;
+                    if (fallback < 0 || score > fallbackScore)
+                    {
+                        fallback = i;
+                        fallbackScore = score;
+                    }
                     continue;
                 }
             }
 
             if (retries >= MaxWaitKeyedRetries && residentCols < ResidentFastHandoffCols)
             {
-                if (fallback < 0) fallback = i;
+                if (fallback < 0 || score > fallbackScore)
+                {
+                    fallback = i;
+                    fallbackScore = score;
+                }
                 continue;
             }
 
-            if (best < 0
-                || residentCols > bestResidentCols
-                || (residentCols == bestResidentCols && retries < bestRetries)
-                || (residentCols == bestResidentCols && retries == bestRetries && near && !bestNear))
+            if (best < 0 || score > bestScore)
             {
                 best = i;
-                bestRetries = retries;
-                bestResidentCols = residentCols;
-                bestNear = near;
+                bestScore = score;
             }
         }
 
         return best >= 0 ? best : fallback;
+    }
+
+    static int PendingPickScore(int loadedChunks, int residentCols, int retries, bool near)
+    {
+        // Chunk residency dominates: full grid → immediate Capture; partial beats cold.
+        int score = loadedChunks * 10_000 + residentCols * 10 - retries * 100;
+        if (near) score += 1;
+        return score;
+    }
+
+    static int CountLoadedMapChunks(IBlockAccessor blockAccessor, long l0Key)
+    {
+        int n = 0;
+        foreach ((int cx, int cz) in LodLoginSweep.ChunkColumnsForL0(l0Key))
+        {
+            if (blockAccessor.GetMapChunk(cx, cz) != null) n++;
+        }
+        return n;
+    }
+
+    void TickDownSpawnCooldowns()
+    {
+        if (spawnCooldown.Count == 0) return;
+        cooldownScratch.Clear();
+        foreach (long key in spawnCooldown.Keys)
+            cooldownScratch.Add(key);
+        for (int i = 0; i < cooldownScratch.Count; i++)
+        {
+            long key = cooldownScratch[i];
+            int left = spawnCooldown[key] - 1;
+            if (left <= 0) spawnCooldown.Remove(key);
+            else spawnCooldown[key] = left;
+        }
     }
 
     static void RequeuePending(Queue<long> pending, long key) => pending.Enqueue(key);

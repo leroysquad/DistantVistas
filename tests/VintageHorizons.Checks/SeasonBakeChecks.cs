@@ -46,6 +46,17 @@ public static class SeasonBakeChecks
             LodBakeScratch.GetColorCacheKey(42, 128, 64, 256),
             LodBakeScratch.GetColorCacheKey(43, 128, 64, 256),
             "GetColor cache key varies by block id");
+        LodBakeScratch.BeginOverlayGetColorCache();
+        LodBakeScratch.RememberOverlayGetColor(7, 128, 64, 256, unchecked((int)0xFF112233));
+        c.True(
+            LodBakeScratch.TryGetOverlayGetColor(7, 128, 64, 256, out int overlayHit)
+                && overlayHit == unchecked((int)0xFF112233),
+            "overlay GetColor cache returns remembered rgb");
+        c.False(
+            LodBakeScratch.TryGetOverlayGetColor(7, 144, 64, 256, out _),
+            "overlay cache miss on different 16×16 tile");
+        LodBakeScratch.EndOverlayGetColorCache();
+    }
 
     static void MultiplyRgbIdentity(Check c)
     {

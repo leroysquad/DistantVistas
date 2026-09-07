@@ -22,11 +22,22 @@ static class LodBakeScratch
     [ThreadStatic] static Dictionary<long, int>? getColorByKey;
     [ThreadStatic] static Dictionary<int, int>? getColorByBlockId;
     [ThreadStatic] static Dictionary<long, float>? seasonByTile;
+    [ThreadStatic] static Dictionary<long, int>? overlayGetColorByKey;
+    [ThreadStatic] static Dictionary<int, int>? overlayGetColorByBlockId;
+    [ThreadStatic] static int overlayCacheScope;
     [ThreadStatic] static int getColorCalls;
+    [ThreadStatic] static int overlayGetColorHits;
+    [ThreadStatic] static int overlayGetColorMisses;
     [ThreadStatic] static int texMeanScope;
 
     /// <summary>Scalar GetColor calls this section bake (cache misses only).</summary>
     public static int SectionGetColorCalls => getColorCalls;
+
+    /// <summary>Overlay-wide GetColor cache hits since <see cref="BeginOverlayGetColorCache"/>.</summary>
+    public static int OverlayGetColorHits => overlayGetColorHits;
+
+    /// <summary>Overlay-wide GetColor cache misses (actual API calls).</summary>
+    public static int OverlayGetColorMisses => overlayGetColorMisses;
 
     /// <summary>
     /// 16×16 climate tile + block id + Y band. GetColor is stable within a tile for
@@ -100,7 +111,78 @@ static class LodBakeScratch
         getColorCalls = 0;
     }
 
-    public static void NoteGetColorCall() => getColorCalls++;
+    /// <summary>
+    /// Cross-L0 overlay dedup: identical climate tile + block + Y reuse GetColor
+    /// across sections during the login sweep (bit-identical to per-section cache).
+    /// </summary>
+    public static void BeginOverlayGetColorCache()
+    {
+        overlayGetColorByKey ??= new Dictionary<long, int>(8192);
+        overlayGetColorByBlockId ??= new Dictionary<int, int>(128);
+        overlayGetColorByKey.Clear();
+        overlayGetColorByBlockId.Clear();
+        overlayCacheScope++;
+        overlayGetColorHits = 0;
+        getColorCalls = 0;
+        overlayGetColorMisses = 0;
+    }
+
+    public static void EndOverlayGetColorCache()
+    {
+        if (overlayCacheScope > 0) overlayCacheScope--;
+        if (overlayCacheScope <= 0)
+        {
+            overlayGetColorByKey?.Clear();
+            overlayGetColorByBlockId?.Clear();
+            overlayGetColorHits = 0;
+            overlayGetColorMisses = 0;
+            getColorCalls = 0;
+        }
+    }
+
+    public static bool TryGetOverlayGetColor(int blockId, int x, int y, int z, out int rgb)
+    {
+        if (overlayCacheScope > 0 && overlayGetColorByKey != null
+            && overlayGetColorByKey.TryGetValue(GetColorCacheKey(blockId, x, y, z), out rgb))
+        {
+            overlayGetColorHits++;
+            return true;
+        }
+        rgb = 0;
+        return false;
+    }
+
+    public static bool TryGetOverlayBlockIdGetColor(int blockId, out int rgb)
+    {
+        if (overlayCacheScope > 0 && overlayGetColorByBlockId != null
+            && overlayGetColorByBlockId.TryGetValue(blockId, out rgb))
+        {
+            overlayGetColorHits++;
+            return true;
+        }
+        rgb = 0;
+        return false;
+    }
+
+    public static void RememberOverlayGetColor(int blockId, int x, int y, int z, int rgb)
+    {
+        if (overlayCacheScope <= 0 || rgb == 0) return;
+        overlayGetColorByKey ??= new Dictionary<long, int>(8192);
+        overlayGetColorByKey[GetColorCacheKey(blockId, x, y, z)] = rgb;
+    }
+
+    public static void RememberOverlayBlockIdGetColor(int blockId, int rgb)
+    {
+        if (overlayCacheScope <= 0 || rgb == 0) return;
+        overlayGetColorByBlockId ??= new Dictionary<int, int>(128);
+        overlayGetColorByBlockId[blockId] = rgb;
+    }
+
+    public static void NoteGetColorCall()
+    {
+        getColorCalls++;
+        if (overlayCacheScope > 0) overlayGetColorMisses++;
+    }
 
     public static bool TryGetSectionGetColor(int blockId, int x, int y, int z, out int rgb)
     {

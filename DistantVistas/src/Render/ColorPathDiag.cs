@@ -23,6 +23,9 @@ public static class ColorPathDiag
     static int bakeSamples;
     static float lastBakeWinter;
 
+    static int overlayGetColorHits;
+    static int overlayGetColorMisses;
+
     public static void NoteBakeFrostGate(float liveWinter, bool seasonAllows, bool flagged)
     {
         bakeSamples++;
@@ -182,6 +185,18 @@ public static class ColorPathDiag
     static int Mean(long sum, int n) =>
         n <= 0 ? 0 : (int)(sum / n);
 
+    public static void ResetOverlayCacheStats()
+    {
+        overlayGetColorHits = 0;
+        overlayGetColorMisses = 0;
+    }
+
+    public static void NoteOverlayGetColorBatch()
+    {
+        overlayGetColorHits = LodBakeScratch.OverlayGetColorHits;
+        overlayGetColorMisses = LodBakeScratch.OverlayGetColorMisses;
+    }
+
     public static void ResetSession()
     {
         lastLogMs = 0;
@@ -190,5 +205,7 @@ public static class ColorPathDiag
         bakeFrostFlagged = 0;
         bakeSamples = 0;
         lastBakeWinter = 0;
+        overlayGetColorHits = 0;
+        overlayGetColorMisses = 0;
     }
 }

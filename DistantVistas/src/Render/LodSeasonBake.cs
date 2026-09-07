@@ -176,9 +176,16 @@ public static class LodSeasonBake
     public static int SampleVanillaColor(ICoreClientAPI capi, Block block, int x, int y, int z)
     {
         int id = block.BlockId;
-        if (LodBlockPolicy.IsClimateUntinted(block)
-            && LodBakeScratch.TryGetBlockIdGetColor(id, out int untintedCached))
-            return untintedCached;
+        if (LodBlockPolicy.IsClimateUntinted(block))
+        {
+            if (LodBakeScratch.TryGetOverlayBlockIdGetColor(id, out int overlayUntinted))
+                return overlayUntinted;
+            if (LodBakeScratch.TryGetBlockIdGetColor(id, out int untintedCached))
+                return untintedCached;
+        }
+
+        if (LodBakeScratch.TryGetOverlayGetColor(id, x, y, z, out int overlayCached))
+            return overlayCached;
 
         if (LodBakeScratch.TryGetSectionGetColor(id, x, y, z, out int cached))
             return cached;
@@ -194,8 +201,12 @@ public static class LodSeasonBake
                 if (!LodBlockPolicy.IsClimateUntinted(block))
                     _ = ApplyVisitFrost(capi.World, block, LodBakeScratch.Pos(x, y, z), color);
                 LodBakeScratch.RememberSectionGetColor(id, x, y, z, color);
+                LodBakeScratch.RememberOverlayGetColor(id, x, y, z, color);
                 if (LodBlockPolicy.IsClimateUntinted(block))
+                {
                     LodBakeScratch.RememberBlockIdGetColor(id, color);
+                    LodBakeScratch.RememberOverlayBlockIdGetColor(id, color);
+                }
                 // #region agent log
                 if (LodCanopyGray.IsSeasonFoliage(block))
                     FarCoverageDiag.NoteCanopySample(getColor: true, zero: false);

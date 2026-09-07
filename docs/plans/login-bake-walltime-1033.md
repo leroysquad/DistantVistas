@@ -238,3 +238,30 @@ Invariants unchanged: no teleports; scout viewers; exact pickup; spawn-solid 102
 | WaitChunks vs Capture | 3878 vs 755 | **`residentPaint` releases**; Capture catches up |
 | `maxWait` vs `painted` | 181 vs 129 | **`painted` ≫ `maxWait`** |
 | Release reasons | maxWait-heavy | **`residentPaint` / `residentStarve` / `waitExpirePaint`** |
+
+## 1.0.37 cheaper-compute A-tier
+
+**Research:** `docs/plans/login-bake-cheaper-compute-research.md` (branch `cursor/login-bake-cheaper-compute-research-beee`).
+
+**Non-negotiables preserved:** full seasonal GetColor, full **4075** disk / **~1680** stops, scout invariants.
+
+**Shipped (A-tier, in order):**
+
+| ID | Fix | Change |
+|----|-----|--------|
+| **A2** | Cliff breaker | **`PendingPickScore`**: prefer keys with **4/4 map chunks loaded**; **`spawnCooldown`** **4 ticks** after `maxWait` / `captureStall`; **`chunkPressure`** when starving + **≥12** WaitChunks (Capture **3 ticks**, rotate **6/min 3**, bypass caps) |
+| **A1** | GetColor dedup | **`BeginOverlayGetColorCache`**: cross-L0 tile+blockId+Y reuse (bit-identical to section cache); H-PAINT **`getColorHits` / `getColorMisses`** |
+| **A3** | GC hygiene | **`resumePendingScratch` / `resumeCompletedScratch`** reuse in `SaveResumeSnapshot`; overlay cache scoped lifecycle |
+
+**Optional next:** **A4** residency-ordered visit in `BudgetBootstrapVisitStops` (same stop count).
+
+**Expect after 1.0.37:**
+
+| Signal | 1.0.36 @358 | Target |
+|--------|-------------|--------|
+| `finished` past 358 | may stall | **>500 climbing** |
+| `paintReadyQueued==0` | ~96% at cliff | **&lt;10%** |
+| WaitChunks : Capture | ~5:1 | **&lt;2:1** |
+| `maxWait` vs `painted` | ~1:1 | **`painted` ≫ `maxWait`** |
+| H-PAINT `getColorCalls`/batch | ~540 | **&lt;300** (dedup) |
+| `chunkPressure` in budget | n/a | **true** during rim IO saturation |
