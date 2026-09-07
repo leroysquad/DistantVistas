@@ -198,7 +198,7 @@ public static class LodSurfaceMix
         float frost = 0f;
         try
         {
-            LodSeasonBake.TryVisitFrostWeight(capi.World, new BlockPos(x, y, z), out frost, out _, out _);
+            LodSeasonBake.TryVisitFrostWeight(capi.World, LodBakeScratch.Pos(x, y, z), out frost, out _, out _);
         }
         catch { }
         int mixed = MixSeasonGround(liveRgb, liveRgb, tex, tex, winter, frost);
@@ -357,7 +357,7 @@ public static class LodSurfaceMix
     {
         try
         {
-            return capi.World.Calendar.GetSeasonRel(new BlockPos(x, y, z));
+            return capi.World.Calendar.GetSeasonRel(LodBakeScratch.Pos(x, y, z));
         }
         catch
         {
@@ -534,7 +534,7 @@ public static class LodSurfaceMix
         ProbeFrostW = 0f;
         ProbeTexGroundRgb = 0;
         ProbeTexPlantRgb = 0;
-        var pos = new BlockPos(x, startY, z);
+        BlockPos pos = LodBakeScratch.Pos(x, startY, z);
         try
         {
             if (capi.World is IClientWorldAccessor world)

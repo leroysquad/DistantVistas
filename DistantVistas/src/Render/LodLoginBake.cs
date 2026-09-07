@@ -31,9 +31,9 @@ public sealed class LodLoginBake
     /// <summary>L0 neighbour disk at a stop. 12 × 64-block cells ≈ 768, matching the 750-block bake view.</summary>
     const int BatchBakeL0Radius = 12;
     const int MaxBatchBakePerStop = 256;
-    /// <summary>GetColor + persist per overlay tick. 12 keeps Windows responsive while hopping faster.</summary>
-    const int MaxBakePerTick = 12;
-    const int MaxLeftoverBakePerTick = 12;
+    /// <summary>GetColor + persist per overlay tick. 16 matches scout concurrency; still yields each frame.</summary>
+    const int MaxBakePerTick = 16;
+    const int MaxLeftoverBakePerTick = 16;
     const int SweepRowsPerCall = 2;
     const int RevealGrowPerTick = 8;
 
@@ -119,6 +119,7 @@ public sealed class LodLoginBake
     readonly List<long> oceanSampleKeys = new();
     readonly List<long> openOceanFillKeys = new();
     readonly List<long> stopBakeKeys = new();
+    readonly List<(long DistSq, long Key)> batchBakeCandidates = new();
     readonly List<long> leftoverKeys = new();
     readonly LodLoginScoutFill scoutFill = new();
     readonly Queue<long> scoutReady = new();
@@ -1113,7 +1114,7 @@ public sealed class LodLoginBake
     {
         int sx0 = LodWorld.KeySx(primaryKey);
         int sz0 = LodWorld.KeySz(primaryKey);
-        var candidates = new List<(long DistSq, long Key)>();
+        batchBakeCandidates.Clear();
 
         for (int dsz = -BatchBakeL0Radius; dsz <= BatchBakeL0Radius; dsz++)
         {
@@ -1126,14 +1127,14 @@ public sealed class LodLoginBake
                 if (!pipeline.World.Sections.TryGetValue(key, out LodSection? sec) || sec == null)
                     continue;
                 long dist = (long)dsx * dsx + (long)dsz * dsz;
-                candidates.Add((dist, key));
+                batchBakeCandidates.Add((dist, key));
             }
         }
 
-        candidates.Sort((a, b) => a.DistSq.CompareTo(b.DistSq));
-        var result = new List<long>(Math.Min(MaxBatchBakePerStop, candidates.Count));
-        for (int i = 0; i < candidates.Count && result.Count < MaxBatchBakePerStop; i++)
-            result.Add(candidates[i].Key);
+        batchBakeCandidates.Sort((a, b) => a.DistSq.CompareTo(b.DistSq));
+        var result = new List<long>(Math.Min(MaxBatchBakePerStop, batchBakeCandidates.Count));
+        for (int i = 0; i < batchBakeCandidates.Count && result.Count < MaxBatchBakePerStop; i++)
+            result.Add(batchBakeCandidates[i].Key);
         return result;
     }
 

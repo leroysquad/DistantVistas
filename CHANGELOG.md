@@ -1,3 +1,9 @@
+## 1.0.32
+- **Login bake GC / throughput (research branch).** Thread-local `LodBakeScratch` reuses `BlockPos` and per-column arrays during visit GetColor (~4096 samples/stop). Scout ready-list and batch-bake candidate lists are reused instead of allocated each tick/stop. `MaxBakePerTick` raised 12 → 16 to match scout concurrency (still yields every overlay frame).
+- **Efficiency plan:** `docs/plans/login-bake-efficiency.md` — citations + A-tier architectural options (near mesh-gate vs far capture-release, parallel bake queue, SIMD blur). No player teleports; spawn solid-mesh gate unchanged.
+- Drop `distantvistas_1.0.32.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+- **Verify:** overlay completes with solid spawn land; faster progress vs 1.0.30 on same world; scouts still despawn; pickup XYZ unchanged.
+
 ## 1.0.30
 - **Scout viewers are real player-style stream centers.** Vintage Story auto-loads around players, not around `SetChunkColumnVisible` tokens, and has no dummy-`IPlayer` API. Login bake spawns temporary `LodScoutViewer` entities on visit cells (staggered across the pickup-centered disk out to Farseer onset +700). Each viewer stays far from you (`AllowOutsideLoadedRange`, `AlwaysActive`, not saved with the chunk). The server also spawns one and KeepLoaded + ForceSend-s that neighbourhood to you; the client marks it visible around the viewer. Each scout stays until stream → capture → GetColor paint → LOD mesh, then despawns.
 - **The real player does not teleport.** Overlay pins the exact pickup X/Y/Z + facing every GUI frame and every pulse. Success, Esc, fail, and world-leave write those same doubles onto Pos and ServerPos. Hop-era `BeginNextStop` (visit-cell stream via the player) is gone.

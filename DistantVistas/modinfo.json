@@ -2,11 +2,11 @@
     "type":  "code",
     "modid":  "distantvistas",
     "name":  "Distant Vistas",
-    "version":  "1.0.30",
+    "version":  "1.0.32",
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.30. Player-style scout viewer entities bake while you stay at pickup; leftover hops snap back to the exact XYZ. Farseer gray tent + black tips. Vintage Horizons fork.",
+    "description":  "Official 1.0.32. Login bake GC cuts (BlockPos/column scratch pooling) + 16 GetColor steps/tick. Scout viewers unchanged. See docs/plans/login-bake-efficiency.md.",
     "authors":  [
                     "IllLeroySquad"
                 ],

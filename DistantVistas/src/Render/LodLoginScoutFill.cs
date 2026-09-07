@@ -30,6 +30,7 @@ public sealed class LodLoginScoutFill
     public const int LocalVisitRevealChunks = 16;
 
     readonly LodScoutEntity?[] slots = new LodScoutEntity[MaxConcurrent];
+    readonly List<long> readyScratch = new(MaxConcurrent);
     int liveCount;
 
     public int LiveCount => liveCount;
@@ -77,7 +78,8 @@ public sealed class LodLoginScoutFill
     {
         FinishedThisTick = 0;
         LastFinishedKey = null;
-        var ready = new List<long>(MaxConcurrent);
+        readyScratch.Clear();
+        var ready = readyScratch;
         int targetCap = Math.Max(ChunkVisibleRadius, chunkVisibleTarget);
 
         for (int i = 0; i < slots.Length; i++)

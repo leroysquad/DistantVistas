@@ -457,7 +457,7 @@ public static class LoginSweepChecks
             "login bake settles after each bake");
         c.True(bake.Contains("BatchBakeL0Radius = 12"),
             "login bake batch-bakes neighbour disk inside the 750-block view");
-        c.True(bake.Contains("MaxBakePerTick = 12"),
+        c.True(bake.Contains("MaxBakePerTick = 16"),
             "login bake spreads GetColor across overlay ticks");
         c.True(bake.Contains("CollectExpireLeftovers"),
             "expire leftovers are queued, not baked in one tick");
@@ -579,8 +579,12 @@ public static class LoginSweepChecks
             "viewers spawn through the world entity APIs");
         c.True(scoutViewer.Contains("IServerWorldAccessor") && scoutViewer.Contains("DespawnEntity"),
             "server teardown uses DespawnEntity, not only a client LoadedEntities.Remove");
-        c.True(scoutFill.Contains("LodScoutViewerEntity.SpawnAt(capi"),
-            "client fill spawns a viewer at the visit cell");
+        c.True(scoutFill.Contains("readyScratch"),
+            "scout fill reuses the ready-key list each tick");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSeasonBake.cs"))
+                .Contains("LodBakeScratch.RentColumnMeta"),
+            "visit bake pools per-column scratch arrays");
 
         string scoutHost = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Net", "LodScoutHostSystem.cs"));

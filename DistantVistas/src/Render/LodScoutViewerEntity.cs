@@ -145,6 +145,8 @@ public sealed class LodScoutViewerEntity : Entity
         try { world.LoadedEntities.Remove(id); } catch { }
     }
 
+    [ThreadStatic] static List<Entity>? despawnScratch;
+
     /// <summary>
     /// Tear down every scout viewer. Login overlay end, Esc, fail, and world-leave
     /// must leave the real player as the only render/stream center.
@@ -152,7 +154,8 @@ public sealed class LodScoutViewerEntity : Entity
     public static int DespawnAll(IWorldAccessor world)
     {
         if (world?.LoadedEntities == null) return 0;
-        var doomed = new List<Entity>();
+        List<Entity> doomed = despawnScratch ??= new List<Entity>(LodLoginScoutFill.MaxConcurrent);
+        doomed.Clear();
         foreach (Entity entity in world.LoadedEntities.Values)
         {
             if (entity is LodScoutViewerEntity)
