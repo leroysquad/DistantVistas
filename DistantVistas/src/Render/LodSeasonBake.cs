@@ -71,7 +71,7 @@ public static class LodSeasonBake
         if (!IsColumnMapLoaded(acc, x, z)) return false;
 
         int start = Math.Min(mapHeight - 1, Math.Max(storedY + 24, storedY));
-        var pos = new BlockPos(x, start, z);
+        BlockPos pos = LodBakeScratch.Pos(x, start, z);
         for (int py = start; py >= 1; py--)
         {
             pos.Y = py;
@@ -163,13 +163,12 @@ public static class LodSeasonBake
     {
         try
         {
-            var pos = new BlockPos(x, y, z);
-            int color = block.GetColor(capi, pos);
+            int color = block.GetColor(capi, LodBakeScratch.Pos(x, y, z));
             if (color != 0)
             {
                 // Pure GetColor. FlagFrost + mesher apply the wash so early-spring
                 // remesh thaws walls and crowns without rebaking every column.
-                _ = ApplyVisitFrost(capi.World, block, pos, color);
+                _ = ApplyVisitFrost(capi.World, block, LodBakeScratch.Pos(x, y, z), color);
                 // #region agent log
                 if (LodCanopyGray.IsSeasonFoliage(block))
                     FarCoverageDiag.NoteCanopySample(getColor: true, zero: false);
@@ -203,7 +202,7 @@ public static class LodSeasonBake
     {
         try
         {
-            var pos = new BlockPos(x, y, z);
+            BlockPos pos = LodBakeScratch.Pos(x, y, z);
             long r = 0, g = 0, b = 0;
             int n = 0;
             for (int i = 0; i < TextureMeanSamples; i++)
@@ -308,7 +307,7 @@ public static class LodSeasonBake
     public static bool VisitColumnFrost(
         IClientWorldAccessor world, int x, int y, int z, Block? block, string? path)
     {
-        TryVisitFrostWeight(world, new BlockPos(x, y, z), out float w, out _, out _);
+        TryVisitFrostWeight(world, LodBakeScratch.Pos(x, y, z), out float w, out _, out _);
         return ShouldFlagFrost(w, block, path);
     }
 
@@ -448,7 +447,7 @@ public static class LodSeasonBake
             sb = LodTopSoil.Dilute(share.B, sb);
 
             float temp = 128f;
-            ClimateCondition? cl = world.BlockAccessor.GetClimateAt(new BlockPos(x, world.SeaLevel, z));
+            ClimateCondition? cl = world.BlockAccessor.GetClimateAt(LodBakeScratch.Pos(x, world.SeaLevel, z));
             if (cl != null)
                 temp = LodTintRegistry.UnscaledTempByteFromCelsius(cl.WorldGenTemperature);
             float amt = LodTintRegistry.SeasonWeightFromTempByte(temp);
@@ -557,9 +556,7 @@ public static class LodSeasonBake
         int cols = gs * gs;
         int mapH = world.BlockAccessor.MapSizeY;
         LodSurfaceMix.Rent(cols, out int[] raw, out int[] blurred, out byte[] mask);
-        var tops = new Block?[cols];
-        var topY = new int[cols];
-        var frostCol = new bool[cols];
+        LodBakeScratch.RentColumnMeta(cols, out Block?[] tops, out int[] topY, out bool[] frostCol);
         int nLand = 0, nSnowTop = 0, nPlantTop = 0, nGroundTop = 0;
         long sumTopR = 0, sumMixR = 0, sumBlurR = 0, sumFinalR = 0;
         int nKeepChanged = 0, nSkipped = 0;

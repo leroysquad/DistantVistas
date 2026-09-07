@@ -40,7 +40,7 @@ public sealed class LodLoginScoutFill
     readonly LodScoutEntity?[] slots = new LodScoutEntity[MaxConcurrent];
     readonly Queue<long> heldNear = new();
     readonly Queue<long> heldFar = new();
-    readonly List<long> readyBuf = new(MaxConcurrent);
+    readonly List<long> readyScratch = new(MaxConcurrent);
     int liveCount;
 
     public int LiveCount => liveCount;
@@ -57,7 +57,7 @@ public sealed class LodLoginScoutFill
         for (int i = 0; i < slots.Length; i++) slots[i] = null;
         heldNear.Clear();
         heldFar.Clear();
-        readyBuf.Clear();
+        readyScratch.Clear();
         liveCount = 0;
         FinishedThisTick = 0;
         LastFinishedKey = null;
@@ -120,7 +120,7 @@ public sealed class LodLoginScoutFill
     {
         FinishedThisTick = 0;
         LastFinishedKey = null;
-        readyBuf.Clear();
+        readyScratch.Clear();
         int targetCap = Math.Min(
             LocalVisitRevealChunks,
             Math.Max(ChunkVisibleRadius, chunkVisibleTarget));
@@ -195,7 +195,7 @@ public sealed class LodLoginScoutFill
 
                 if (!scout.PaintQueued)
                 {
-                    readyBuf.Add(key);
+                    readyScratch.Add(key);
                     LastFinishedKey = key;
                     FinishedThisTick++;
                     scout.PaintQueued = true;
@@ -230,7 +230,7 @@ public sealed class LodLoginScoutFill
         }
 
         liveCount = CountLive();
-        return readyBuf;
+        return readyScratch;
     }
 
     void CountLiveMix(out int nearLive, out int farLive)

@@ -33,7 +33,7 @@ public sealed class LodLoginBake
     const int MaxBatchBakePerStop = 32;
     /// <summary>GetColor + persist per overlay tick across all live scouts, not one stop.</summary>
     const int MaxBakePerTick = 24;
-    const int MaxLeftoverBakePerTick = 12;
+    const int MaxLeftoverBakePerTick = 16;
     const int SweepRowsPerCall = 2;
     const int RevealGrowPerTick = 8;
     const int SpawnSweepEveryTicks = 4;
@@ -120,6 +120,8 @@ public sealed class LodLoginBake
     readonly List<long> oceanSampleKeys = new();
     readonly List<long> openOceanFillKeys = new();
     readonly List<long> stopBakeKeys = new();
+    readonly List<(long DistSq, long Key)> batchBakeCandidates = new();
+    readonly List<long> batchBakeResult = new();
     readonly List<long> leftoverKeys = new();
     readonly LodLoginScoutFill scoutFill = new();
     readonly Queue<long> scoutReady = new();
@@ -1123,7 +1125,8 @@ public sealed class LodLoginBake
     {
         int sx0 = LodWorld.KeySx(primaryKey);
         int sz0 = LodWorld.KeySz(primaryKey);
-        var candidates = new List<(long DistSq, long Key)>();
+        batchBakeCandidates.Clear();
+        batchBakeResult.Clear();
 
         for (int dsz = -BatchBakeL0Radius; dsz <= BatchBakeL0Radius; dsz++)
         {
@@ -1136,15 +1139,15 @@ public sealed class LodLoginBake
                 if (!pipeline.World.Sections.TryGetValue(key, out LodSection? sec) || sec == null)
                     continue;
                 long dist = (long)dsx * dsx + (long)dsz * dsz;
-                candidates.Add((dist, key));
+                batchBakeCandidates.Add((dist, key));
             }
         }
 
-        candidates.Sort((a, b) => a.DistSq.CompareTo(b.DistSq));
-        var result = new List<long>(Math.Min(MaxBatchBakePerStop, candidates.Count));
-        for (int i = 0; i < candidates.Count && result.Count < MaxBatchBakePerStop; i++)
-            result.Add(candidates[i].Key);
-        return result;
+        batchBakeCandidates.Sort((a, b) => a.DistSq.CompareTo(b.DistSq));
+        int cap = Math.Min(MaxBatchBakePerStop, batchBakeCandidates.Count);
+        for (int i = 0; i < cap; i++)
+            batchBakeResult.Add(batchBakeCandidates[i].Key);
+        return batchBakeResult;
     }
 
     /// <summary>

@@ -1,3 +1,9 @@
+## 1.0.32
+- **Login bake speed (A-tier) plus GetColor GC cuts (B-tier).** 1.0.31 already runs 16 scouts in parallel (8 near mesh-wait / 8 far FlagBaked-release) and paints `scoutReady` each tick instead of one serial `BakeBatchAtStop`. 1.0.32 folds the research-branch micro-wins: thread-local `LodBakeScratch` `BlockPos` + `ArrayPool` column arrays (cuts Gen0 from ~4096 GetColor samples/stop), reused scout `readyScratch` / batch-bake candidate / despawn lists. `MaxBakePerTick` stays **24** (research raised 12→16; overlay already needed more to drain parallel captures). Plan + citations: `docs/plans/login-bake-efficiency.md`.
+- **1.22.7 compile** kept (`UpdatePartitioning` reflection; `LoadedEntities` via `IServerWorldAccessor`). Player still does not teleport. Exact pickup XYZ. Gray tent + black tips.
+- Drop `distantvistas_1.0.32.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+- **Verify:** overlay shows 16/16 scouts within seconds and % moves every few seconds; after overlay, no holes underfoot; far land fills in; FPS back; same X/Y/Z as pickup.
+
 ## 1.0.31
 - **Login bake speed.** 1.0.30 could sit on `1/16` while painting one stop's neighbour disk and waiting for far meshes. All **16** scout viewers now start together (**8** near mesh-wait + **8** far paint-release, so spawn-first queues do not stall the overlay). GetColor runs across captured scouts each tick (not one serial `currentKey`). Overlay % / scout count updates on detail change and at least every 3s.
 - **Two-tier scout gate.** Inside 1024 blocks of pickup: stream → capture → GetColor → wait for a drawable mesh (spawn-solid unchanged). Toward Farseer onset +700: release after stream → capture → FlagBaked paint; meshes fill in under the splash / drain.

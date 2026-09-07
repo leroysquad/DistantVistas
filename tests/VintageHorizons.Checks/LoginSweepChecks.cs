@@ -465,6 +465,8 @@ public static class LoginSweepChecks
             "overlay visit paint is the visit cell, not a 750-block neighbour disk");
         c.True(bake.Contains("MaxBakePerTick = 24"),
             "login bake paints many captured scouts per overlay tick");
+        c.True(bake.Contains("MaxLeftoverBakePerTick = 16"),
+            "expire leftover GetColor is 16/tick (research 12→16)");
         c.True(bake.Contains("CollectExpireLeftovers"),
             "expire leftovers are queued, not baked in one tick");
         c.True(bake.Contains("RequestChunkColumnRing"),
@@ -571,6 +573,23 @@ public static class LoginSweepChecks
             "scouts stay until GetColor paint, then near waits mesh / far despawns");
         c.True(scoutFill.Contains("NotifyPainted"),
             "paint completion unblocks the scout slot so the next pending cell can start");
+        c.True(scoutFill.Contains("readyScratch"),
+            "scout fill reuses the ready-key list each tick");
+        c.True(bake.Contains("batchBakeCandidates"),
+            "expire leftover candidate list is reused, not allocated per stop");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSeasonBake.cs"))
+                .Contains("LodBakeScratch.RentColumnMeta"),
+            "visit bake pools per-column scratch arrays");
+        string bakeScratch = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodBakeScratch.cs"));
+        c.True(bakeScratch.Contains("ArrayPool"),
+            "column meta arrays come from ArrayPool, not new T[4096] each stop");
+        c.True(bakeScratch.Contains("ThreadStatic"),
+            "BlockPos scratch is thread-local so GetColor does not allocate per column");
+        c.True(File.Exists(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-efficiency.md")),
+            "efficiency plan (citations + A/B tiers) ships in-repo");
         c.True(scoutFill.Contains("MaxNearConcurrent"),
             "near mesh-wait scouts do not occupy all 16 slots");
         c.True(scoutFill.Contains("heldFar"),
@@ -634,6 +653,8 @@ public static class LoginSweepChecks
             "viewers spawn through the world entity APIs");
         c.True(scoutViewer.Contains("IServerWorldAccessor") && scoutViewer.Contains("DespawnEntity"),
             "server teardown uses DespawnEntity, not only a client LoadedEntities.Remove");
+        c.True(scoutViewer.Contains("despawnScratch"),
+            "teardown reuses the scout despawn list");
         c.True(scoutFill.Contains("LodScoutViewerEntity.SpawnAt(capi"),
             "client fill spawns a viewer at the visit cell");
 
