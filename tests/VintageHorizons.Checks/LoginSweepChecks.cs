@@ -693,6 +693,20 @@ public static class LoginSweepChecks
             "chunk wait safety cap ~1.2s at 50ms pulse");
         c.Eq(6, LodLoginScoutFill.MaxCaptureWaitTicks,
             "capture hands off or stalls out at ~300ms");
+        c.True(scoutFill.Contains("TryResidentPaintHandoff"),
+            "HasDataSet revisits hand off to paint without long WaitChunks");
+        c.True(scoutFill.Contains("SetPaintStarving"),
+            "paint queue starvation tightens scout wait budgets");
+        c.Eq(64, LodLoginScoutFill.ResidentFastHandoffCols,
+            "resident sections with full footprint skip WaitChunks");
+        c.Eq(4, LodLoginScoutFill.PaintStarveForceCaptureTicks,
+            "starving scouts force Capture at ~200ms");
+        c.True(bake.Contains("paintStarveTicks"),
+            "overlay detects empty paint queue while scouts live");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
+                .Contains("paintStarveTicks"),
+            "scout-budget telemetry includes paint starvation watchdog");
         c.True(scoutFill.Contains("RequestUpRetryTicks"),
             "scouts retry KeepLoaded if the server refused an Up at the hold cap");
         c.True(bake.Contains("scoutFill.HeldCount"),

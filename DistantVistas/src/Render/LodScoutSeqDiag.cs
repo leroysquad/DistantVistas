@@ -32,6 +32,7 @@ public static class LodScoutSeqDiag
     static int paintMaxBakePerTick;
     static double paintMaxWallMs;
     static int paintScoutReady;
+    static int paintStarveTicks;
 
     static readonly Dictionary<long, long> lastReleaseMsByKey = new();
     static readonly Dictionary<int, (LodScoutEntity.Phase Phase, long Ms)> lastPhaseLogBySlot = new();
@@ -52,6 +53,7 @@ public static class LodScoutSeqDiag
         paintMaxBakePerTick = 0;
         paintMaxWallMs = 0;
         paintScoutReady = 0;
+        paintStarveTicks = 0;
         lastReleaseMsByKey.Clear();
         lastPhaseLogBySlot.Clear();
         lastHostUpMsByKey.Clear();
@@ -65,6 +67,8 @@ public static class LodScoutSeqDiag
         paintMaxWallMs = maxPaintWallMs;
         paintScoutReady = scoutReadyCount;
     }
+
+    public static void NotePaintStarve(int ticks) => paintStarveTicks = ticks;
 
     public static void LogSpawn(
         int slot,
@@ -203,6 +207,7 @@ public static class LodScoutSeqDiag
             + ",\"maxBakePerTick\":" + paintMaxBakePerTick
             + ",\"maxPaintWallMs\":" + paintMaxWallMs.ToString("0.#", Inv)
             + ",\"paintReadyQueued\":" + paintScoutReady
+            + ",\"paintStarveTicks\":" + paintStarveTicks
             + "}");
 
         spawnsWindow = 0;

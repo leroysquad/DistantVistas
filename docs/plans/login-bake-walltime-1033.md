@@ -211,3 +211,30 @@ Invariants unchanged: no teleports; scout viewers; exact pickup; spawn-solid 102
 | `avgNearTicks` / `avgFarTicks` | ~62 / ~120 | **teens–25** |
 | Capture vs WaitChunks phase count | 1279 vs 2710 | **Capture ≥ WaitChunks** |
 | Freeze dead-end | rare | **none** (Capture @ 8 + handoff @ 4) |
+
+## 1.0.36 ~358 band fix (~14:01 PT playtest)
+
+**Symptom:** `finished` climbs **229→358** then stalls; `paintReadyQueued=0` in **119/124** budget samples; `nearLive=8` `farLive=8`; **WaitChunks 3878 vs Capture 755**; `maxWait 181` vs `painted 129`; `avgNearTicks≈48` `avgFarTicks≈96`.
+
+**Root cause:** After inner spawn keys finish, remaining pending is outer **Farseer rim revisits**. Scouts park in **WaitChunks** streaming visit-cell chunks while **HasDataSet** sections on disk already hold captured columns. WaitChunks caps + maxWait requeue starve `scoutReady` / `paintReadyQueued` — same ~306–358 band as pre-1.0.36.
+
+**Shipped (358 unblock):**
+
+| Fix | Change |
+|-----|--------|
+| Resident paint handoff | **`TryResidentPaintHandoff`**: HasDataSet + **≥64 cols** → **`residentPaint`** without full map wait |
+| Starve mode | **`paintStarveTicks`** watchdog (≥8 ticks empty paint + live scouts) → **`SetPaintStarving`** |
+| Tighter starve waits | Force Capture **4 ticks**; rotate **8 ticks / min 4**; Capture handoff **tick 1** |
+| Resident-first pending | **`SelectPendingIndex`** scores **`ResidentCaptureCols`**; bypass WaitChunks caps when starving |
+| Key retry bypass | Keys with **≥64 resident cols** skip **`MaxWaitKeyedRetries`** deferral |
+| Telemetry | **`paintStarveTicks`** in H-SCOUT-SEQ scout-budget |
+
+**Expect after 358 fix:**
+
+| Signal | 1.0.35 @358 stall | Target |
+|--------|-------------------|--------|
+| `finished` past 358 | stalls | **climbs through outer rim** |
+| `paintReadyQueued` | ~0% | **>0 within 8 ticks of starve** |
+| WaitChunks vs Capture | 3878 vs 755 | **`residentPaint` releases**; Capture catches up |
+| `maxWait` vs `painted` | 181 vs 129 | **`painted` ≫ `maxWait`** |
+| Release reasons | maxWait-heavy | **`residentPaint` / `residentStarve` / `waitExpirePaint`** |

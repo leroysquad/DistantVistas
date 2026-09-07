@@ -140,6 +140,7 @@ public sealed class LodLoginBake
     int lastResumeSavedFinished;
     long lastResumeSaveMs;
     int sweepingTicks;
+    int paintStarveTicks;
     int revealRadius;
     int stopBakeIndex;
     bool stopBakePrepared;
@@ -302,6 +303,7 @@ public sealed class LodLoginBake
         scoutReady.Clear();
         paintResumeCol.Clear();
         sweepingTicks = 0;
+        paintStarveTicks = 0;
 
         overlay.Show();
         renderer.LoginBakeOverlayActive = true;
@@ -748,6 +750,13 @@ public sealed class LodLoginBake
         if (sweepingTicks == 1 || sweepingTicks % SpawnRevealEveryTicks == 0)
             GrowRevealAroundSpawn();
         PinPickupPose();
+
+        if (scoutFill.LiveCount > 0 && scoutReady.Count == 0)
+            paintStarveTicks++;
+        else
+            paintStarveTicks = 0;
+        scoutFill.SetPaintStarving(paintStarveTicks >= 8);
+        LodScoutSeqDiag.NotePaintStarve(paintStarveTicks);
 
         List<long> ready = scoutFill.Tick(
             capi, pipeline, renderer, pending, completedKeys,
