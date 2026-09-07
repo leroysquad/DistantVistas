@@ -6,7 +6,7 @@
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.30. Player stays at pickup while scout workers bake; leftover hops snap back to the exact XYZ. Farseer gray tent + black tips. Vintage Horizons fork.",
+    "description":  "Official 1.0.30. Player-style scout viewer entities bake while you stay at pickup; leftover hops snap back to the exact XYZ. Farseer gray tent + black tips. Vintage Horizons fork.",
     "authors":  [
                     "IllLeroySquad"
                 ],

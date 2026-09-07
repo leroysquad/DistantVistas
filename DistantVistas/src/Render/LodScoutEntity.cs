@@ -1,20 +1,27 @@
 namespace DistantVistas;
 
 /// <summary>
-/// One staggered coverage scout. Not a Vintage Story <c>Entity</c>: Distant Vistas is
-/// client-only, so a custom entity class cannot spawn on a vanilla server and would
-/// not load chunks there anyway. Each scout force-loads one L0 via
-/// <see cref="LodLoginBakePlayerMove.RequestChunkColumnsVisible"/>, then despawns.
+/// One staggered coverage scout. A real <see cref="LodScoutViewerEntity"/> sits on the
+/// visit cell so Vintage Story has a player-style stream/render center there. The
+/// human player never moves to that cell. After stream → capture → paint → mesh,
+/// the viewer despawns.
 /// </summary>
 public sealed class LodScoutEntity
 {
-    public enum Phase : byte { WaitChunks, Capture, Bake }
+    public enum Phase : byte { WaitChunks, Capture, Mesh, Done }
 
     public long Key { get; }
     public Phase Current { get; set; }
     public int Ticks { get; set; }
     public int RevealRadius { get; set; }
     public bool Live { get; set; }
+    public LodScoutViewerEntity? Viewer { get; set; }
+    public double X { get; set; }
+    public double Y { get; set; }
+    public double Z { get; set; }
+    public int Cx { get; set; }
+    public int Cz { get; set; }
+    public bool PaintQueued { get; set; }
 
     public LodScoutEntity(long key)
     {

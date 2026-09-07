@@ -206,7 +206,7 @@ public static class StaticAssetChecks
             "lodterrain.fsh names low-ground mist flatness");
         c.True(fsh.Contains("lowMist"),
             "lodterrain.fsh keeps the 1.0.25 low-ground mist wash");
-        c.True(fsh.Contains("flatness * 0.03"),
+        c.True(fsh.Contains("flatness * 0.015"),
             "lodterrain.fsh thins near-ground mist so login does not wash desert into a white blob");
         c.True(fsh.Contains("lowMistCol"),
             "lodterrain.fsh lightens low-ground mist toward pale fog");
@@ -275,7 +275,7 @@ public static class StaticAssetChecks
             "farseer overlay keeps a little far/top ink, not a hard wall");
         c.True(fsh.Contains("0.0, 0.24)"),
             "1.0.28 ridge-ink cap kept -- coverage must not flatten the silhouette to empty black");
-        c.True(fsh.Contains("(1.0 - height01) * 0.06"),
+        c.True(fsh.Contains("(1.0 - height01) * 0.03"),
             "farseer overlay cuts low-ground smoke so near terrain is not a white blob");
         c.False(fsh.Contains("onsetMist"),
             "farseer overlay is the 1.0.18 mist wash (no onsetMist lean cloud)");

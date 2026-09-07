@@ -28,10 +28,10 @@ public sealed class LodLoginSweepTiming
     /// Fallback per-stop seconds only when this machine has no measured samples yet.
     /// Concurrent scouts have no hop cost; slow PCs remeasure upward from live stops.
     /// </summary>
-    public const double InitialSecPerStop = 0.5;
+    public const double InitialSecPerStop = 0.25;
 
-    public const int MinVisitStops = 240;
-    public const int MaxVisitStops = 840;
+    public const int MinVisitStops = 480;
+    public const int MaxVisitStops = 1680;
     public const int MinRetryStops = 36;
     public const int MaxRetryStops = 96;
 
@@ -45,10 +45,10 @@ public sealed class LodLoginSweepTiming
     int lastFinished;
 
     public static void SetMachineSecPerStop(double secPerStop) =>
-        MachineSecPerStop = Math.Clamp(secPerStop, 0.5, 6.0);
+        MachineSecPerStop = Math.Clamp(secPerStop, 0.25, 6.0);
 
     public void Seed(double secPerStop) =>
-        seeded = Math.Clamp(secPerStop, 0.5, 6.0);
+        seeded = Math.Clamp(secPerStop, 0.25, 6.0);
 
     public void BeginSession(double seededSec)
     {
@@ -110,13 +110,13 @@ public sealed class LodLoginSweepTiming
     /// </summary>
     public static int VisitStopBudget(double secPerStop, double targetMaxSec) =>
         (int)Math.Clamp(
-            Math.Round(targetMaxSec / Math.Max(0.5, secPerStop)),
+            Math.Round(targetMaxSec / Math.Max(InitialSecPerStop, secPerStop)),
             MinVisitStops,
             MaxVisitStops);
 
     public static int RetryStopBudget(double secPerStop) =>
         (int)Math.Clamp(
-            Math.Round(RetryTargetSec / Math.Max(0.5, secPerStop)),
+            Math.Round(RetryTargetSec / Math.Max(InitialSecPerStop, secPerStop)),
             MinRetryStops,
             MaxRetryStops);
 

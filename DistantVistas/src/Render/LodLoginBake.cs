@@ -10,11 +10,11 @@ namespace DistantVistas;
 /// <summary>
 /// Login visit sweep — gather live season truth at each visited square.
 ///
-/// Purpose (locked): during the HUD overlay, staggered <see cref="LodScoutEntity"/>
-/// workers force-load distant columns (SetChunkColumnVisible) without moving the
-/// player. The mod recaptures voxel columns from that streamed terrain and
-/// season-bakes palette colours per column top. Those canvases persist to SQLite.
-/// This is NOT a finalize-time recolor of unloaded cache rows.
+/// Purpose (locked): during the HUD overlay, staggered <see cref="LodScoutViewerEntity"/>
+/// workers sit on visit cells as player-style stream/render centers. The real player
+/// never teleports. Each scout force-loads that neighbourhood (KeepLoaded + ForceSend
+/// + SetChunkColumnVisible around the viewer), captures, GetColor-bakes, waits for a
+/// LOD mesh, then despawns. Canvases persist to SQLite.
 /// </summary>
 public sealed class LodLoginBake
 {
@@ -35,10 +35,10 @@ public sealed class LodLoginBake
     const int MaxBakePerTick = 12;
     const int MaxLeftoverBakePerTick = 12;
     const int SweepRowsPerCall = 2;
-    const int RevealGrowPerTick = 4;
+    const int RevealGrowPerTick = 8;
 
     /// <summary>Near-field disk that must have drawable meshes before overlay Hide.</summary>
-    public const double SpawnSolidRadiusBlocks = 768;
+    public const double SpawnSolidRadiusBlocks = 1024;
 
     /// <summary>
     /// Extra overlay hold after visit drain so spawn holes and a half-empty
@@ -47,7 +47,7 @@ public sealed class LodLoginBake
     public const double SpawnReadyTimeoutSec = 90.0;
 
     /// <summary>Far canvas is ready at this fraction of Farseer-onset radius.</summary>
-    public const float FarReadyHorizonScale = 0.5f;
+    public const float FarReadyHorizonScale = 0.75f;
 
     const int StabilizeWindowFrames = 90;
     const int StabilizeWindowsRequired = 4;
@@ -184,6 +184,7 @@ public sealed class LodLoginBake
         seasonSamples = new LodSeasonSampleExporter(capi);
         statusWriter = new LodLoginSweepStatusWriter(capi);
         overlay.OnCancelRequested = CancelAndSave;
+        overlay.OnRenderPin = FreezePickupPose;
     }
 
     /// <summary>Escape during the overlay — save remaining queue, put the player home, leave to the menu.</summary>
@@ -279,7 +280,7 @@ public sealed class LodLoginBake
         stopBakeKeys.Clear();
         revealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
         spawnRevealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
-        scoutFill.Reset();
+        scoutFill.Reset(capi);
         scoutReady.Clear();
 
         overlay.Show();
@@ -713,7 +714,7 @@ public sealed class LodLoginBake
         if (loggedTeleportBegin) return;
         loggedTeleportBegin = true;
         capi.Logger.Notification(
-            "[DistantVistas] Login visit sweep: scout workers visit chunk columns — player stays at spawn — {0} L0 region{1}.",
+            "[DistantVistas] Login visit sweep: scout viewer entities stream visit cells — player stays at pickup — {0} L0 region{1}.",
             total, total == 1 ? "" : "s");
     }
 
@@ -725,7 +726,10 @@ public sealed class LodLoginBake
         PinPickupPose();
 
         List<long> ready = scoutFill.Tick(
-            capi, pipeline, pending, completedKeys, LodLoginScoutFill.LocalVisitRevealChunks);
+            capi, pipeline, renderer, pending, completedKeys,
+            LodLoginScoutFill.LocalVisitRevealChunks,
+            viewBoost.ChunkVisibleRadius,
+            pickupX, pickupZ);
         PinPickupPose();
         for (int i = 0; i < ready.Count; i++)
             scoutReady.Enqueue(ready[i]);
@@ -933,33 +937,6 @@ public sealed class LodLoginBake
         return $"{sweepModeLabel} — {finished + 1}/{total} — ";
     }
 
-    void BeginNextStop()
-    {
-        pipeline.PurgeUnloadedPendingColumns();
-        while (pending.Count > 0)
-        {
-            long key = pending.Dequeue();
-            if (completedKeys.Contains(key)) continue;
-
-            currentKey = key;
-            stopPhase = StopPhase.WaitChunks;
-            stopTicks = 0;
-            stopBakePrepared = false;
-            stopBakeIndex = 0;
-            stopBakeKeys.Clear();
-            revealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
-
-            (double x, double y, double z) = LodLoginSweep.VisitPosition(capi.World, key);
-            // 1.0.25: stream chunks without hopping the player (Pause-on-Start / AFK).
-            LodLoginBakePlayerMove.RequestChunkColumnsVisible(
-                capi, x, z, capi.World.Player.Entity.Pos.Dimension, revealRadius);
-            stopPhase = StopPhase.WaitChunks;
-            UpdateProgress(Progress,
-                StatusWithEta($"{VisitPrefix()}scouting region… ({Pct(finished, total)})"));
-            return;
-        }
-    }
-
     void SweepColumnsAround(long l0Key)
     {
         (double x, _, double z) = LodLoginSweep.VisitPosition(capi.World, l0Key);
@@ -1106,13 +1083,10 @@ public sealed class LodLoginBake
 
     void GrowRevealAround(long l0Key)
     {
-        int target = LodLoginScoutFill.LocalVisitRevealChunks;
-        if (revealRadius >= target) return;
-        int before = revealRadius;
-        revealRadius = Math.Min(target, revealRadius + RevealGrowPerTick);
-        (double x, _, double z) = LodLoginSweep.VisitPosition(capi.World, l0Key);
-        LodLoginBakePlayerMove.RequestChunkColumnRing(
-            capi, x, z, capi.World.Player.Entity.Pos.Dimension, before, revealRadius);
+        // Visit-cell rings hopped the player in 1.0.29. Coverage streams from pickup.
+        _ = l0Key;
+        GrowRevealAroundSpawn();
+        FreezePickupPose();
     }
 
     void GrowRevealAroundSpawn()
@@ -1394,7 +1368,7 @@ public sealed class LodLoginBake
         renderer.LoginBakeOverlayActive = false;
         renderer.LoginBakeComplete = true;
         progressUi.Reset();
-        scoutFill.Reset();
+        scoutFill.Reset(capi);
         scoutReady.Clear();
 
         if (success)
@@ -1723,9 +1697,11 @@ public sealed class LodLoginBake
     }
 
     /// <summary>
-    /// Keep the local player at the exact pickup XYZ + facing for the whole overlay.
-    /// If anything still hopped Pos or ServerPos, write the original doubles back.
+    /// Public freeze for overlay render frames and the pulse. Pos must not change
+    /// while the splash is up — that is the scout-path contract.
     /// </summary>
+    public void FreezePickupPose() => PinPickupPose();
+
     void PinPickupPose()
     {
         IClientPlayer player = capi.World.Player;

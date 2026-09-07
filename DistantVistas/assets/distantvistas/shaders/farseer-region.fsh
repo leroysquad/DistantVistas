@@ -81,7 +81,7 @@ void main()
     vec3 smokeGray = mix(rgbaFog.rgb, vec3(0.62, 0.64, 0.67), 0.55);
     float height01 = clamp((yLevel - float(seaLevel)) / 90.0, 0.0, 1.0);
     float nearRim = 1.0 - smoothstep(0.35, 0.85, dist);
-    float smokeAmt = clamp(0.18 + nearRim * 0.28 + (1.0 - height01) * 0.06, 0.0, 0.55);
+    float smokeAmt = clamp(0.18 + nearRim * 0.18 + (1.0 - height01) * 0.03, 0.0, 0.42);
     // 1.0.28: extra ridge/far-tip ink so the skyline reads against sky.
     float inkAmt = clamp(
         smoothstep(0.62, 1.0, dist) * 0.16 * height01

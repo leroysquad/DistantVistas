@@ -33,8 +33,13 @@ public sealed class LodLoginSweepTimingStore
     public static void EnsureApplied(ICoreClientAPI capi, LodLoginSweepTiming timing)
     {
         LodLoginSweepTimingStore data = TryLoad(capi) ?? HarvestAndSave(capi);
-        LodLoginSweepTiming.SetMachineSecPerStop(data.SecPerStop);
-        timing.BeginSession(data.SecPerStop);
+        // Hop-era 0.5s+ samples undercount scout-viewer density. Plan from the
+        // no-hop fallback unless this PC already measured faster.
+        double sec = data.SecPerStop;
+        if (sec > LodLoginSweepTiming.InitialSecPerStop)
+            sec = LodLoginSweepTiming.InitialSecPerStop;
+        LodLoginSweepTiming.SetMachineSecPerStop(sec);
+        timing.BeginSession(sec);
         capi.Logger.Notification(
             "[DistantVistas] Login visit sweep: ETA from this PC -- {0:0.00}s/stop ({1}, {2} samples) -> ~{3} first pass / {4} retry.",
             LodLoginSweepTiming.MachineSecPerStop,
@@ -213,7 +218,8 @@ public sealed class LodLoginSweepTimingStore
 
     static bool IsSweepBeginLog(string line) =>
         line.Contains("quiet teleports begin", StringComparison.Ordinal)
-        || line.Contains("scout workers visit chunk columns", StringComparison.Ordinal);
+        || line.Contains("scout workers visit chunk columns", StringComparison.Ordinal)
+        || line.Contains("scout viewer entities stream visit cells", StringComparison.Ordinal);
 
     static bool TryParseBeginStops(string line, out int stops)
     {
@@ -224,6 +230,11 @@ public sealed class LodLoginSweepTimingStore
         {
             mark = line.IndexOf("scout workers visit chunk columns", StringComparison.Ordinal);
             markLen = "scout workers visit chunk columns".Length;
+        }
+        if (mark < 0)
+        {
+            mark = line.IndexOf("scout viewer entities stream visit cells", StringComparison.Ordinal);
+            markLen = "scout viewer entities stream visit cells".Length;
         }
         if (mark < 0) return false;
         for (int i = mark + markLen; i < line.Length; i++)

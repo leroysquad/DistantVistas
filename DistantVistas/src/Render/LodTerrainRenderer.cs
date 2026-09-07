@@ -681,7 +681,7 @@ public class LodTerrainRenderer : IRenderer
     }
 
     /// <summary>Real GPU land/water. Empty claims must not count as coverage.</summary>
-    bool HasDrawableMesh(long key) =>
+    public bool HasDrawableMesh(long key) =>
         sectionMeshes.ContainsKey(key) || waterMeshes.ContainsKey(key);
 
     /// <summary>

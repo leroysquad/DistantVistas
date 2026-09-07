@@ -5,18 +5,18 @@ using Vintagestory.API.Config;
 namespace DistantVistas;
 
 /// <summary>
-/// Login-overlay coverage without hopping the player: stagger
-/// <see cref="LodScoutEntity"/> workers that
-/// <see cref="LodLoginBakePlayerMove.RequestChunkColumnsVisible"/> at planned
-/// L0 cells, capture+GetColor bake when map chunks land, then despawn.
-/// Concurrency is capped so the client does not flood. Overlay stays up;
-/// Esc cancel still owned by <see cref="LodLoginBake"/>.
+/// Login-overlay coverage without hopping the player: stagger real
+/// <see cref="LodScoutViewerEntity"/> workers. Each viewer is a player-style
+/// stream/render center at a visit cell (server KeepLoaded + ForceSend, client
+/// SetChunkColumnVisible around the entity). Capture + GetColor + LOD mesh, then
+/// despawn. Overlay stays up; Esc cancel still owned by <see cref="LodLoginBake"/>.
 /// </summary>
 public sealed class LodLoginScoutFill
 {
-    public const int MaxConcurrent = 12;
-    public const int MaxWaitTicks = 100;
+    public const int MaxConcurrent = 16;
+    public const int MaxWaitTicks = 400;
     public const int MaxCaptureWaitTicks = 80;
+    public const int MaxMeshWaitTicks = 120;
     public const int ChunkVisibleRadius = 2;
     public const int SweepRadiusChunks = 3;
     public const int SweepRowsPerCall = 2;
@@ -27,7 +27,7 @@ public sealed class LodLoginScoutFill
     /// black tips). Growing this to the full onset disk would request columns
     /// past that skyline into empty sky.
     /// </summary>
-    public const int LocalVisitRevealChunks = 24;
+    public const int LocalVisitRevealChunks = 16;
 
     readonly LodScoutEntity?[] slots = new LodScoutEntity[MaxConcurrent];
     int liveCount;
@@ -36,8 +36,12 @@ public sealed class LodLoginScoutFill
     public int FinishedThisTick { get; private set; }
     public long? LastFinishedKey { get; private set; }
 
-    public void Reset()
+    public void Reset(ICoreClientAPI? capi = null)
     {
+        DespawnLive(capi);
+        LodScoutHostSystem.ClientInstance?.RequestClear();
+        if (capi != null)
+            LodScoutViewerEntity.DespawnAll(capi.World);
         for (int i = 0; i < slots.Length; i++) slots[i] = null;
         liveCount = 0;
         FinishedThisTick = 0;
@@ -57,19 +61,24 @@ public sealed class LodLoginScoutFill
 
     /// <summary>
     /// Advance active scouts and pull new keys from <paramref name="pending"/>.
-    /// Returns keys that finished capture this tick (caller bakes + marks done).
+    /// Each scout is a viewer entity at the visit cell. Returns keys that finished
+    /// capture this tick (ready to GetColor-paint). Viewers stay until mesh exists.
     /// </summary>
     public List<long> Tick(
         ICoreClientAPI capi,
         LodPipeline pipeline,
+        LodTerrainRenderer renderer,
         Queue<long> pending,
         HashSet<long> completedKeys,
-        int chunkVisibleTarget)
+        int chunkVisibleTarget,
+        int onsetChunks,
+        double pickupX,
+        double pickupZ)
     {
         FinishedThisTick = 0;
         LastFinishedKey = null;
         var ready = new List<long>(MaxConcurrent);
-        int target = Math.Max(ChunkVisibleRadius, chunkVisibleTarget);
+        int targetCap = Math.Max(ChunkVisibleRadius, chunkVisibleTarget);
 
         for (int i = 0; i < slots.Length; i++)
         {
@@ -78,7 +87,7 @@ public sealed class LodLoginScoutFill
             {
                 long key = pending.Dequeue();
                 if (completedKeys.Contains(key)) continue;
-                StartSlot(capi, i, key);
+                StartSlot(capi, i, key, pickupX, pickupZ, onsetChunks, targetCap);
                 break;
             }
         }
@@ -89,15 +98,16 @@ public sealed class LodLoginScoutFill
             if (scout is not { Live: true }) continue;
             long key = scout.Key;
             scout.Ticks++;
+            HoldViewer(scout);
 
-            var (x, _, z) = LodLoginSweep.VisitPosition(capi.World, key);
             int dim = capi.World.Player.Entity.Pos.Dimension;
-            GrowReveal(capi, scout, x, z, dim, target);
+            int target = ClampReveal(scout, pickupX, pickupZ, onsetChunks, targetCap);
+            GrowReveal(capi, scout, dim, target);
 
             if (scout.Current == LodScoutEntity.Phase.WaitChunks)
             {
-                int cx = (int)Math.Floor(x / GlobalConstants.ChunkSize);
-                int cz = (int)Math.Floor(z / GlobalConstants.ChunkSize);
+                int cx = scout.Cx;
+                int cz = scout.Cz;
                 if (scout.Ticks % 2 == 0)
                     pipeline.SweepLoadedColumns(cx, cz, SweepRadiusChunks, forceRecapture: true, rowsPerCall: SweepRowsPerCall);
 
@@ -107,8 +117,7 @@ public sealed class LodLoginScoutFill
                     if (scout.Ticks < MaxWaitTicks)
                         continue;
                     // Do not bake missing-tex white. Miss audit / retry can pick this L0 up.
-                    scout.Live = false;
-                    slots[i] = null;
+                    ReleaseSlot(capi, i);
                     continue;
                 }
 
@@ -121,8 +130,8 @@ public sealed class LodLoginScoutFill
 
             if (scout.Current == LodScoutEntity.Phase.Capture)
             {
-                int cx = (int)Math.Floor(x / GlobalConstants.ChunkSize);
-                int cz = (int)Math.Floor(z / GlobalConstants.ChunkSize);
+                int cx = scout.Cx;
+                int cz = scout.Cz;
                 if (scout.Ticks % 2 == 0)
                     pipeline.SweepLoadedColumns(cx, cz, SweepRadiusChunks, forceRecapture: true, rowsPerCall: SweepRowsPerCall);
 
@@ -130,17 +139,25 @@ public sealed class LodLoginScoutFill
                     && scout.Ticks < MaxCaptureWaitTicks)
                     continue;
 
-                scout.Current = LodScoutEntity.Phase.Bake;
+                if (!scout.PaintQueued)
+                {
+                    ready.Add(key);
+                    LastFinishedKey = key;
+                    FinishedThisTick++;
+                    scout.PaintQueued = true;
+                }
+
+                scout.Current = LodScoutEntity.Phase.Mesh;
                 scout.Ticks = 0;
+                continue;
             }
 
-            if (scout.Current == LodScoutEntity.Phase.Bake)
+            if (scout.Current == LodScoutEntity.Phase.Mesh)
             {
-                ready.Add(key);
-                LastFinishedKey = key;
-                FinishedThisTick++;
-                scout.Live = false;
-                slots[i] = null;
+                bool meshed = renderer.HasDrawableMesh(key);
+                if (!meshed && scout.Ticks < MaxMeshWaitTicks)
+                    continue;
+                ReleaseSlot(capi, i);
             }
         }
 
@@ -148,11 +165,36 @@ public sealed class LodLoginScoutFill
         return ready;
     }
 
+    static void HoldViewer(LodScoutEntity scout)
+    {
+        LodScoutViewerEntity? viewer = scout.Viewer;
+        if (viewer == null) return;
+        viewer.ServerPos.SetPos(scout.X, scout.Y, scout.Z);
+        viewer.Pos.SetFrom(viewer.ServerPos);
+        viewer.Pos.Motion.Set(0, 0, 0);
+        viewer.ServerPos.Motion.Set(0, 0, 0);
+        viewer.IsRendered = false;
+        viewer.AlwaysActive = true;
+        try { viewer.UpdatePartitioning(); } catch { }
+    }
+
+    static int ClampReveal(
+        LodScoutEntity scout,
+        double pickupX,
+        double pickupZ,
+        int onsetChunks,
+        int targetCap)
+    {
+        double dx = scout.X - pickupX;
+        double dz = scout.Z - pickupZ;
+        int distChunks = (int)Math.Ceiling(Math.Sqrt(dx * dx + dz * dz) / GlobalConstants.ChunkSize);
+        int room = Math.Max(ChunkVisibleRadius, onsetChunks - distChunks);
+        return Math.Min(targetCap, room);
+    }
+
     static void GrowReveal(
         ICoreClientAPI capi,
         LodScoutEntity scout,
-        double x,
-        double z,
         int dim,
         int target)
     {
@@ -162,17 +204,64 @@ public sealed class LodLoginScoutFill
         int before = scout.RevealRadius;
         scout.RevealRadius = Math.Min(target, scout.RevealRadius + RevealGrowPerTick);
         LodLoginBakePlayerMove.RequestChunkColumnRing(
-            capi, x, z, dim, before, scout.RevealRadius);
+            capi, scout.X, scout.Z, dim, before, scout.RevealRadius);
     }
 
-    void StartSlot(ICoreClientAPI capi, int index, long key)
+    void StartSlot(
+        ICoreClientAPI capi,
+        int index,
+        long key,
+        double pickupX,
+        double pickupZ,
+        int onsetChunks,
+        int targetCap)
     {
-        slots[index] = new LodScoutEntity(key);
+        var (x, y, z) = LodLoginSweep.VisitPosition(capi.World, key);
+        var scout = new LodScoutEntity(key)
+        {
+            X = x,
+            Y = y,
+            Z = z,
+            Cx = (int)Math.Floor(x / GlobalConstants.ChunkSize),
+            Cz = (int)Math.Floor(z / GlobalConstants.ChunkSize),
+        };
+
+        try { scout.Viewer = LodScoutViewerEntity.SpawnAt(capi, key, x, y, z); }
+        catch { scout.Viewer = null; }
+
+        slots[index] = scout;
         liveCount = CountLive();
-        var (x, _, z) = LodLoginSweep.VisitPosition(capi.World, key);
         int dim = capi.World.Player.Entity.Pos.Dimension;
-        LodLoginBakePlayerMove.RequestChunkColumnsVisible(
-            capi, x, z, dim, ChunkVisibleRadius);
+        int radius = ClampReveal(scout, pickupX, pickupZ, onsetChunks, targetCap);
+        LodLoginBakePlayerMove.RequestChunkColumnsVisible(capi, x, z, dim, ChunkVisibleRadius);
+        LodScoutHostSystem.ClientInstance?.RequestUp(key, scout.Cx, scout.Cz, radius, dim, x, y, z);
+    }
+
+    void ReleaseSlot(ICoreClientAPI capi, int index)
+    {
+        LodScoutEntity? scout = slots[index];
+        if (scout == null) return;
+        LodScoutHostSystem.ClientInstance?.RequestDown(scout.Key);
+        LodScoutViewerEntity.DespawnOne(capi.World, scout.Viewer);
+        scout.Viewer = null;
+        scout.Live = false;
+        scout.Current = LodScoutEntity.Phase.Done;
+        slots[index] = null;
+    }
+
+    void DespawnLive(ICoreClientAPI? capi)
+    {
+        for (int i = 0; i < slots.Length; i++)
+        {
+            LodScoutEntity? scout = slots[i];
+            if (scout == null) continue;
+            LodScoutHostSystem.ClientInstance?.RequestDown(scout.Key);
+            if (capi != null)
+                LodScoutViewerEntity.DespawnOne(capi.World, scout.Viewer);
+            scout.Viewer = null;
+            scout.Live = false;
+            slots[i] = null;
+        }
     }
 
     int CountLive()
