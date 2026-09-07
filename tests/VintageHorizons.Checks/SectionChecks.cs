@@ -18,6 +18,17 @@ public static class SectionChecks
         PerColumnPaletteSplit(c);
         SnapshotSharesSectionArrays(c);
         ProvisionalQuadrants(c);
+        HasVisitPaint(c);
+    }
+
+    static void HasVisitPaint(Check c)
+    {
+        var empty = new LodSection();
+        c.False(empty.HasVisitPaint, "empty section has no visit paint");
+        empty.FindOrAddPaletteEntry(blockId: 1, color: 0x00509050, flags: 0, tintSlot: 3);
+        c.False(empty.HasVisitPaint, "live-tint palette is not visit paint");
+        empty.FindOrAddPaletteEntry(blockId: 2, color: 0x002050C8, flags: LodPaletteEntry.FlagBaked);
+        c.True(empty.HasVisitPaint, "FlagBaked palette row is visit paint");
     }
 
     static void RunPacking(Check c)

@@ -1,3 +1,15 @@
+## 1.0.27
+- **Scout entities, player stays.** Login overlay no longer HoldQuiet-teleports you onto each visit cell. Staggered `LodScoutEntity` workers (client-side; not Vintage Story Entity classes — this mod is client-only) call `SetChunkColumnVisible`, grow the streamed ring, capture, GetColor-bake, then despawn. Esc cancel/resume snapshots in-flight scout keys before teardown. The player stays at spawn.
+- **Pause-on-Start:** force-unpause while the overlay is up so bake can tick; after overlay success or skip, restore pause and reopen the ingame menu if `pauseonstart` is installed.
+- **Walk-away green:** remesh coarse parents that still have live climate tint once FlagBaked children exist; empty-mesh claims on visit-painted land retry remesh. Mip keeps FlagBaked canopy RGB.
+- Drop `distantvistas_1.0.27.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+- **Verify:** join with Pause-on-Start installed — overlay runs (game not frozen), then pause menu returns. Login bake meshes > 0. Walk away: far trees/ground keep GetColor, not a green flip. Esc mid-overlay, relog resumes without hopping you around.
+
+## 1.0.26
+- **LOD draw off / 0 meshes.** `lodterrain.fsh` C7537: `float flat` is reserved after a type specifier. Renamed mist `flat` → `flatness`. Keep the 1.0.25 low-ground mist.
+- Bootstrap leftover Esc-resume is dropped when an in-window complete stamp would skip (same 1.0.24 gate).
+- Drop `distantvistas_1.0.26.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again. Confirm LOD meshes appear (not 0) and mist + gray Farseer smoke still look like 1.0.23/1.0.25.
+
 ## 1.0.25
 - **Pause-on-Start compatible login overlay.** Force-unpause while deferred/sweeping so game ticks and scout streams continue after Pause-on-Start opens the escape menu; Esc still cancels after a short grace.
 - **Bigger coverage without hopping the player.** Login overlay uses staggered `SetChunkColumnVisible` scout fill (concurrency capped) for ~7 minutes of FlagBaked land toward the Farseer rim. No paint-revision forced teleport wedge.

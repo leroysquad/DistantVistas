@@ -8,14 +8,13 @@ using Vintagestory.API.MathTools;
 namespace DistantVistas;
 
 /// <summary>
-/// Login visit sweep — gather live season truth by being at each visited square.
+/// Login visit sweep — gather live season truth at each visited square.
 ///
-/// Purpose (locked): teleport the player (covered by a vanilla HudElement overlay) to every
-/// previously visited L0 canvas cell so vanilla streams real chunks. The mod re-captures
-/// voxel columns from that loaded terrain (snow blocks, leaf species, grass tops) and
-/// season-bakes palette colours per column top. Those canvases persist to SQLite and
-/// stay painted in near and far LOD until the next login. This is NOT a finalize-time
-/// recolor of unloaded cache rows.
+/// Purpose (locked): during the HUD overlay, staggered <see cref="LodScoutEntity"/>
+/// workers force-load distant columns (SetChunkColumnVisible) without moving the
+/// player. The mod recaptures voxel columns from that streamed terrain and
+/// season-bakes palette colours per column top. Those canvases persist to SQLite.
+/// This is NOT a finalize-time recolor of unloaded cache rows.
 /// </summary>
 public sealed class LodLoginBake
 {
@@ -108,6 +107,8 @@ public sealed class LodLoginBake
     readonly List<long> openOceanFillKeys = new();
     readonly List<long> stopBakeKeys = new();
     readonly List<long> leftoverKeys = new();
+    readonly LodLoginScoutFill scoutFill = new();
+    readonly Queue<long> scoutReady = new();
     int revealRadius;
     int stopBakeIndex;
     bool stopBakePrepared;
@@ -175,7 +176,8 @@ public sealed class LodLoginBake
     public void CancelAndSave()
     {
         if (phase == Phase.Done || released) return;
-        int left = pending.Count + (currentKey != null ? 1 : 0);
+        int left = pending.Count + scoutFill.LiveCount + scoutReady.Count
+            + (currentKey != null ? 1 : 0);
         capi.Logger.Notification(
             "[DistantVistas] Login visit sweep paused — {0} region(s) remaining. Returning to the menu (relog to resume).",
             left);
@@ -262,6 +264,8 @@ public sealed class LodLoginBake
         stopBakeIndex = 0;
         stopBakeKeys.Clear();
         revealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
+        scoutFill.Reset();
+        scoutReady.Clear();
 
         overlay.Show();
         renderer.LoginBakeOverlayActive = true;
@@ -323,7 +327,7 @@ public sealed class LodLoginBake
         escWasDown = false;
         escGraceLeft = 40;
         progressUi.Reset();
-        try { if (capi.IsGamePaused) capi.PauseGame(false); } catch { }
+        LodPauseOnStartCompat.KeepUnpaused(capi);
         stabilizeWindow.Clear();
         windowMedians.Clear();
 
@@ -666,7 +670,8 @@ public sealed class LodLoginBake
         phase = Phase.Sweeping;
         LogTeleportBegin();
         statusWriter.TouchAdvance("teleports-begin");
-        BeginNextStop();
+        UpdateProgress(Progress,
+            StatusWithEta($"{VisitPrefix()}scouting regions… ({Pct(finished, total)})"));
     }
 
     void LogTeleportBegin()
@@ -674,112 +679,56 @@ public sealed class LodLoginBake
         if (loggedTeleportBegin) return;
         loggedTeleportBegin = true;
         capi.Logger.Notification(
-            "[DistantVistas] Login visit sweep: quiet teleports begin — {0} L0 region{1}.",
+            "[DistantVistas] Login visit sweep: quiet teleports begin — {0} L0 region{1} (scout entities, player stays).",
             total, total == 1 ? "" : "s");
     }
 
     void TickSweeping()
     {
-        if (currentKey == null)
+        LogTeleportBegin();
+
+        List<long> ready = scoutFill.Tick(
+            capi, pipeline, pending, completedKeys, viewBoost.ChunkVisibleRadius);
+        for (int i = 0; i < ready.Count; i++)
+            scoutReady.Enqueue(ready[i]);
+
+        if (currentKey == null && scoutReady.Count > 0)
         {
-            if (pending.Count == 0)
+            currentKey = scoutReady.Dequeue();
+            revealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
+            stopBakePrepared = false;
+            stopBakeIndex = 0;
+            stopBakeKeys.Clear();
+        }
+
+        if (currentKey != null)
+        {
+            long key = currentKey.Value;
+            GrowRevealAround(key);
+            SweepColumnsAround(key);
+            if (!BakeBatchAtStop(key))
             {
-                RestorePlayerPose();
-                BeginAuditing();
+                UpdateProgress(Progress,
+                    StatusWithEta($"{VisitPrefix()}painting streamed ring… ({stopBakeIndex}/{Math.Max(1, stopBakeKeys.Count)})"));
                 return;
             }
-            LogTeleportBegin();
-            BeginNextStop();
+            finished++;
+            SaveResumeSnapshot();
+            sweepTiming.NoteFinished(finished);
+            statusWriter.TouchAdvance($"region-{finished}-of-{total}");
+            currentKey = null;
+        }
+
+        int inFlight = scoutFill.LiveCount + scoutReady.Count + (currentKey != null ? 1 : 0);
+        if (inFlight == 0 && pending.Count == 0)
+        {
+            RestorePlayerPose();
+            BeginAuditing();
             return;
         }
 
-        long key = currentKey.Value;
-        switch (stopPhase)
-        {
-            case StopPhase.Teleport:
-                stopPhase = StopPhase.TeleportSettle;
-                stopTicks = 0;
-                break;
-
-            case StopPhase.TeleportSettle:
-                stopTicks++;
-                UpdateProgress(Progress,
-                    StatusWithEta($"{VisitPrefix()}settling after move… ({stopTicks}/{TeleportSettleTicks})"));
-                if (stopTicks < TeleportSettleTicks) return;
-                stopPhase = StopPhase.WaitChunks;
-                stopTicks = 0;
-                break;
-
-            case StopPhase.WaitChunks:
-                stopTicks++;
-                GrowRevealAround(key);
-                if (stopTicks % 2 == 0)
-                    SweepColumnsAround(key);
-                if (!LodLoginSweep.AllMapChunksLoaded(capi.World.BlockAccessor, key)
-                    && stopTicks < LodLoginSweep.MaxChunkWaitTicks)
-                {
-                    UpdateProgress(Progress,
-                        StatusWithEta($"{VisitPrefix()}loading terrain… ({stopTicks})"));
-                    return;
-                }
-                SweepColumnsAround(key);
-                // #region agent log
-                try
-                {
-                    System.IO.File.AppendAllText(
-                        @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
-                        "{\"sessionId\":\"40cccb\",\"runId\":\"scan-1\",\"hypothesisId\":\"H-D\",\"location\":\"LodLoginBake.TickSweeping\",\"message\":\"sweep-stop\",\"data\":{\"pending\":" + pipeline.PendingColumns + ",\"dropped\":" + pipeline.ColumnsDropped + ",\"swept\":" + pipeline.ColumnsSwept + ",\"radius\":" + viewBoost.ChunkSweepRadiusChunks + ",\"boostVd\":" + viewBoost.BoostedViewDistanceBlocks + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
-                }
-                catch { }
-                // #endregion
-                pipeline.QueueL0SectionForce(key);
-                stopPhase = StopPhase.Capture;
-                stopTicks = 0;
-                break;
-
-            case StopPhase.Capture:
-                stopTicks++;
-                GrowRevealAround(key);
-                if (stopTicks % 2 == 0)
-                    SweepColumnsAround(key);
-                if (!pipeline.IsL0SectionCaptureIdle(key)
-                    && stopTicks < LodLoginSweep.MaxCaptureWaitTicks)
-                {
-                    UpdateProgress(Progress,
-                        StatusWithEta($"{VisitPrefix()}capturing live terrain… ({Pct(finished, total)})"));
-                    return;
-                }
-                stopPhase = StopPhase.Bake;
-                break;
-
-            case StopPhase.Bake:
-            {
-                if (!BakeBatchAtStop(key))
-                {
-                    UpdateProgress(Progress,
-                        StatusWithEta($"{VisitPrefix()}painting streamed ring… ({stopBakeIndex}/{Math.Max(1, stopBakeKeys.Count)})"));
-                    return;
-                }
-                finished++;
-                SaveResumeSnapshot();
-                sweepTiming.NoteFinished(finished);
-                statusWriter.TouchAdvance($"region-{finished}-of-{total}");
-                stopPhase = StopPhase.BakeSettle;
-                stopTicks = 0;
-                UpdateProgress(Progress,
-                    StatusWithEta($"{VisitPrefix()}{Pct(finished, total)} — settling…"));
-                break;
-            }
-
-            case StopPhase.BakeSettle:
-                stopTicks++;
-                if (stopTicks < BakeSettleTicks) return;
-                stopPhase = StopPhase.Done;
-                currentKey = null;
-                UpdateProgress(Progress,
-                    StatusWithEta($"{VisitPrefix()}{Pct(finished, total)}"));
-                break;
-        }
+        UpdateProgress(Progress,
+            StatusWithEta($"{VisitPrefix()}{scoutFill.LiveCount} scout{(scoutFill.LiveCount == 1 ? "" : "s")} streaming… ({Pct(finished, total)})"));
     }
 
     void TickDraining()
@@ -933,7 +882,6 @@ public sealed class LodLoginBake
         UpdateProgress(Progress,
             StatusWithEta($"Retrying {total} missed region{(total == 1 ? "" : "s")} (pass {resweepRound})…"),
             force: true);
-        BeginNextStop();
     }
 
     string VisitPrefix()
@@ -1332,6 +1280,11 @@ public sealed class LodLoginBake
     {
         if (released) return;
 
+        // Snapshot while scouts are still live and phase is not Done.
+        // SaveResumeSnapshot no-ops once released, and Reset would drop in-flight keys.
+        if (keepResume && !success)
+            SaveResumeSnapshot();
+
         releaseSuccess = success;
         releaseKeepResume = keepResume;
         released = true;
@@ -1355,15 +1308,14 @@ public sealed class LodLoginBake
         renderer.LoginBakeOverlayActive = false;
         renderer.LoginBakeComplete = true;
         progressUi.Reset();
+        scoutFill.Reset();
+        scoutReady.Clear();
 
         if (success)
         {
             LodLoginSweepComplete.RecordSuccess(capi, pipeline.World);
             LodLoginSweepTimingStore.RecordRun(capi, sweepTiming);
         }
-
-        if (keepResume && !success)
-            SaveResumeSnapshot();
 
         try
         {
@@ -1386,6 +1338,10 @@ public sealed class LodLoginBake
             // RequestMode copies the graphics slider onto DesiredViewDistance. Pose restore
             // can do that after we already wrote the player's slider back, so write it again.
             try { viewBoost.ReassertPlayerView(); } catch { }
+            if (success)
+            {
+                try { LodPauseOnStartCompat.RestoreAfterLoginBake(capi); } catch { }
+            }
             try
             {
                 capi.Event.RegisterCallback(_ =>
@@ -1576,7 +1532,7 @@ public sealed class LodLoginBake
     void HoldPlayerControls()
     {
         overlay.EnsureInputBlocked();
-        try { if (capi.IsGamePaused) capi.PauseGame(false); } catch { }
+        LodPauseOnStartCompat.KeepUnpaused(capi);
         CloseBlockingDialogs();
 
         IClientPlayer player = capi.World.Player;
@@ -1637,7 +1593,8 @@ public sealed class LodLoginBake
     {
         if (released || phase == Phase.Done) return;
 
-        int left = pending.Count + (currentKey != null ? 1 : 0);
+        int left = pending.Count + scoutFill.LiveCount + scoutReady.Count
+            + (currentKey != null ? 1 : 0);
         if (left <= 0
             && phase is not Phase.Sweeping
             and not Phase.WaitingForWorld
@@ -1655,6 +1612,9 @@ public sealed class LodLoginBake
         snap.Completed = completedKeys.ToList();
 
         var pendingList = new List<long>(pending);
+        scoutFill.CopyLiveKeys(pendingList);
+        foreach (long key in scoutReady)
+            pendingList.Add(key);
         if (currentKey != null)
             pendingList.Insert(0, currentKey.Value);
         snap.Pending = pendingList;
@@ -1676,21 +1636,23 @@ public sealed class LodLoginBake
 
     void HoldPlayerPose(EntityPlayer entity)
     {
-        if (phase == Phase.Sweeping && currentKey != null)
-        {
-            (double x, double y, double z) = LodLoginSweep.VisitPosition(capi.World, currentKey.Value);
-            LodLoginBakePlayerMove.HoldQuiet(entity, x, y, z);
-        }
-        else if (phase is Phase.OverlayWarmup or Phase.WaitingForWorld)
+        if (phase is Phase.OverlayWarmup or Phase.WaitingForWorld)
         {
             // Do not snap to a maybe-stale capture while spawn is still settling.
             entity.Pos.Motion.Set(0, 0, 0);
+            return;
         }
-        else
+
+        if (!restoreCaptured)
         {
-            entity.Pos.SetFrom(restorePos);
             entity.Pos.Motion.Set(0, 0, 0);
+            return;
         }
+
+        // Scout entities stream distant columns. Never HoldQuiet the player onto
+        // visit cells — that reintroduced teleport hops after 1.0.25 dropped ApplyQuiet.
+        entity.Pos.SetFrom(restorePos);
+        entity.Pos.Motion.Set(0, 0, 0);
     }
 
     static void LockPlayerCamera(

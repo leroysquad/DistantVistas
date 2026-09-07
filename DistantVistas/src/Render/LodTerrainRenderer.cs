@@ -673,7 +673,10 @@ public class LodTerrainRenderer : IRenderer
     {
         if (HasDrawableMesh(key)) return false;
         if (!emptyMeshKeys.Contains(key)) return true;
-        return world.ForceRemesh.Contains(key) || windowMovedThisFrame;
+        if (world.ForceRemesh.Contains(key) || windowMovedThisFrame) return true;
+        return world.Sections.TryGetValue(key, out LodSection? section)
+            && section.HasVisitPaint
+            && section.CapturedColumns > 0;
     }
 
     public void ClearEmptyMeshClaim(long key)
@@ -1136,6 +1139,9 @@ public class LodTerrainRenderer : IRenderer
         // Whole AABB inside view distance, and every map-chunk covering this
         // tile is loaded. A circle alone punches sky when you raise VD.
         world.Sections.TryGetValue(key, out LodSection? coverageSection);
+        if (level > 0)
+            RemeshStaleLiveTintParent(key, coverageSection);
+
         bool insideVanilla = VanillaOwnsKey(key, coverageSection, liveViewDistance);
 
         bool landLike = ComputeLandLike(level, coverageSection, key);
@@ -1961,6 +1967,42 @@ public class LodTerrainRenderer : IRenderer
     }
 
 
+    /// <summary>
+    /// Walk-away green: coarse parents meshed from live climate tint stay on screen
+    /// after L0 children get FlagBaked GetColor. Queue mip + remesh; keep the old
+    /// mesh until the new one lands.
+    /// </summary>
+    void RemeshStaleLiveTintParent(long key, LodSection? section)
+    {
+        if (section == null || section.HasVisitPaint) return;
+        if (!ChildHasVisitPaint(key)) return;
+        if (world.ForceRemesh.Contains(key)) return;
+        for (int qz = 0; qz < 2; qz++)
+        {
+            for (int qx = 0; qx < 2; qx++)
+            {
+                long ck = LodWorld.ChildKey(key, qx, qz);
+                if (world.HasDataSet.Contains(ck))
+                    world.MipDirty.Add(ck);
+            }
+        }
+        world.RequestGpuSwap(key);
+    }
+
+    bool ChildHasVisitPaint(long key)
+    {
+        for (int qz = 0; qz < 2; qz++)
+        {
+            for (int qx = 0; qx < 2; qx++)
+            {
+                long ck = LodWorld.ChildKey(key, qx, qz);
+                if (!world.Sections.TryGetValue(ck, out LodSection? child)) continue;
+                if (child.HasVisitPaint) return true;
+            }
+        }
+        return false;
+    }
+
     /// <summary>Demand-driven (re)meshing: the selection walk is the load queue (Voxy's idea, CPU-side).</summary>
     void RequestMesh(long key)
     {
@@ -2670,9 +2712,7 @@ public class LodTerrainRenderer : IRenderer
         // Pause-on-Start freezes game ticks while LoginBakeBlocked; keep ticking
         // by clearing pause on the render path (Esc cancel still owned by overlay).
         if ((LoginBakeOverlayActive || LoginBakeBlocked) && capi.IsGamePaused)
-        {
-            try { capi.PauseGame(false); } catch { }
-        }
+            LodPauseOnStartCompat.KeepUnpaused(capi);
         if (LoginBakeOverlayActive || LoginBakeBlocked) return;
 
         playFrameCount++;

@@ -2,11 +2,11 @@
     "type":  "code",
     "modid":  "distantvistas",
     "name":  "Distant Vistas",
-    "version":  "1.0.26",
+    "version":  "1.0.27",
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.26. Fix lodterrain.fsh GLSL reserved-word crash (float flat -> flatness); keep low-ground mist. Scout-fill login overlay, Pause-on-Start compat, Farseer +700 gray smoke, canopy GetColor. Vintage Horizons fork.",
+    "description":  "Official 1.0.27. Login scout entities (player stays); Pause-on-Start restore after overlay; FlagBaked parents remesh so far land does not flip green. 1.0.26 GLSL flatness fix kept. Vintage Horizons fork.",
     "authors":  [
                     "IllLeroySquad"
                 ],

@@ -192,6 +192,13 @@ public static class CoverageChecks
             "lead-cone L0/L1 preference ends at 1.5x view distance");
         c.Eq(4.5f, LodCoveragePolicy.HorizonDrawScale,
             "horizon submit stops at 4.5x view distance");
+        c.Eq(700f, LodCoveragePolicy.FarseerOnsetExtraBlocks,
+            "Farseer onset sits ~700 blocks past 4.5x view distance");
+        c.Eq(512 * 4.5 + 700, LodCoveragePolicy.HorizonDrawDistance(512),
+            "horizon draw distance is 4.5x VD plus the onset pad");
+        c.Eq(LodCoveragePolicy.HorizonDrawDistance(512),
+            LodCoveragePolicy.FarseerSilhouetteOnsetDistance(512),
+            "Farseer onset distance matches DV horizon empty-stop");
         c.Eq(4.5f, LodCoveragePolicy.FarseerSilhouetteOnsetScale,
             "Farseer onset matches horizon (1.0.18 late-only rim)");
         c.Eq(LodCoveragePolicy.FarseerSilhouetteOnsetScale, LodCoveragePolicy.UnvisitedFarseerOnsetScale,
@@ -208,12 +215,13 @@ public static class CoverageChecks
             "past 1.5x a land-like L2 in the cone may stop so turning is not sky");
         c.False(LodCoveragePolicy.PastHorizonDraw(400, 512),
             "inside 4.5x is still the horizon band");
-        c.True(LodCoveragePolicy.PastHorizonDraw(2400, 512),
-            "past 4.5x is past the horizon band");
-        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, true, 0f, true, false, 2400, 512),
-            "past 4.5x do not walk L0");
-        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(1, 2, false, true, true, true, 0f, true, false, 2400, 512),
-            "Farseer off: still walk L1 past 4.5x so that band is not sky");
+        double pastRim = LodCoveragePolicy.HorizonDrawDistance(512) + 1;
+        c.True(LodCoveragePolicy.PastHorizonDraw(pastRim, 512),
+            "past 4.5x plus onset pad is past the horizon band");
+        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, true, 0f, true, false, pastRim, 512),
+            "past the Farseer rim do not walk L0");
+        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(1, 2, false, true, true, true, 0f, true, false, pastRim, 512),
+            "Farseer off: still walk L1 past the rim so that band is not sky");
         c.Eq(1, LodCoveragePolicy.LeadConeMaxDrawLevel, "in-cone max draw level is L1");
         c.Eq(2, LodCoveragePolicy.LeadConeMaxCoverLevel, "in-cone whole cover caps at L2");
         c.False(LodCoveragePolicy.MayLeadConeCoarseCover(3, true, true, 0f, 400, 512, true),

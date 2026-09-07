@@ -76,18 +76,18 @@ public static class LoginSweepChecks
         c.True(targeted.ModeLabel.Contains("incomplete"), "incomplete plan label");
 
         var manyMisses = new List<LodLoginBakeAudit.Miss>();
-        for (int i = 0; i < 300; i++)
+        for (int i = 0; i < 500; i++)
             manyMisses.Add(new(LodWorld.SectionKey(0, i, 0), LodLoginBakeAudit.MissReason.BakeIncomplete));
         var budgeted = LodLoginSweepBootstrap.PlanIncomplete(manyMisses);
         c.Eq(LodLoginSweepBootstrap.RevisitMaxVisitStops, budgeted.Keys.Count,
             "incomplete plan stays inside the revisit stop budget");
-        c.True(budgeted.ModeLabel.Contains("of 300"), "incomplete plan names the leftover gaps");
+        c.True(budgeted.ModeLabel.Contains("of 500"), "incomplete plan names the leftover gaps");
 
-        c.Eq(180, LodLoginSweepBootstrap.RevisitMaxVisitStops,
-            "revisit cap targets ~180s at fallback 1s/stop");
-        c.Eq(180, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
-            "bootstrap land cap matches revisit (~180s at fallback 1s/stop)");
-        c.Eq(48, LodLoginSweepBootstrap.RetryMaxVisitStops,
+        c.Eq(420, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "revisit cap targets ~7 min at fallback 1s/stop");
+        c.Eq(420, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "bootstrap land cap matches revisit (~7 min at fallback 1s/stop)");
+        c.Eq(90, LodLoginSweepBootstrap.RetryMaxVisitStops,
             "retry hop matches MaxRetryStops at fallback 1s/stop");
         c.True(LodLoginSweepBootstrap.RevisitMaxVisitStops >= LodLoginSweepBootstrap.BootstrapMaxVisitStops,
             "revisit budget is at least bootstrap budget");
@@ -315,6 +315,8 @@ public static class LoginSweepChecks
             "bootstrap logs skipped baked cells");
         c.True(bootstrap.Contains("PartitionVisitKeys"),
             "revisit partitions incomplete vs complete keys");
+        c.True(bootstrap.Contains("Repairing {keys.Count} of {gapCount} incomplete regions"),
+            "incomplete plan label uses the real miss count, not a hardcoded 500");
 
         string audit = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeAudit.cs"));
@@ -341,6 +343,12 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodTerrainRenderer.cs"));
         c.True(renderer.Contains("LoginBakeOverlayActive"),
             "terrain renderer skips draw while login overlay active");
+        c.True(renderer.Contains("LodPauseOnStartCompat.KeepUnpaused"),
+            "renderer force-unpauses while overlay/blocked so Pause-on-Start cannot freeze bake");
+        c.True(renderer.Contains("RemeshStaleLiveTintParent"),
+            "walk-away remeshes live-tint parents once FlagBaked children exist");
+        c.True(renderer.Contains("if (world.ForceRemesh.Contains(key)) return;"),
+            "stale-parent remesh does not requeue every frame while ForceRemesh is already set");
         c.True(renderer.Contains("bool loginBakeBlocked = true"),
             "terrain renderer starts with LoginBakeBlocked so load/char-create cannot ApplyZFar");
         c.True(renderer.Contains("LodJoinQuiet.Sync(loginBakeBlocked, loginBakeComplete)"),
@@ -391,6 +399,8 @@ public static class LoginSweepChecks
             "mod wires login bake pulse");
         c.True(mod.Contains("loginBakePulse?.Pulse(dt)"),
             "mod pulses the sweep from OnGameTick");
+        c.True(mod.Contains("LodPauseOnStartCompat.RestoreAfterLoginBake"),
+            "skip/not-allowed join restores Pause-on-Start after overlay-time unpause");
         c.True(!mod.Contains("OnRenderPulse"),
             "mod does not connect a present-path render pulse");
         c.True(!mod.Contains("PaintSplashCover"),
@@ -444,6 +454,43 @@ public static class LoginSweepChecks
             "login bake batch-bakes streamed neighbours per teleport");
         c.True(bake.Contains("BakeBatchAtStop"),
             "login bake batch-bakes streamed neighbours per stop");
+        c.True(bake.Contains("scoutFill.Tick"),
+            "login overlay drives staggered scout entities instead of player hops");
+        c.True(bake.Contains("LodLoginScoutFill"),
+            "login bake owns the concurrent scout fill");
+        c.True(bake.Contains("GrowRevealAround(key)"),
+            "login bake grows SetChunkColumnVisible rings at the scout stop (player stays)");
+        c.True(bake.Contains("SweepColumnsAround(key)"),
+            "login bake sweeps loaded columns around the scout stop");
+        int releaseAt = bake.IndexOf("void ReleaseResources(bool success, bool keepResume = false)", StringComparison.Ordinal);
+        int nextAt = bake.IndexOf("void LogMayFlagBakedDump()", releaseAt, StringComparison.Ordinal);
+        c.True(releaseAt >= 0 && nextAt > releaseAt, "ReleaseResources bounds");
+        string release = bake.Substring(releaseAt, nextAt - releaseAt);
+        int saveAt = release.IndexOf("SaveResumeSnapshot()", StringComparison.Ordinal);
+        int resetAt = release.IndexOf("scoutFill.Reset()", StringComparison.Ordinal);
+        int releasedAt = release.IndexOf("released = true", StringComparison.Ordinal);
+        c.True(saveAt >= 0 && resetAt >= 0 && saveAt < resetAt,
+            "Esc/world-leave resume snapshot includes live scout keys before Reset");
+        c.True(saveAt >= 0 && releasedAt >= 0 && saveAt < releasedAt,
+            "resume snapshot runs before teardown marks released/Done");
+        c.True(bake.Contains("LodPauseOnStartCompat.KeepUnpaused"),
+            "login bake force-unpauses while the overlay is up (Pause-on-Start compat)");
+        c.True(bake.Contains("LodPauseOnStartCompat.RestoreAfterLoginBake"),
+            "login bake restores Pause-on-Start after a successful overlay");
+        c.True(!bake.Contains("LodLoginBakePlayerMove.HoldQuiet(entity"),
+            "login bake does not HoldQuiet the player onto visit cells");
+        c.True(bake.Contains("entity.Pos.SetFrom(restorePos)"),
+            "login bake holds the player at spawn, not the visit cell");
+
+        string scoutFill = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginScoutFill.cs"));
+        c.True(scoutFill.Contains("RequestChunkColumnRing"),
+            "scouts grow streamed rings without moving the player");
+        c.True(scoutFill.Contains("RevealGrowPerTick"),
+            "scout ring growth is staggered");
+        c.True(scoutFill.Contains("viewBoost.ChunkVisibleRadius") || bake.Contains("viewBoost.ChunkVisibleRadius"),
+            "scout ring target follows the login view-boost visible radius");
+        c.Eq(6, LodLoginScoutFill.MaxConcurrent, "scout concurrency stays capped");
         c.True(bake.Contains("stopBakeSkipIdle++") && bake.Contains("idleQueued"),
             "batch bake counts queued neighbours but still paints them");
         c.True(!bake.Contains("stopBakeSkipIdle++;\n                continue")
@@ -760,9 +807,9 @@ public static class LoginSweepChecks
     {
         LodLoginSweepTiming.SetMachineSecPerStop(LodLoginSweepTiming.InitialSecPerStop);
         c.Eq(30.0, LodLoginSweepTiming.TargetMinSec, "sweep target min seconds");
-        c.Eq(180.0, LodLoginSweepTiming.TargetMaxSec, "sweep target max seconds");
-        c.Eq(180.0, LodLoginSweepTiming.BootstrapTargetMaxSec, "bootstrap target max seconds");
-        c.Eq(48.0, LodLoginSweepTiming.RetryTargetSec, "retry pass wall seconds");
+        c.Eq(420.0, LodLoginSweepTiming.TargetMaxSec, "sweep target max seconds (~7 min)");
+        c.Eq(420.0, LodLoginSweepTiming.BootstrapTargetMaxSec, "bootstrap target max seconds");
+        c.Eq(90.0, LodLoginSweepTiming.RetryTargetSec, "retry pass wall seconds");
         c.Eq(1.0, LodLoginSweepTiming.InitialSecPerStop, "fallback per-stop when this PC has no samples");
         c.Eq(288000, LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks,
             "empty-canvas bootstrap probe radius default (~288 km, meets Farseer onset)");
@@ -770,26 +817,26 @@ public static class LoginSweepChecks
             "288000 blocks is 4500 L0 cells radius at 64-block footprint");
         c.Eq(9216, LodLoginSweepBootstrap.MaxBootstrapClassifyCells,
             "classify ceiling scales with the 1.5x radius (~2.25x area)");
-        c.Eq(96, LodLoginSweepTiming.MinVisitStops, "first-pass floor densifies the 216 km disk");
-        c.Eq(240, LodLoginSweepTiming.MaxVisitStops, "first-pass ceiling for fast machines");
-        c.Eq(24, LodLoginSweepTiming.MinRetryStops, "retry floor stays shorter than first pass");
-        c.Eq(48, LodLoginSweepTiming.MaxRetryStops, "retry ceiling matches retry wall at 1s/stop");
-        c.Eq(180, LodLoginSweepTiming.VisitStopBudget(1.0, LodLoginSweepTiming.TargetMaxSec),
-            "fallback 1s/stop plans 180 first-pass stops");
-        c.Eq(96, LodLoginSweepTiming.VisitStopBudget(2.0, LodLoginSweepTiming.TargetMaxSec),
-            "2s/stop clamps to MinVisitStops 96, not 90 from 180/2");
-        c.Eq(96, LodLoginSweepTiming.VisitStopBudget(3.6, LodLoginSweepTiming.TargetMaxSec),
-            "3.6s/stop clamps to MinVisitStops 96");
-        c.Eq(24, LodLoginSweepTiming.RetryStopBudget(3.6),
-            "3.6s/stop retry clamps to MinRetryStops 24");
-        c.Eq(180, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
-            "bootstrap visit cap targets ~180s at fallback 1s/stop");
-        c.Eq(180, LodLoginSweepBootstrap.RevisitMaxVisitStops,
-            "revisit visit cap targets ~180s at fallback 1s/stop");
-        c.Eq(48, LodLoginSweepBootstrap.RetryMaxVisitStops,
-            "retry visit cap matches MaxRetryStops (48s wall at 1s/stop)");
-        c.Eq(48, LodLoginSweepTiming.MaxRetryStops,
-            "retry ceiling is 48");
+        c.Eq(180, LodLoginSweepTiming.MinVisitStops, "first-pass floor densifies the disk");
+        c.Eq(520, LodLoginSweepTiming.MaxVisitStops, "first-pass ceiling for fast machines");
+        c.Eq(36, LodLoginSweepTiming.MinRetryStops, "retry floor stays shorter than first pass");
+        c.Eq(96, LodLoginSweepTiming.MaxRetryStops, "retry ceiling matches retry wall at 1s/stop");
+        c.Eq(420, LodLoginSweepTiming.VisitStopBudget(1.0, LodLoginSweepTiming.TargetMaxSec),
+            "fallback 1s/stop plans 420 first-pass stops");
+        c.Eq(210, LodLoginSweepTiming.VisitStopBudget(2.0, LodLoginSweepTiming.TargetMaxSec),
+            "2s/stop plans 210 stops inside the 7 min wall");
+        c.Eq(180, LodLoginSweepTiming.VisitStopBudget(3.6, LodLoginSweepTiming.TargetMaxSec),
+            "3.6s/stop clamps to MinVisitStops 180");
+        c.Eq(36, LodLoginSweepTiming.RetryStopBudget(3.6),
+            "3.6s/stop retry clamps to MinRetryStops 36");
+        c.Eq(420, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "bootstrap visit cap targets ~7 min at fallback 1s/stop");
+        c.Eq(420, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "revisit visit cap targets ~7 min at fallback 1s/stop");
+        c.Eq(90, LodLoginSweepBootstrap.RetryMaxVisitStops,
+            "retry visit cap matches MaxRetryStops (90s wall at 1s/stop)");
+        c.Eq(96, LodLoginSweepTiming.MaxRetryStops,
+            "retry ceiling is 96");
         c.True(LodLoginSweepBootstrap.RetryMaxVisitStops <= LodLoginSweepTiming.MaxVisitStops,
             "retry hop is not longer than the first pass");
 
@@ -916,9 +963,10 @@ public static class LoginSweepChecks
         c.Eq(750, LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks,
             "sweep holds vanilla view at 750 blocks then restores");
         c.Eq(
-            (int)Math.Ceiling(750 * LodCoveragePolicy.HorizonDrawScale),
+            (int)Math.Ceiling(LodCoveragePolicy.HorizonDrawDistance(
+                LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks)),
             LodLoginBakeViewBoost.SweepVisitRadiusBlocks,
-            "visit disk reaches Farseer onset (hold × HorizonDrawScale)");
+            "visit disk reaches Farseer onset (hold × HorizonDrawScale + pad)");
         c.True(LodLoginBakeViewBoost.SweepVisitRadiusBlocks > LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks,
             "visit radius is wider than the thin graphics hold");
         c.True(viewBoost.Contains("SweepVisitRadiusBlocks"),

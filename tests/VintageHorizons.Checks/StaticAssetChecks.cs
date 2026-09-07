@@ -200,6 +200,12 @@ public static class StaticAssetChecks
             "lodterrain.vsh dist == 1 is the real far rim, not 512 blocks inside the land we hold");
         c.True(fsh.Contains("if (dist > 1.0) discard;"),
             "lodterrain.fsh keeps the far discard as the one true far clip");
+        c.False(Regex.IsMatch(fsh, @"float\s+flat\b"),
+            "lodterrain.fsh does not use GLSL reserved identifier float flat (C7537)");
+        c.True(fsh.Contains("float flatness"),
+            "lodterrain.fsh names low-ground mist flatness");
+        c.True(fsh.Contains("lowMist"),
+            "lodterrain.fsh keeps the 1.0.25 low-ground mist wash");
 
         // Gap fill: the renderer draws a parent mesh clipped to one child
         // footprint. Both halves of that contract live in the shaders.
@@ -253,6 +259,10 @@ public static class StaticAssetChecks
             "farseer overlay softens heightmaps so hills read as mist, not ink");
         c.True(fsh.Contains("mix(terraColor.rgb, rgbaFog.rgb, mist)"),
             "farseer overlay mixes fog colour for a misty silhouette");
+        c.True(fsh.Contains("smokeGray"),
+            "farseer overlay uses grayish smoke (gray bottom, slight black top)");
+        c.True(fsh.Contains("inkAmt"),
+            "farseer overlay keeps a little far/top ink, not a hard wall");
         c.False(fsh.Contains("onsetMist"),
             "farseer overlay is the 1.0.18 mist wash (no onsetMist lean cloud)");
         c.False(vsh.Contains("nearBand"),

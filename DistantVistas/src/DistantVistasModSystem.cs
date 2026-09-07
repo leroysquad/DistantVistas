@@ -1589,6 +1589,7 @@ public class DistantVistasModSystem : ModSystem
             AllowLodDraws();
             try { LodLoginBakeViewBoost.RecoverPlayerViewIfNeeded(capi); } catch { }
             try { LodLoginBakeAudioMute.ForceUnmuteIfSilent(capi); } catch { }
+            try { LodPauseOnStartCompat.RestoreAfterLoginBake(capi); } catch { }
             Mod.Logger.Notification(
                 "[DistantVistas] Login visit sweep not allowed here — entering play without overlay.");
             return;
@@ -1614,6 +1615,7 @@ public class DistantVistasModSystem : ModSystem
             AllowLodDraws();
             try { LodLoginBakeViewBoost.RecoverPlayerViewIfNeeded(capi); } catch { }
             try { LodLoginBakeAudioMute.ForceUnmuteIfSilent(capi); } catch { }
+            try { LodPauseOnStartCompat.RestoreAfterLoginBake(capi); } catch { }
             // #region agent log
             try
             {
