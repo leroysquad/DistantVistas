@@ -48,6 +48,96 @@ Industry patterns that **transfer without compromising colors or coverage**:
 
 **Rejected from prior draft:** distance-tiered column stride, mip-parent fill without full GetColor, heightfield-first deferred paint, impostor/procedural far color — all trade fidelity or coverage.
 
+**Live cliff (1.0.35):** `finished` stuck ~358 while scouts stay live — see [§ Progress cliff ~350 L0](#progress-cliff-350-l0-1035-live-evidence).
+
+---
+
+## Progress cliff ~350 L0 (1.0.35 live evidence)
+
+### Observed signature (user playtest, same constraints)
+
+| Signal | Value | Interpretation |
+|--------|-------|----------------|
+| `finished` | **358** (stuck; recurring band **~306–350**) | `PaintReadyScouts` not completing new L0 — not a coverage cap |
+| `paintReadyQueued` | **0** in **119/124** budget samples (~96%) | Paint pipeline **starved** — no Capture→paint handoffs |
+| `nearLive` / `farLive` | **8 / 8** | All **16** slots occupied; telemetry bands balanced |
+| Phase logs | **WaitChunks 3878** vs **Capture 755** (~**5.1×**) | Scouts dwell in chunk-wait, rarely reach capture |
+| Release reasons | **`maxWait` 181** vs **`painted` 129** | More slot timeouts than successful paint handoffs |
+| `avgFarTicks` | **96** (~4.8 s @ 20 tps) | Far-band scouts long-lived, mostly not painting |
+
+This is **not** “we only planned 358 stops.” Bootstrap still targets **~1680 L0** on the full **4075** disk. The UI freezes because **throughput goes to zero**, not because the product accepted partial coverage.
+
+### Why ~350 is a common plateau (mechanism)
+
+The number is **not magic** — it is a **metastable IO cliff** that shows up once the visit frontier outruns warm chunk residency:
+
+```
+                    ┌─────────────────────────────────────────┐
+  Early overlay     │ Spawn + inner keys: chunks often warm │
+  finished climbs   │ Capture → paintReady → GetColor       │
+                    └──────────────────┬──────────────────────┘
+                                       ▼
+                    ┌─────────────────────────────────────────┐
+  ~300–400 band     │ Pending shifts to rim / cold cells      │
+  finished stalls   │ 16 scouts × chunk reveal rings          │
+                    │ VS chunk loader saturates               │
+                    └──────────────────┬──────────────────────┘
+                                       ▼
+                    ┌─────────────────────────────────────────┐
+  Freeze signature  │ Slots full, phase = WaitChunks          │
+  paintReady = 0    │ No Capture → no handoff to paint queue  │
+                    │ maxWait requeue → same keys respawn       │
+                    └─────────────────────────────────────────┘
+```
+
+**Causal chain (maps to code):**
+
+1. **All slots busy** — `nearLive=8` + `farLive=8` = `MaxConcurrent` 16 (`LodLoginScoutFill`).
+2. **WaitChunks dominance** — scouts block on `LodLoginSweep.AllMapChunksLoaded` before `Capture` (`LodLoginScoutFill` WaitChunks branch). Phase ratio 3878:755 matches “mostly waiting, rarely capturing.”
+3. **Paint starvation** — `TryHandoffPaint` only runs after `Capture` succeeds or `TryTimeoutHandoff` finds partial columns (`readyScratch` → `scoutReady` → `PaintReadyScouts`). If neither happens, **`paintReadyQueued` stays 0** and `finished` does not move.
+4. **`maxWait` thrash** — at `MaxWaitTicks` (96), failed handoff → `RequeuePending` + `ReleaseSlot(..., "maxWait")`. Same key respawns on a cold cell → WaitChunks again. **181 maxWait vs 129 painted** = losing race to IO.
+5. **Near/far band asymmetry (not dual pools, but dual pressure)** — FIFO is shared (1.0.34 fix), but telemetry still splits:
+   - **Near** = inside spawn-solid 1024 (`WaitForMesh=true`): `NearRevealChunks=4`, `RunSpawnDiskSweep`, `MaxNearWaitChunksLive=8` blocks new near picks when 8 near scouts already WaitChunks (`SelectPendingIndex`).
+   - **Far** = outside 1024: `FarRevealChunks=2`, but visits **cold** rim cells → longer WaitChunks (`avgFarTicks=96`).
+   - Result: **8 near + 8 far all waiting on chunks**, near pending starved by cap, far pending starved by IO — **compute idle on every slot**.
+
+**Why the band recurs (~306–350):** early progress consumes keys whose map chunks are already resident from spawn/streaming. Once the pending queue is mostly **rim cells outside the warm halo**, the system hits **chunk-IO saturation** and the same equilibrium appears across playtests — progress creeps then **flatlines** until something breaks the WaitChunks ↔ maxWait loop.
+
+### What does *not* fix the cliff (and violates non-negotiables)
+
+| Idea | Why it fails here |
+|------|-------------------|
+| Fewer visit stops / shorter disk | Reduces coverage — rejected |
+| Paint fewer columns / coarser far grid | Reduces color fidelity — rejected |
+| Skip GetColor on far cells | Breaks seasonal truth — rejected |
+| More than 16 scouts | Worsens IO contention; more WaitChunks waiters |
+| Higher `MaxBakePerTick` alone | **No paint queue input** — starved upstream |
+
+### Cheaper-compute techniques that **prevent slot-wait / paint-starve** (same colors + full disk)
+
+These reduce **wasted slot ticks** and **restore paint feed** without changing what gets baked:
+
+| Rank | Technique | How it breaks the cliff | Preserves colors + VD? |
+|------|-----------|-------------------------|------------------------|
+| **1** | **A2 — Chunk-residency / IO pressure governor** | Prefer pending keys whose four map chunks are **already loaded**; defer respawn of `maxWait` hot keys; when `paintReadyQueued==0` and all slots WaitChunks, **rotate** stuck keys (extend `waitRetries` / `SelectPendingIndex`) | Yes — same cells, smarter spawn order |
+| **2** | **A4 — Visit order by residency (same 1680)** | Within `BudgetBootstrapVisitStops`, sort outer band by **chunk already resident** or **distance to last successful capture** — rim still visited, but not while all slots idle | Yes — full disk, order only |
+| **3** | **B3 — SQLite / mip write batching** | Fewer fsyncs during overlay → less disk IO competing with chunk streaming | Yes — same final pyramid |
+| **4** | **B4 — Inline mesh load cap** (shipped) | Keeps main thread available for Capture handoff + paint when queue is fed | Yes |
+| **5** | **A3 — GC hygiene** | When paint **does** run, drain `scoutReady` faster per tick — shortens recovery after IO unblocks | Yes — same pixels |
+| **6** | **A1 — GetColor dedup cache** | Faster per-L0 paint once handoffs resume — does **not** unblock WaitChunks by itself | Yes |
+
+**Implementer priority for cliff:** **A2 → A4 → B3/B4 → A3 → A1**. A1/A3 help **drain rate** after the pipe unblocks; A2/A4 attack **why the pipe is empty**.
+
+**Telemetry to confirm fix** (filter `H-SCOUT-SEQ`):
+
+| Signal | Cliff (1.0.35) | Healthy |
+|--------|----------------|---------|
+| `paintReadyQueued` | ~0 (96% samples) | **>0** most seconds when `nearLive+farLive>0` |
+| WaitChunks : Capture phase ratio | ~5:1 | **<2:1** |
+| `maxWait` vs `painted` releases | maxWait **>** painted | painted **≥** maxWait over 30s windows |
+| `finished` @ 5 min | ~350 plateau | past **500+** climbing |
+| `avgFarTicks` | ~96 | teens–40s with paint flowing |
+
 ---
 
 ## Ranked recommendations
@@ -59,7 +149,7 @@ Grades: **A** = high win, preserves non-negotiables; **B** = solid incremental; 
 | ID | Technique | Expected win | Why it preserves colors + coverage | Impl. cost | Sources |
 |----|-----------|--------------|-----------------------------------|-----------|---------|
 | **A1** | **Cross-L0 GetColor dedup cache** — session-scope cache keyed by exact inputs `(blockId, worldX, worldY, worldZ, seasonRel bucket)` or finer; hit = copy prior **identical** API result | **1.5–2.5×** fewer scalar calls on repeat soil/grass/snow | Same API output; no skipped columns | Low-medium — `LodBakeScratch`, `LodSeasonBake.SampleVanillaColor`, `ColorPathDiag` | [AVT bake-once reuse](https://doi.org/10.1201/b21261-13); [UberBake precompute](https://doi.org/10.1145/3386569.3392394) |
-| **A2** | **WaitChunks / chunk-IO pressure governor** — cap near WaitChunks pile-up; stagger spawns so paint queue stays fed; same 16 scouts, same cells, less idle time | Restores throughput; cuts **wasted** ticks (not fewer GetColor per L0) | Full disk unchanged; paint when capture ready | Low — `LodLoginScoutFill`, `MaxNearWaitChunksLive`, `SelectPendingIndex` | [Minecraft `ChunkTaskPriorityQueue`](https://mappings.dev/1.21.1/net/minecraft/server/level/ChunkTaskPriorityQueue.html); [VoxelLodTerrain clipbox](https://voxel-tools.readthedocs.io/en/latest/api/VoxelLodTerrain/) |
+| **A2** | **WaitChunks / chunk-IO pressure governor** — cap near WaitChunks pile-up; **chunk-residency-aware** `SelectPendingIndex`; defer `maxWait` hot-key respawn; same 16 scouts, same 1680 cells | Unblocks **~350 cliff** — restores `paintReadyQueued`; cuts wasted WaitChunks ticks | Full disk unchanged; full GetColor when capture ready | Low — `LodLoginScoutFill`, `MaxNearWaitChunksLive`, `SelectPendingIndex`, `waitRetries` | [Minecraft `ChunkTaskPriorityQueue`](https://mappings.dev/1.21.1/net/minecraft/server/level/ChunkTaskPriorityQueue.html); [VoxelLodTerrain clipbox](https://voxel-tools.readthedocs.io/en/latest/api/VoxelLodTerrain/) |
 | **A3** | **GC / allocation hygiene on paint path** — eliminate per-slice palette snapshot rebuilds (partially shipped 1.0.35), pool scratch lists, throttle resume snapshot, audit `BakeSectionFromVisitChunkedBody` allocs | Same GetColor count, **faster** effective compute; target gen0 &lt;800 @30s | No visual change | Low-medium — `LodLoginBake`, `LodSeasonBake`, `LodBakeScratch` | [ArrayPool](https://learn.microsoft.com/en-us/dotnet/api/system.buffers.arraypool-1); [LOH / Sitnik](https://adamsitnik.com/Array-Pool/) |
 | **A4** | **Smarter visit order (same 1680 stops)** — spawn-first + **within-budget** reorder by chunk-residency / paint-queue depth so scouts hit already-loaded cells first | Higher L0/min at same wall cap; no fewer cells | Full 4075 disk; order only | Low — `LodLoginSweepBootstrap.BudgetBootstrapVisitStops` | [Vis98 priority-queue refinement](https://www.ifi.uzh.ch/dam/jcr:ffffffff-82b7-d340-ffff-ffff923549a3/Vis98.pdf); [error-bounded scheduling](https://vca.informatik.uni-rostock.de/~schumann/papers/2008+/error%20bounded%20GPU-supported%20terrain%20visualization.pdf) |
 | **A5** | **Extend equivalent stack rules** — only where audit proves `FinishColumnPaint` identical to full stack (extend `StackDeterminedByTopOnly` / `NeedsTextureMean` with tests, not new approximations) | **1.2–1.5×** incremental | Same rules as 1.0.33 stack early-exit philosophy | Low — `LodSurfaceMix`, `SeasonBakeChecks` | [SS4 material tiers](https://gpuopen.com/download/gdc-2019-agtd2-4-million-acres-serious-sam-4.pdf) (concept: tiered **equivalent** detail) |
@@ -95,9 +185,9 @@ Grades: **A** = high win, preserves non-negotiables; **B** = solid incremental; 
 
 ### Stage 1: WaitChunks (scheduling — no coverage change)
 
-**Problem:** All scouts in WaitChunks → no Capture → no paint; IO saturation.
+**Problem:** All scouts in WaitChunks → no Capture → no paint; IO saturation. **1.0.35 cliff:** `finished≈358`, `paintReadyQueued=0`, WaitChunks:Capture ≈ **5:1**.
 
-**Lever:** A2 — same cells, better spawn timing and WaitChunks caps (`MaxNearWaitChunksLive`, partial escalation already shipped).
+**Lever:** A2 (primary for cliff), A4 (residency order) — same cells, better spawn timing and WaitChunks caps (`MaxNearWaitChunksLive`, partial escalation already shipped).
 
 **Files:** `LodLoginScoutFill`, `LodScoutViewerEntity`, `LodScoutSeqDiag`, `LodLoginSweepBootstrap`
 
@@ -174,19 +264,20 @@ Grades: **A** = high win, preserves non-negotiables; **B** = solid incremental; 
 
 Cold canvas ~1680 L0, full 4075 disk. Filter `H-SCOUT-SEQ`, `H-PAINT`, `H-LOOK`. **Success = same visuals/coverage, lower waste metrics.**
 
-### Experiment 1 — A1: Cross-L0 GetColor dedup cache
+### Experiment 1 — A2: WaitChunks cliff breaker (priority for ~350 stall)
+
+1. **Chunk-residency pick:** in `SelectPendingIndex`, score pending keys by `AnyMapChunksLoaded` / `AllMapChunksLoaded`; prefer keys that can enter Capture within 1–2 ticks.
+2. **Hot-key cooldown:** after `maxWait`, increment `waitRetries` and **skip** that key for N spawns unless all alternatives exhausted.
+3. When `paintReadyQueued==0` and `CountPhase(WaitChunks) >= 12`, log `chunkPressure` and prefer far keys whose chunks overlap already-loaded region (same 1680 stops).
+4. **Verify:** `paintReadyQueued > 0`; WaitChunks:Capture **<2:1**; `finished` climbs past **500** in same session; gap audit pass.
+5. **Files:** `LodLoginScoutFill`, `LodLoginSweepBootstrap`, `LodScoutSeqDiag`
+
+### Experiment 2 — A1: Cross-L0 GetColor dedup cache
 
 1. Session `MacroColorCache` with key at least `(blockId, x, y, z)` or `(blockId, climateTile16, y, seasonTile16)` — **must pass bit-identical tests vs uncached path**.
 2. Log hit rate in `ColorPathDiag`; never hit on deep-winter texture-mean columns unless mean cache is separate.
 3. **Verify:** `SeasonBakeChecks` golden columns; `GetColorCalls` drop with **unchanged** output hashes per L0.
 4. **Files:** `LodBakeScratch`, `LodSeasonBake.SampleVanillaColor`, `ColorPathDiag`
-
-### Experiment 2 — A2: WaitChunks pressure governor + telemetry
-
-1. When all slots WaitChunks and `paintReadyQueued==0`, defer respawn of same hot keys (`waitRetries`); prefer pending keys whose map chunks already resident.
-2. Log `chunkPressure` in `H-SCOUT-SEQ`.
-3. **Verify:** `paintReadyQueued > 0` when scouts live; **1680 stops still planned**; gap audit pass.
-4. **Files:** `LodLoginScoutFill`, `LodLoginSweepBootstrap`
 
 ### Experiment 3 — A3: GC hygiene audit
 
@@ -202,7 +293,9 @@ Cold canvas ~1680 L0, full 4075 disk. Filter `H-SCOUT-SEQ`, `H-PAINT`, `H-LOOK`.
 | `GetColorCalls` / batch | ~540 | **&lt;300** via dedup only |
 | gen0 @ 30s | ~2383 | **&lt;800** |
 | Managed MB @ 30s | ~9251 | **&lt;4000** |
-| `paintReadyQueued==0` during freeze | ~96% | **&lt;10%** |
+| `paintReadyQueued==0` during freeze | ~96% (119/124) | **&lt;10%** |
+| `finished` @ cliff | ~358 plateau | **&gt;500** and climbing |
+| WaitChunks : Capture (phase logs) | ~5:1 | **&lt;2:1** |
 | Visual / gap audit | pass | **pass** |
 
 ---
@@ -243,12 +336,16 @@ Cold canvas ~1680 L0, full 4075 disk. Filter `H-SCOUT-SEQ`, `H-PAINT`, `H-LOOK`.
 
 User clarified: **do not compromise seasonal GetColor quality or view distance / 4075-disk coverage.** Rank only techniques that deliver the **same** outcome with less waste.
 
+**1.0.35 cliff:** `finished≈358`, `paintReadyQueued=0` (96%), 8 near + 8 far scouts all in WaitChunks, phase ratio ~5:1, `maxWait` (181) > `painted` (129). Root cause: **chunk-IO saturation → paint pipeline starved** — not insufficient planned stops.
+
 **Top 3 experiments (in order):**
 
-1. **A1** — Cross-L0 GetColor **dedup** cache (identical inputs → identical RGB; tests required).  
-2. **A2** — WaitChunks / chunk-IO pressure governor (same 1680 stops, less idle starvation).  
-3. **A3** — GC / allocation hygiene on chunked paint path (same pixels, less churn).
+1. **A2** — WaitChunks **cliff breaker**: chunk-residency pick + hot-key cooldown + pressure telemetry (same 1680 stops).  
+2. **A4** — Visit order by chunk residency within full disk budget.  
+3. **A1** — Cross-L0 GetColor **dedup** cache (drain rate once pipe unblocks).
+
+**Also:** A3 GC hygiene, B3/B4 IO relief — secondary.
 
 **Explicitly rejected:** column stride / fewer painted cells, mip-parent color fill, heightfield-first deferred paint, shorter disk, skip GetColor, procedural far color.
 
-**Verify with:** pixel/golden tests + `H-PAINT` GetColorCalls + 30s gen0/MB + full gap audit + 1680-stop count unchanged.
+**Verify with:** `H-SCOUT-SEQ` cliff metrics + `H-PAINT` + full gap audit + 1680-stop count unchanged.
