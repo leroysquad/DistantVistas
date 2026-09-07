@@ -62,7 +62,7 @@ public static class LodLoginBakePlayerMove
         entity.ServerPos.Pitch = pitch;
         entity.ServerPos.Motion.Set(0, 0, 0);
         entity.PositionBeforeFalling.Set(x, y, z);
-        try { entity.UpdatePartitioning(); } catch { }
+        LodVsCompat.TryUpdatePartitioning(entity);
     }
 
     /// <summary>
@@ -81,7 +81,7 @@ public static class LodLoginBakePlayerMove
         entity.Pos.SetPos(x, y, z);
         entity.Pos.Motion.Set(0, 0, 0);
         entity.PositionBeforeFalling.Set(x, y, z);
-        entity.UpdatePartitioning();
+        LodVsCompat.TryUpdatePartitioning(entity);
 
         if (requestChunks)
             RequestChunkColumnsVisible(capi, x, z, entity.Pos.Dimension, chunkVisibleRadius);

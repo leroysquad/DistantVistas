@@ -619,7 +619,7 @@ public static class LodLoginSweepBootstrap
             else outer.Add(key);
         }
 
-        int innerTake = Math.Min(inner.Count, Math.Max(max / 3, 64));
+        int innerTake = Math.Min(inner.Count, Math.Max((max * 2) / 3, 64));
         innerTake = Math.Min(innerTake, max);
         var result = new List<long>(max);
         var used = new HashSet<long>();
@@ -671,7 +671,8 @@ public static class LodLoginSweepBootstrap
             int span = end - start;
             if (span <= 0) continue;
 
-            int weight = b + 1;
+            // Nearer outer bands (low b) get more stops; silhouette is sparse.
+            int weight = Math.Max(1, bands - b);
             int picks = Math.Max(1, (int)Math.Round(max * weight / (double)weightSum));
             picks = Math.Min(picks, max - result.Count);
             picks = Math.Min(picks, span);

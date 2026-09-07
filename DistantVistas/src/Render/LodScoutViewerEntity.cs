@@ -116,8 +116,8 @@ public sealed class LodScoutViewerEntity : Entity
 
         viewer.IsRendered = false;
         viewer.AlwaysActive = true;
-        try { viewer.UpdatePartitioning(); } catch { }
-        try { api.World.LoadedEntities[viewer.EntityId] = viewer; } catch { }
+        LodVsCompat.TryUpdatePartitioning(viewer);
+        LodVsCompat.TryIndexLoadedEntity(api.World, viewer);
         return viewer;
     }
 
@@ -142,7 +142,7 @@ public sealed class LodScoutViewerEntity : Entity
             catch { }
         }
 
-        try { world.LoadedEntities.Remove(id); } catch { }
+        LodVsCompat.TryRemoveLoadedEntity(world, id);
     }
 
     /// <summary>
@@ -151,9 +151,10 @@ public sealed class LodScoutViewerEntity : Entity
     /// </summary>
     public static int DespawnAll(IWorldAccessor world)
     {
-        if (world?.LoadedEntities == null) return 0;
+        IDictionary<long, Entity>? loaded = LodVsCompat.TryGetLoadedEntities(world);
+        if (loaded == null) return 0;
         var doomed = new List<Entity>();
-        foreach (Entity entity in world.LoadedEntities.Values)
+        foreach (Entity entity in loaded.Values)
         {
             if (entity is LodScoutViewerEntity)
                 doomed.Add(entity);

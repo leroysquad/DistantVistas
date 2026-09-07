@@ -3,12 +3,12 @@ namespace DistantVistas;
 /// <summary>
 /// One staggered coverage scout. A real <see cref="LodScoutViewerEntity"/> sits on the
 /// visit cell so Vintage Story has a player-style stream/render center there. The
-/// human player never moves to that cell. After stream → capture → paint → mesh,
-/// the viewer despawns.
+/// human player never moves to that cell. Near spawn: stream → capture → paint → mesh.
+/// Far ring: stream → capture → FlagBaked paint, then despawn (mesh fill-in after overlay).
 /// </summary>
 public sealed class LodScoutEntity
 {
-    public enum Phase : byte { WaitChunks, Capture, Mesh, Done }
+    public enum Phase : byte { WaitChunks, Capture, Paint, Mesh, Done }
 
     public long Key { get; }
     public Phase Current { get; set; }
@@ -22,6 +22,11 @@ public sealed class LodScoutEntity
     public int Cx { get; set; }
     public int Cz { get; set; }
     public bool PaintQueued { get; set; }
+    public bool Painted { get; set; }
+    /// <summary>True inside the spawn-solid disk: wait for a drawable mesh before despawn.</summary>
+    public bool WaitForMesh { get; set; }
+    /// <summary>KeepLoaded radius last sent to the server (retry RequestUp uses this).</summary>
+    public int HoldRadius { get; set; }
 
     public LodScoutEntity(long key)
     {

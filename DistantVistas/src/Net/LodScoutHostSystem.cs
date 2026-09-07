@@ -22,13 +22,19 @@ public sealed class LodScoutHostSystem : ModSystem
 
     readonly Dictionary<string, Dictionary<long, ScoutHold>> holdsByPlayer = new();
     readonly Dictionary<long, int> columnRefs = new();
+    readonly Dictionary<string, Queue<ScoutAnchorUp>> pendingUpsByPlayer = new();
+    readonly Queue<ForceSendWork> forceSends = new();
+    long tickListenerId;
 
     public static LodScoutHostSystem? ClientInstance { get; private set; }
 
-    /// <summary>Client MaxConcurrent plus a retry slot. Far KeepLoaded spam is refused past this.</summary>
-    public const int MaxConcurrentHolds = 8;
-    /// <summary>KeepLoaded Chebyshev radius. Matches scout local visit neighbourhood, not the 4075 disk.</summary>
-    public const int MaxHoldRadiusChunks = 8;
+    /// <summary>Client MaxConcurrent. Far KeepLoaded spam is refused past this.</summary>
+    public const int MaxConcurrentHolds = 16;
+    /// <summary>KeepLoaded Chebyshev radius. Near scouts use this; far scouts send less.</summary>
+    public const int MaxHoldRadiusChunks = 4;
+    /// <summary>OnLoaded ForceSend budget so 16 scouts do not dump hundreds of columns in one tick.</summary>
+    public const int MaxForceSendPerTick = 48;
+    public const int MaxPendingUps = 32;
 
     public override double ExecuteOrder() => 0.05;
 
@@ -65,10 +71,16 @@ public sealed class LodScoutHostSystem : ModSystem
             if (player?.PlayerUID != null)
                 ReleasePlayer(player, player.PlayerUID);
         };
+        tickListenerId = api.Event.RegisterGameTickListener(OnServerTick, 50);
     }
 
     public override void Dispose()
     {
+        if (sapi != null && tickListenerId != 0)
+        {
+            try { sapi.Event.UnregisterGameTickListener(tickListenerId); } catch { }
+            tickListenerId = 0;
+        }
         if (ReferenceEquals(ClientInstance, this))
             ClientInstance = null;
         base.Dispose();
@@ -161,7 +173,10 @@ public sealed class LodScoutHostSystem : ModSystem
         }
 
         if (holds.Count >= MaxConcurrentHolds && !holds.ContainsKey(msg.Key))
+        {
+            EnqueuePendingUp(player.PlayerUID, msg);
             return;
+        }
 
         var hold = new ScoutHold { Key = msg.Key, Cx = msg.Cx, Cz = msg.Cz, Radius = radius, Dimension = dim };
 
@@ -199,11 +214,7 @@ public sealed class LodScoutHostSystem : ModSystem
                 sapi.WorldManager.LoadChunkColumnPriority(cx, cz, new ChunkLoadOptions
                 {
                     KeepLoaded = true,
-                    OnLoaded = () =>
-                    {
-                        try { sapi.WorldManager.ForceSendChunkColumn(player, sendCx, sendCz, dim); }
-                        catch { }
-                    },
+                    OnLoaded = () => EnqueueForceSend(player, sendCx, sendCz, dim),
                 });
             }
         }
@@ -211,6 +222,7 @@ public sealed class LodScoutHostSystem : ModSystem
 
     void DropAnchor(IServerPlayer player, long key)
     {
+        RemovePendingUp(player.PlayerUID, key);
         if (!holdsByPlayer.TryGetValue(player.PlayerUID, out Dictionary<long, ScoutHold>? holds))
             return;
         if (!holds.TryGetValue(key, out ScoutHold? hold))
@@ -222,6 +234,110 @@ public sealed class LodScoutHostSystem : ModSystem
         ReleaseHoldColumns(player, hold, stillNeeded: holds);
         if (holds.Count == 0)
             holdsByPlayer.Remove(player.PlayerUID);
+        DrainPendingUpsFor(player);
+    }
+
+    void OnServerTick(float dt)
+    {
+        _ = dt;
+        DrainForceSends();
+        DrainPendingUps();
+    }
+
+    void EnqueuePendingUp(string uid, ScoutAnchorUp msg)
+    {
+        if (!pendingUpsByPlayer.TryGetValue(uid, out Queue<ScoutAnchorUp>? q))
+        {
+            q = new Queue<ScoutAnchorUp>();
+            pendingUpsByPlayer[uid] = q;
+        }
+
+        int n = q.Count;
+        for (int i = 0; i < n; i++)
+        {
+            ScoutAnchorUp existing = q.Dequeue();
+            if (existing.Key != msg.Key)
+                q.Enqueue(existing);
+        }
+
+        if (q.Count >= MaxPendingUps)
+            q.Dequeue();
+        q.Enqueue(msg);
+    }
+
+    void RemovePendingUp(string uid, long key)
+    {
+        if (!pendingUpsByPlayer.TryGetValue(uid, out Queue<ScoutAnchorUp>? q) || q.Count == 0)
+            return;
+        int n = q.Count;
+        for (int i = 0; i < n; i++)
+        {
+            ScoutAnchorUp existing = q.Dequeue();
+            if (existing.Key != key)
+                q.Enqueue(existing);
+        }
+        if (q.Count == 0)
+            pendingUpsByPlayer.Remove(uid);
+    }
+
+    void DrainPendingUps()
+    {
+        if (sapi == null) return;
+        var uids = new List<string>(pendingUpsByPlayer.Keys);
+        for (int i = 0; i < uids.Count; i++)
+        {
+            string uid = uids[i];
+            IPlayer? raw = null;
+            try { raw = sapi.World.PlayerByUid(uid); }
+            catch { }
+            if (raw is not IServerPlayer player)
+            {
+                pendingUpsByPlayer.Remove(uid);
+                continue;
+            }
+            DrainPendingUpsFor(player);
+        }
+    }
+
+    void DrainPendingUpsFor(IServerPlayer player)
+    {
+        if (!pendingUpsByPlayer.TryGetValue(player.PlayerUID, out Queue<ScoutAnchorUp>? q))
+            return;
+        holdsByPlayer.TryGetValue(player.PlayerUID, out Dictionary<long, ScoutHold>? holds);
+
+        while (q.Count > 0)
+        {
+            int live = holds?.Count ?? 0;
+            if (live >= MaxConcurrentHolds)
+                break;
+            ScoutAnchorUp msg = q.Dequeue();
+            HoldAnchor(player, msg);
+            holdsByPlayer.TryGetValue(player.PlayerUID, out holds);
+        }
+
+        if (q.Count == 0)
+            pendingUpsByPlayer.Remove(player.PlayerUID);
+    }
+
+    void EnqueueForceSend(IServerPlayer player, int cx, int cz, int dim)
+    {
+        if (forceSends.Count >= 2048)
+            DrainForceSends(extra: MaxForceSendPerTick);
+        forceSends.Enqueue(new ForceSendWork { Player = player, Cx = cx, Cz = cz, Dim = dim });
+    }
+
+    void DrainForceSends(int extra = 0)
+    {
+        if (sapi == null) return;
+        int budget = MaxForceSendPerTick + extra;
+        int n = 0;
+        while (n < budget && forceSends.Count > 0)
+        {
+            ForceSendWork work = forceSends.Dequeue();
+            try { sapi.WorldManager.ForceSendChunkColumn(work.Player, work.Cx, work.Cz, work.Dim); }
+            catch { }
+            n++;
+        }
     }
 
     void ReleasePlayer(IServerPlayer player, string uid)
@@ -230,10 +346,14 @@ public sealed class LodScoutHostSystem : ModSystem
         {
             LodScoutViewerEntity.DespawnAll(sapi.World);
             var extra = new List<Entity>();
-            foreach (Entity entity in sapi.World.LoadedEntities.Values)
+            IDictionary<long, Entity>? loaded = LodVsCompat.TryGetLoadedEntities(sapi.World);
+            if (loaded != null)
             {
-                if (entity is LodScoutViewerEntity)
-                    extra.Add(entity);
+                foreach (Entity entity in loaded.Values)
+                {
+                    if (entity is LodScoutViewerEntity)
+                        extra.Add(entity);
+                }
             }
             var gone = new EntityDespawnData { Reason = EnumDespawnReason.Removed };
             for (int i = 0; i < extra.Count; i++)
@@ -242,6 +362,7 @@ public sealed class LodScoutHostSystem : ModSystem
             }
         }
 
+        pendingUpsByPlayer.Remove(uid);
         if (!holdsByPlayer.TryGetValue(uid, out Dictionary<long, ScoutHold>? holds))
             return;
         holdsByPlayer.Remove(uid);
@@ -322,5 +443,13 @@ public sealed class LodScoutHostSystem : ModSystem
         public int Radius;
         public int Dimension;
         public LodScoutViewerEntity? Viewer;
+    }
+
+    sealed class ForceSendWork
+    {
+        public IServerPlayer Player = null!;
+        public int Cx;
+        public int Cz;
+        public int Dim;
     }
 }

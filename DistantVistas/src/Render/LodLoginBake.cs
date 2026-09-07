@@ -12,9 +12,9 @@ namespace DistantVistas;
 ///
 /// Purpose (locked): during the HUD overlay, staggered <see cref="LodScoutViewerEntity"/>
 /// workers sit on visit cells as player-style stream/render centers. The real player
-/// never teleports. Each scout force-loads that neighbourhood (KeepLoaded + ForceSend
-/// + SetChunkColumnVisible around the viewer), captures, GetColor-bakes, waits for a
-/// LOD mesh, then despawns. Canvases persist to SQLite.
+/// never teleports. Near spawn: stream → capture → GetColor → mesh. Far ring: stream →
+/// capture → FlagBaked paint, then despawn (meshes fill in under the splash). Canvases
+/// persist to SQLite.
 /// </summary>
 public sealed class LodLoginBake
 {
@@ -28,14 +28,15 @@ public sealed class LodLoginBake
     const int TeleportSettleTicks = 1;
     /// <summary>~50 ms — season bake is synchronous; brief gap before next teleport.</summary>
     const int BakeSettleTicks = 1;
-    /// <summary>L0 neighbour disk at a stop. 12 × 64-block cells ≈ 768, matching the 750-block bake view.</summary>
-    const int BatchBakeL0Radius = 12;
-    const int MaxBatchBakePerStop = 256;
-    /// <summary>GetColor + persist per overlay tick. 12 keeps Windows responsive while hopping faster.</summary>
-    const int MaxBakePerTick = 12;
+    /// <summary>L0 neighbour disk at a leftover hop-era stop. Overlay scouts paint the visit cell.</summary>
+    const int BatchBakeL0Radius = 2;
+    const int MaxBatchBakePerStop = 32;
+    /// <summary>GetColor + persist per overlay tick across all live scouts, not one stop.</summary>
+    const int MaxBakePerTick = 24;
     const int MaxLeftoverBakePerTick = 12;
     const int SweepRowsPerCall = 2;
     const int RevealGrowPerTick = 8;
+    const int SpawnSweepEveryTicks = 4;
 
     /// <summary>Near-field disk that must have drawable meshes before overlay Hide.</summary>
     public const double SpawnSolidRadiusBlocks = 1024;
@@ -122,6 +123,7 @@ public sealed class LodLoginBake
     readonly List<long> leftoverKeys = new();
     readonly LodLoginScoutFill scoutFill = new();
     readonly Queue<long> scoutReady = new();
+    int sweepingTicks;
     int revealRadius;
     int stopBakeIndex;
     bool stopBakePrepared;
@@ -191,8 +193,7 @@ public sealed class LodLoginBake
     public void CancelAndSave()
     {
         if (phase == Phase.Done || released) return;
-        int left = pending.Count + scoutFill.LiveCount + scoutReady.Count
-            + (currentKey != null ? 1 : 0);
+        int left = pending.Count + scoutFill.LiveCount + scoutFill.HeldCount + scoutReady.Count;
         capi.Logger.Notification(
             "[DistantVistas] Login visit sweep paused — {0} region(s) remaining. Returning to the menu (relog to resume).",
             left);
@@ -282,6 +283,7 @@ public sealed class LodLoginBake
         spawnRevealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
         scoutFill.Reset(capi);
         scoutReady.Clear();
+        sweepingTicks = 0;
 
         overlay.Show();
         renderer.LoginBakeOverlayActive = true;
@@ -721,6 +723,7 @@ public sealed class LodLoginBake
     void TickSweeping()
     {
         LogTeleportBegin();
+        sweepingTicks++;
 
         GrowRevealAroundSpawn();
         PinPickupPose();
@@ -734,38 +737,12 @@ public sealed class LodLoginBake
         for (int i = 0; i < ready.Count; i++)
             scoutReady.Enqueue(ready[i]);
 
-        if (currentKey == null && scoutReady.Count > 0)
-        {
-            currentKey = scoutReady.Dequeue();
-            revealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
-            stopBakePrepared = false;
-            stopBakeIndex = 0;
-            stopBakeKeys.Clear();
-        }
+        PaintReadyScouts();
 
-        if (currentKey != null)
-        {
-            long key = currentKey.Value;
-            GrowRevealAround(key);
-            PinPickupPose();
-            SweepColumnsAround(key);
-            if (!BakeBatchAtStop(key))
-            {
-                SweepColumnsAroundSpawn();
-                UpdateProgress(Progress,
-                    StatusWithEta($"{VisitPrefix()}painting streamed ring… ({stopBakeIndex}/{Math.Max(1, stopBakeKeys.Count)})"));
-                return;
-            }
-            finished++;
-            SaveResumeSnapshot();
-            sweepTiming.NoteFinished(finished);
-            statusWriter.TouchAdvance($"region-{finished}-of-{total}");
-            currentKey = null;
-        }
+        if (sweepingTicks % SpawnSweepEveryTicks == 0)
+            SweepColumnsAroundSpawn();
 
-        SweepColumnsAroundSpawn();
-
-        int inFlight = scoutFill.LiveCount + scoutReady.Count + (currentKey != null ? 1 : 0);
+        int inFlight = scoutFill.LiveCount + scoutFill.HeldCount + scoutReady.Count;
         if (inFlight == 0 && pending.Count == 0)
         {
             RestorePlayerPose();
@@ -774,7 +751,40 @@ public sealed class LodLoginBake
         }
 
         UpdateProgress(Progress,
-            StatusWithEta($"{VisitPrefix()}{scoutFill.LiveCount} scout{(scoutFill.LiveCount == 1 ? "" : "s")} streaming… ({Pct(finished, total)})"));
+            StatusWithEta(
+                $"{VisitPrefix()}{scoutFill.LiveCount}/{LodLoginScoutFill.MaxConcurrent} scouts streaming… ({Pct(finished, total)})"));
+    }
+
+    /// <summary>
+    /// Paint every captured scout this tick (budgeted), not one serial currentKey.
+    /// A 256-neighbour batch on a single stop froze the UI at 1/16 and blew managed heap.
+    /// </summary>
+    void PaintReadyScouts()
+    {
+        int steps = 0;
+        int painted = 0;
+        int queued = scoutReady.Count;
+        for (int i = 0; i < queued && steps < MaxBakePerTick; i++)
+        {
+            long key = scoutReady.Dequeue();
+            steps++;
+            if (!TryBakeOne(key))
+            {
+                if (scoutFill.IsLive(key))
+                    scoutReady.Enqueue(key);
+                continue;
+            }
+            scoutFill.NotifyPainted(key);
+            finished++;
+            painted++;
+        }
+
+        if (painted > 0)
+        {
+            SaveResumeSnapshot();
+            sweepTiming.NoteFinished(finished);
+            statusWriter.TouchAdvance($"region-{finished}-of-{total}");
+        }
     }
 
     void TickDraining()
@@ -933,8 +943,8 @@ public sealed class LodLoginBake
     string VisitPrefix()
     {
         if (retryingMisses)
-            return $"Retrying missed regions (pass {resweepRound}) — {finished + 1}/{total} — ";
-        return $"{sweepModeLabel} — {finished + 1}/{total} — ";
+            return $"Retrying missed regions (pass {resweepRound}) — {finished}/{total} — ";
+        return $"{sweepModeLabel} — {finished}/{total} — ";
     }
 
     void SweepColumnsAround(long l0Key)
@@ -1070,13 +1080,11 @@ public sealed class LodLoginBake
 
     bool TryBakeOne(long key)
     {
-        int getBefore = visitBakeGetColor;
-        int changedBefore = visitBakeChanged;
         bool prevExpire = LodSeasonBake.AllowExpireNoMapSample;
         if (expireRecapture) LodSeasonBake.AllowExpireNoMapSample = true;
         try { BakeAndPersist(key); }
         finally { LodSeasonBake.AllowExpireNoMapSample = prevExpire; }
-        if (visitBakeGetColor <= getBefore && visitBakeChanged <= changedBefore) return false;
+        if (!pipeline.World.Sections.ContainsKey(key)) return false;
         completedKeys.Add(key);
         return true;
     }
@@ -1657,8 +1665,7 @@ public sealed class LodLoginBake
     {
         if (released || phase == Phase.Done) return;
 
-        int left = pending.Count + scoutFill.LiveCount + scoutReady.Count
-            + (currentKey != null ? 1 : 0);
+        int left = pending.Count + scoutFill.LiveCount + scoutFill.HeldCount + scoutReady.Count;
         if (left <= 0
             && phase is not Phase.Sweeping
             and not Phase.WaitingForWorld
@@ -1677,6 +1684,7 @@ public sealed class LodLoginBake
 
         var pendingList = new List<long>(pending);
         scoutFill.CopyLiveKeys(pendingList);
+        scoutFill.CopyHeldKeys(pendingList);
         foreach (long key in scoutReady)
             pendingList.Add(key);
         if (currentKey != null)

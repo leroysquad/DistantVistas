@@ -211,6 +211,12 @@ public static class LoginSweepChecks
             "login bake does not complete deferred handover on teardown");
         c.True(bake.Contains("LodLoginBakeProgressUi"),
             "login bake throttles loading-text updates");
+        string progressUi = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeProgressUi.cs"));
+        c.True(progressUi.Contains("HeartbeatMs = 3000"),
+            "overlay status refreshes at least every 3s so % does not sit still");
+        c.True(progressUi.Contains("detail != lastDetail"),
+            "overlay status refreshes when scout count / paint text changes");
         c.True(bake.Contains("if (released) return"),
             "login bake teardown is idempotent");
         c.True(bake.Contains("Teardown(success: false, keepResume: true)"),
@@ -455,36 +461,38 @@ public static class LoginSweepChecks
             "login bake settles after each teleport");
         c.True(bake.Contains("BakeSettle"),
             "login bake settles after each bake");
-        c.True(bake.Contains("BatchBakeL0Radius = 12"),
-            "login bake batch-bakes neighbour disk inside the 750-block view");
-        c.True(bake.Contains("MaxBakePerTick = 12"),
-            "login bake spreads GetColor across overlay ticks");
+        c.True(bake.Contains("BatchBakeL0Radius = 2"),
+            "overlay visit paint is the visit cell, not a 750-block neighbour disk");
+        c.True(bake.Contains("MaxBakePerTick = 24"),
+            "login bake paints many captured scouts per overlay tick");
         c.True(bake.Contains("CollectExpireLeftovers"),
             "expire leftovers are queued, not baked in one tick");
         c.True(bake.Contains("RequestChunkColumnRing"),
             "login bake grows the streamed ring instead of requesting the full disk at teleport");
         c.True(bake.Contains("SweepRowsPerCall"),
             "login bake sweeps loaded columns a few rows per tick");
-        c.True(bake.Contains("MaxBatchBakePerStop = 256"),
-            "login bake batch-bakes streamed neighbours per teleport");
+        c.True(bake.Contains("MaxBatchBakePerStop = 32"),
+            "leftover neighbour bake is small; overlay scouts paint the visit cell");
         c.True(bake.Contains("BakeBatchAtStop"),
-            "login bake batch-bakes streamed neighbours per stop");
+            "leftover hop-era neighbour bake helper remains for expire leftovers");
+        c.True(bake.Contains("PaintReadyScouts"),
+            "login overlay paints every captured scout each tick, not one serial currentKey");
         c.True(bake.Contains("scoutFill.Tick"),
             "login overlay drives staggered scout entities instead of player hops");
         c.True(bake.Contains("PinPickupPose();"),
             "login bake re-pins pickup pose after scout SetChunkColumnVisible");
         c.True(bake.Contains("LodLoginScoutFill"),
             "login bake owns the concurrent scout fill");
-        c.True(bake.Contains("GrowRevealAround(key)"),
-            "login bake grows SetChunkColumnVisible rings at the scout stop (player stays)");
         c.True(bake.Contains("GrowRevealAroundSpawn()"),
             "login bake grows a spawn-centered vanilla stream for spawn-solid land");
         c.True(bake.Contains("viewBoost.SpawnStreamRadiusChunks"),
             "spawn vanilla stream stays at the 750-hold, not a 4 km tessellation disk");
         c.True(bake.Contains("SweepColumnsAroundSpawn()"),
             "login bake captures loaded columns across the onset disk, not only the current stop");
-        c.True(bake.Contains("SweepColumnsAround(key)"),
-            "login bake sweeps loaded columns around the scout stop");
+        c.True(bake.Contains("SpawnSweepEveryTicks"),
+            "spawn-disk capture is not every overlay tick (GC)");
+        c.True(bake.Contains("scoutFill.LiveCount}/{LodLoginScoutFill.MaxConcurrent} scouts"),
+            "overlay reports live/max scouts so 1/16 stuck is visible");
         int releaseAt = bake.IndexOf("void ReleaseResources(bool success, bool keepResume = false)", StringComparison.Ordinal);
         int nextAt = bake.IndexOf("void LogMayFlagBakedDump()", releaseAt, StringComparison.Ordinal);
         c.True(releaseAt >= 0 && nextAt > releaseAt, "ReleaseResources bounds");
@@ -556,20 +564,49 @@ public static class LoginSweepChecks
         c.True(scoutFill.Contains("DespawnOne") && scoutFill.Contains("DespawnAll"),
             "scouts despawn each viewer and wipe leftovers on reset");
         c.True(scoutFill.Contains("HasDrawableMesh"),
-            "scouts wait for a LOD mesh before despawn");
+            "near scouts wait for a LOD mesh before despawn");
+        c.True(scoutFill.Contains("WaitForMesh"),
+            "far scouts skip the mesh-wait gate after FlagBaked paint");
+        c.True(scoutFill.Contains("Phase.Paint"),
+            "scouts stay until GetColor paint, then near waits mesh / far despawns");
+        c.True(scoutFill.Contains("NotifyPainted"),
+            "paint completion unblocks the scout slot so the next pending cell can start");
+        c.True(scoutFill.Contains("MaxNearConcurrent"),
+            "near mesh-wait scouts do not occupy all 16 slots");
+        c.True(scoutFill.Contains("heldFar"),
+            "far visit keys are held aside so spawn-first queues still start far scouts");
+        c.True(scoutFill.Contains("RequestUpRetryTicks"),
+            "scouts retry KeepLoaded if the server refused an Up at the hold cap");
+        c.True(bake.Contains("scoutFill.HeldCount"),
+            "overlay does not finish while far/near keys sit in the mixed-fill hold queues");
+        c.True(bake.Contains("scoutFill.IsLive(key)"),
+            "failed GetColor paint retries only while the scout is still live");
         string terrain = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodTerrainRenderer.cs"));
         c.True(terrain.Contains("public bool HasDrawableMesh"),
             "LOD renderer exposes drawable-mesh wait so scouts do not despawn on a hole");
         c.True(scoutFill.Contains("RequestUp(key, scout.Cx, scout.Cz, radius, dim, x, y, z)"),
             "client sends visit-cell XYZ so the server spawns the viewer on that column");
-        c.Eq(6, LodLoginScoutFill.MaxConcurrent, "a handful of scouts cover more than hops without 16 far tessellation centers");
-        c.Eq(8, LodLoginScoutFill.LocalVisitRevealChunks,
+        c.Eq(16, LodLoginScoutFill.MaxConcurrent, "all 16 scout slots must work in parallel");
+        c.Eq(8, LodLoginScoutFill.MaxNearConcurrent,
+            "half the slots stay on spawn-solid mesh wait");
+        c.Eq(8, LodLoginScoutFill.MaxFarConcurrent,
+            "half the slots paint the far ring so overlay % moves during near mesh waits");
+        c.Eq(LodLoginScoutFill.MaxNearConcurrent + LodLoginScoutFill.MaxFarConcurrent,
+            LodLoginScoutFill.MaxConcurrent,
+            "near+far caps fill all 16 slots");
+        c.Eq(4, LodLoginScoutFill.LocalVisitRevealChunks,
             "scouts stream a local neighbourhood around visit cells");
-        c.Eq(LodLoginScoutFill.LocalVisitRevealChunks, LodScoutHostSystem.MaxHoldRadiusChunks,
-            "server KeepLoaded radius matches the local scout neighbourhood");
-        c.True(LodScoutHostSystem.MaxConcurrentHolds >= LodLoginScoutFill.MaxConcurrent,
-            "server hold cap is at least client concurrent scouts");
+        c.Eq(2, LodLoginScoutFill.FarRevealChunks,
+            "far KeepLoaded is the L0 footprint, not an 8-chunk tessellation disk");
+        c.Eq(LodLoginScoutFill.NearRevealChunks, LodScoutHostSystem.MaxHoldRadiusChunks,
+            "server KeepLoaded radius matches the near scout neighbourhood");
+        c.Eq(16, LodScoutHostSystem.MaxConcurrentHolds,
+            "server hold cap matches 16 parallel client scouts");
+        c.Eq(48, LodScoutHostSystem.MaxForceSendPerTick,
+            "ForceSend is budgeted so 16 KeepLoaded rings do not dump in one tick");
+        c.Eq(32, LodScoutHostSystem.MaxPendingUps,
+            "refused KeepLoaded Ups queue instead of going silent");
 
         string scoutViewer = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutViewerEntity.cs"));
@@ -585,6 +622,14 @@ public static class LoginSweepChecks
             "scout viewers stay Active far from the real player");
         c.True(scoutViewer.Contains("ShouldDespawn => !Alive"),
             "Die() can actually remove scout viewers; they do not stick after teardown");
+        c.True(scoutViewer.Contains("LodVsCompat.TryUpdatePartitioning"),
+            "1.22.7: UpdatePartitioning is invoked through reflection");
+        c.True(scoutViewer.Contains("LodVsCompat.TryIndexLoadedEntity"),
+            "1.22.7: LoadedEntities is not assumed on IWorldAccessor");
+        c.True(!scoutViewer.Contains("api.World.LoadedEntities"),
+            "scout spawn does not touch IWorldAccessor.LoadedEntities (missing on 1.22.7)");
+        c.True(!scoutViewer.Contains("viewer.UpdatePartitioning()"),
+            "scout spawn does not call Entity.UpdatePartitioning directly (missing on 1.22.7)");
         c.True(scoutViewer.Contains("SpawnPriorityEntity") && scoutViewer.Contains("SpawnEntity"),
             "viewers spawn through the world entity APIs");
         c.True(scoutViewer.Contains("IServerWorldAccessor") && scoutViewer.Contains("DespawnEntity"),
@@ -612,8 +657,20 @@ public static class LoginSweepChecks
             "server rejects KeepLoaded anchors beyond the onset disk");
         c.True(scoutHost.Contains("holds.Count >= MaxConcurrentHolds"),
             "server caps concurrent scout holds so a client cannot pin the world");
+        c.True(scoutHost.Contains("EnqueuePendingUp"),
+            "server queues extra Ups instead of dropping them at the hold cap");
+        c.True(scoutHost.Contains("MaxForceSendPerTick"),
+            "server ForceSend is per-tick budgeted");
         c.True(scoutHost.Contains("Math.Clamp(msg.Radius, 1, MaxHoldRadiusChunks)"),
             "server KeepLoaded radius is the local neighbourhood, not the onset disk");
+        c.True(scoutHost.Contains("LodVsCompat.TryGetLoadedEntities"),
+            "server teardown walks LoadedEntities through the 1.22.7-safe helper");
+        string vsCompat = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "LodVsCompat.cs"));
+        c.True(vsCompat.Contains("GetMethod(\"UpdatePartitioning\""),
+            "UpdatePartitioning is resolved by reflection for 1.22.7");
+        c.True(vsCompat.Contains("IServerWorldAccessor"),
+            "LoadedEntities is read from IServerWorldAccessor, not IWorldAccessor");
         string scoutJson = Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "assets", "distantvistas", "entities", "scoutviewer.json");
         c.True(File.Exists(scoutJson), "scout viewer entity json is packaged");
@@ -985,7 +1042,7 @@ public static class LoginSweepChecks
             "750-block hold × 4.5 + 700 is 4075 blocks (Farseer onset, not a void band)");
         c.Eq(16384, LodLoginSweepBootstrap.MaxBootstrapClassifyCells,
             "classify ceiling covers the ~12k L0 onset disk");
-        c.Eq(8, LodLoginScoutFill.LocalVisitRevealChunks,
+        c.Eq(4, LodLoginScoutFill.LocalVisitRevealChunks,
             "scouts stream a local neighbourhood around visit cells");
         c.Eq(1024, LodLoginSweepBootstrap.SpawnPriorityRadiusBlocks,
             "bootstrap visits a 1024-block spawn neighbourhood before the rim");
@@ -1044,6 +1101,10 @@ public static class LoginSweepChecks
             "bootstrap spatially subsamples the onset disk");
         c.True(bootstrap.Contains("SpawnPriorityRadiusBlocks"),
             "bootstrap spends visit budget on spawn before the Farseer rim");
+        c.True(bootstrap.Contains("(max * 2) / 3"),
+            "bootstrap spends about two thirds of the visit budget near spawn");
+        c.True(bootstrap.Contains("bands - b"),
+            "outer visit bands prefer nearer cells over the silhouette");
         c.True(bootstrap.Contains("OrderVisitKeysFromCenter"),
             "bootstrap queues visit keys near-to-far from spawn, not raw key order");
         c.True(bootstrap.Contains("SelectLandVisitCells"),
@@ -1129,6 +1190,8 @@ public static class LoginSweepChecks
         }
         c.True(innerPicked >= 20,
             "a chunk of the visit budget stays in the spawn neighbourhood");
+        c.True(innerPicked * 2 >= picked.Count,
+            "at least half the subsampled stops stay in the spawn neighbourhood");
     }
 
     static long DistSq(long key, int centerSx, int centerSz)

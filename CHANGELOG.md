@@ -1,3 +1,13 @@
+## 1.0.31
+- **Login bake speed.** 1.0.30 could sit on `1/16` while painting one stop's neighbour disk and waiting for far meshes. All **16** scout viewers now start together (**8** near mesh-wait + **8** far paint-release, so spawn-first queues do not stall the overlay). GetColor runs across captured scouts each tick (not one serial `currentKey`). Overlay % / scout count updates on detail change and at least every 3s.
+- **Two-tier scout gate.** Inside 1024 blocks of pickup: stream → capture → GetColor → wait for a drawable mesh (spawn-solid unchanged). Toward Farseer onset +700: release after stream → capture → FlagBaked paint; meshes fill in under the splash / drain.
+- **Denser near, sparser far.** Same 4075 disk and 1680-stop ceiling; ~2/3 of visit budget stays in the spawn neighbourhood; outer bands weight nearer cells more than the silhouette.
+- **Less KeepLoaded / GC.** Far scouts use a 2-chunk ring (near 4). Visit-cell paint only (no 256-neighbour GetColor batch). Spawn-disk capture every 4 ticks. No per-tick `UpdatePartitioning`. Scouts despawn as soon as their gate completes. Server queues KeepLoaded Ups at the 16-hold cap and ForceSend-s at most 48 columns/tick.
+- **1.22.7 compile.** `UpdatePartitioning` via reflection; `LoadedEntities` via `IServerWorldAccessor` (client reflection fallback).
+- Player still does not teleport. Exact pickup X/Y/Z restore. Gray tent + black tips / quieter low smoke kept.
+- Drop `distantvistas_1.0.31.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+- **Verify:** overlay shows 16/16 scouts within seconds and % moves every few seconds; after overlay, no holes underfoot; far land fills in; FPS back; same X/Y/Z as pickup.
+
 ## 1.0.30
 - **Scout viewers are real player-style stream centers.** Vintage Story auto-loads around players, not around `SetChunkColumnVisible` tokens, and has no dummy-`IPlayer` API. Login bake spawns temporary `LodScoutViewer` entities on visit cells (staggered across the pickup-centered disk out to Farseer onset +700). Each viewer stays far from you (`AllowOutsideLoadedRange`, `AlwaysActive`, not saved with the chunk). The server also spawns one and KeepLoaded + ForceSend-s that neighbourhood to you; the client marks it visible around the viewer. Each scout stays until stream → capture → GetColor paint → LOD mesh, then despawns.
 - **The real player does not teleport.** Overlay pins the exact pickup X/Y/Z + facing every GUI frame and every pulse. Success, Esc, fail, and world-leave write those same doubles onto Pos and ServerPos. Hop-era `BeginNextStop` (visit-cell stream via the player) is gone.

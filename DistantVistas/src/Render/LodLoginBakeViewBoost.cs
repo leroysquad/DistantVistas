@@ -191,7 +191,7 @@ public sealed class LodLoginBakeViewBoost
         if (data.DesiredViewDistance != target)
         {
             data.DesiredViewDistance = target;
-            capi.World.Player.Entity.UpdatePartitioning();
+            LodVsCompat.TryUpdatePartitioning(capi.World.Player.Entity);
         }
 
         if (data.LastApprovedViewDistance > 0 && data.LastApprovedViewDistance < target)
@@ -340,7 +340,7 @@ public sealed class LodLoginBakeViewBoost
             if (IsPlayerViewDistance(desired))
             {
                 data.DesiredViewDistance = desired;
-                capi.World.Player.Entity.UpdatePartitioning();
+                LodVsCompat.TryUpdatePartitioning(capi.World.Player.Entity);
             }
 
             if (savedLastApprovedViewDistance.HasValue && savedLastApprovedViewDistance.Value > 0)
@@ -375,7 +375,7 @@ public sealed class LodLoginBakeViewBoost
             if (IsPlayerViewDistance(wantDesired))
             {
                 data.DesiredViewDistance = wantDesired;
-                capi.World.Player.Entity.UpdatePartitioning();
+                LodVsCompat.TryUpdatePartitioning(capi.World.Player.Entity);
             }
 
             if (approved > 0)
