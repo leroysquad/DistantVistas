@@ -789,7 +789,7 @@ public sealed class LodLoginBake
         else
             paintStarveTicks = 0;
         scoutFill.SetPaintStarving(paintStarveTicks >= 8);
-        scoutFill.SetWarmHoldBlocks(viewBoost.SweepBoostViewDistanceBlocks);
+        scoutFill.SetWarmHoldBlocks(LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks);
         LodScoutSeqDiag.NotePaintStarve(paintStarveTicks);
 
         if (paintStarveTicks >= 8 && paintStarveTicks % 32 == 0)
@@ -800,16 +800,16 @@ public sealed class LodLoginBake
             LodLoginScoutFill.LocalVisitRevealChunks,
             viewBoost.ChunkVisibleRadius,
             pickupX, pickupZ,
-            viewBoost.SweepBoostViewDistanceBlocks);
+            LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks);
         LodScoutSeqDiag.NoteChunkPressure(scoutFill.ChunkPressureActive);
         scoutFill.CountLivePhases(out int waitChunksLive, out int captureLive, out _, out _);
         LodScoutSeqDiag.MaybeWarmRingProbe(
             finished, total, capi, pipeline, pending, pickupX, pickupZ,
-            viewBoost.SweepBoostViewDistanceBlocks, waitChunksLive, captureLive,
+            LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks, waitChunksLive, captureLive,
             scoutFill.LiveCount, scoutReady.Count);
         LodScoutSeqDiag.MaybeStalledLiveProbe(
             finished, capi, pipeline, scoutFill, pickupX, pickupZ,
-            viewBoost.SweepBoostViewDistanceBlocks, paintStarveTicks, scoutReady.Count);
+            LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks, paintStarveTicks, scoutReady.Count);
         PinPickupPose();
         for (int i = 0; i < ready.Count; i++)
             scoutReady.Enqueue(ready[i]);

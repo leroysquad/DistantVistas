@@ -461,7 +461,7 @@ public static class LodLoginSweepBootstrap
         }
 
         List<long> landBudgeted = BudgetBootstrapVisitStops(
-            landVisit, centerSx, centerSz, BootstrapMaxVisitStops, clientWorld.BlockAccessor);
+            landVisit, centerSx, centerSz, BootstrapMaxVisitStops, capi?.World?.BlockAccessor);
 
         var visitKeys = new List<long>(landBudgeted);
         foreach (long key in oceanSamples)
@@ -475,7 +475,11 @@ public static class LodLoginSweepBootstrap
 
         LogOceanPlan(capi, openOceanNeeding.Count, oceanSamples.Count, openOceanFill.Count, landBudgeted.Count);
         LogBudget(capi, plannedForLabel, landBudgeted.Count);
-        OrderVisitKeysByResidency(visitKeys, clientWorld.BlockAccessor, centerSx, centerSz);
+        IBlockAccessor? blockAccessor = capi?.World?.BlockAccessor;
+        if (blockAccessor != null)
+            OrderVisitKeysByResidency(visitKeys, blockAccessor, centerSx, centerSz);
+        else
+            OrderVisitKeysFromCenter(visitKeys, centerSx, centerSz);
 
         return new LodLoginSweepPlan(
             mode,
