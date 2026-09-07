@@ -104,6 +104,7 @@ public sealed class LodScoutHostSystem : ModSystem
                 Y = y,
                 Z = z,
             });
+            LodScoutSeqDiag.LogHostUp(key, cx, cz, radius, capped: false, pending: false);
         }
         catch { }
     }
@@ -111,7 +112,11 @@ public sealed class LodScoutHostSystem : ModSystem
     public void RequestDown(long key)
     {
         if (clientChannel == null || !clientChannel.Connected) return;
-        try { clientChannel.SendPacket(new ScoutAnchorDown { Key = key }); }
+        try
+        {
+            clientChannel.SendPacket(new ScoutAnchorDown { Key = key });
+            LodScoutSeqDiag.LogHostDown(key, "client");
+        }
         catch { }
     }
 
@@ -175,6 +180,7 @@ public sealed class LodScoutHostSystem : ModSystem
         if (holds.Count >= MaxConcurrentHolds && !holds.ContainsKey(msg.Key))
         {
             EnqueuePendingUp(player.PlayerUID, msg);
+            LodScoutSeqDiag.LogHostUp(msg.Key, msg.Cx, msg.Cz, radius, capped: true, pending: true);
             return;
         }
 
@@ -198,6 +204,10 @@ public sealed class LodScoutHostSystem : ModSystem
         catch { hold.Viewer = null; }
 
         holds[msg.Key] = hold;
+
+        int pendingUps = pendingUpsByPlayer.TryGetValue(player.PlayerUID, out Queue<ScoutAnchorUp>? pq)
+            ? pq.Count : 0;
+        LodScoutSeqDiag.LogHostHold(msg.Key, holds.Count, pendingUps, forceSends.Count);
 
         for (int dz = -radius; dz <= radius; dz++)
         {

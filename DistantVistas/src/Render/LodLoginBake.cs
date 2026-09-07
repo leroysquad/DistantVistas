@@ -28,15 +28,15 @@ public sealed class LodLoginBake
     const int TeleportSettleTicks = 1;
     /// <summary>~50 ms — season bake is synchronous; brief gap before next teleport.</summary>
     const int BakeSettleTicks = 1;
-    /// <summary>L0 neighbour disk at a leftover hop-era stop. Overlay scouts paint the visit cell.</summary>
+    /// <summary>L0 neighbour disk at a leftover hop-era stop. Expire leftovers only.</summary>
     const int BatchBakeL0Radius = 2;
     const int MaxBatchBakePerStop = 32;
     /// <summary>GetColor + persist per overlay tick across all live scouts, not one stop.</summary>
     const int MaxBakePerTick = 24;
-    /// <summary>Wall-clock cap so one PaintReadyScouts pass cannot freeze the client for minutes.</summary>
-    const double MaxPaintWallMsPerTick = 120.0;
-    /// <summary>Columns per partial L0 bake before re-yielding (BlurRadius 0 — no halo pass).</summary>
-    const int MaxPaintColumnsPerSection = 384;
+    /// <summary>Wall-clock cap per overlay tick for all PaintReadyScouts work combined.</summary>
+    const double MaxPaintWallMsPerTick = 200.0;
+    /// <summary>Columns per partial L0 slice (BlurRadius 0 — full section may span 2–3 ticks).</summary>
+    const int MaxPaintColumnsPerSection = 4096;
     const int MaxLeftoverBakePerTick = 16;
     /// <summary>
     /// Month-expire leftover GetColor queue. Large caches used to enqueue every
@@ -721,6 +721,7 @@ public sealed class LodLoginBake
 
         phase = Phase.Sweeping;
         sweepTiming.Begin(resetSamples: false);
+        LodScoutSeqDiag.SetOverlayActive(true);
         LogTeleportBegin();
         statusWriter.TouchAdvance("teleports-begin");
         UpdateProgress(Progress,
@@ -755,6 +756,10 @@ public sealed class LodLoginBake
             scoutReady.Enqueue(ready[i]);
 
         PaintReadyScouts();
+        LodScoutSeqDiag.NotePaintBudget(MaxBakePerTick, MaxPaintWallMsPerTick, scoutReady.Count);
+        scoutFill.CountLiveBands(out int nearLive, out int farLive);
+        LodScoutSeqDiag.MaybeBudget(
+            nearLive, farLive, scoutFill.HeldNearCount, scoutFill.HeldFarCount, scoutReady.Count);
 
         if (sweepingTicks % SpawnSweepEveryTicks == 0)
             SweepColumnsAroundSpawn();
@@ -782,8 +787,11 @@ public sealed class LodLoginBake
             + (long)(Stopwatch.Frequency * MaxPaintWallMsPerTick / 1000.0);
         int steps = 0;
         int painted = 0;
+        int completed = 0;
         int queued = scoutReady.Count;
         int persistBatch = 0;
+        int getColorCalls = 0;
+        int resumeKeys = paintResumeCol.Count;
         for (int i = 0; i < queued && steps < MaxBakePerTick; i++)
         {
             double wallLeftMs = (deadline - Stopwatch.GetTimestamp()) * 1000.0 / Stopwatch.Frequency;
@@ -792,33 +800,36 @@ public sealed class LodLoginBake
 
             long key = scoutReady.Dequeue();
             steps++;
-            if (!TryBakeOne(key, wallLeftMs, out bool complete))
+            if (!TryBakeOne(key, wallLeftMs, out bool done, out int gc))
             {
                 paintResumeCol.Remove(key);
-                if (scoutFill.IsLive(key))
-                    scoutReady.Enqueue(key);
+                scoutReady.Enqueue(key);
                 continue;
             }
 
-            if (!complete)
+            getColorCalls += gc;
+            painted++;
+
+            if (!done)
             {
                 scoutReady.Enqueue(key);
                 continue;
             }
 
             paintResumeCol.Remove(key);
-            scoutFill.NotifyPainted(key);
             finished++;
-            painted++;
+            completed++;
             persistBatch++;
         }
 
-        if (persistBatch > 0)
+        if (painted > 0)
         {
-            pipeline.DrainLoginPersistence(Math.Min(16, persistBatch));
+            if (persistBatch > 0)
+                pipeline.DrainLoginPersistence(Math.Min(16, persistBatch));
             SaveResumeSnapshot();
             sweepTiming.NoteFinished(finished);
             statusWriter.TouchAdvance($"region-{finished}-of-{total}");
+            LogPaintBatch(completed, painted, getColorCalls, resumeKeys, queued);
         }
     }
 
@@ -996,9 +1007,10 @@ public sealed class LodLoginBake
     /// Lock season appearance from the freshly captured voxels: snow on columns,
     /// leaf hue per species/height, ground tone from live maps at each block top.
     /// </summary>
-    void BakeAndPersist(long l0Key, double wallMs, out bool complete)
+    void BakeAndPersist(long l0Key, double wallMs, out bool complete, out int getColorCalls)
     {
         complete = false;
+        getColorCalls = 0;
         LodWorld world = pipeline.World;
         if (!world.Sections.TryGetValue(l0Key, out LodSection? section))
         {
@@ -1016,16 +1028,13 @@ public sealed class LodLoginBake
         int changed = LodSeasonBake.BakeSectionFromVisitChunked(
             capi, section, l0Key, plantTintFallback, untintedOf,
             startCol, MaxPaintColumnsPerSection, wallMs,
-            out int nextCol, out complete);
+            out int nextCol, out complete, out getColorCalls);
         // #region agent log
         LodSeasonBake.DebugVisitKind = prevVisit;
         // #endregion
 
         if (complete)
-        {
-            visitBakeGetColor += LodSection.GridSize * LodSection.GridSize;
             visitBakeChanged += changed;
-        }
         else
             paintResumeCol[l0Key] = nextCol;
 
@@ -1037,103 +1046,22 @@ public sealed class LodLoginBake
         pipeline.InvalidateMipAncestors(l0Key);
     }
 
-    /// <summary>
-    /// After the stop's own capture idles, bake every in-memory neighbour whose
-    /// map chunks are loaded. Visit colour is vanilla GetColor of live blocks,
-    /// so a neighbour still sitting in the force-recapture queue is still
-    /// paintable. One tick bakes at most MaxBakePerTick cells so Windows
-    /// does not mark the client not responding.
-    /// </summary>
-    bool BakeBatchAtStop(long primaryKey)
-    {
-        if (!stopBakePrepared)
-        {
-            CollectBatchBakeKeys(primaryKey, stopBakeKeys);
-            stopBakeIndex = 0;
-            stopBakeSkipIdle = 0;
-            stopBakeSkipMaps = 0;
-            stopBakeBaked = 0;
-            stopBakePrepared = true;
-        }
-
-        int steps = 0;
-        while (steps < MaxBakePerTick && stopBakeIndex < stopBakeKeys.Count)
-        {
-            steps++;
-            long key = stopBakeKeys[stopBakeIndex++];
-            if (completedKeys.Contains(key)) continue;
-            if (!pipeline.IsL0SectionCaptureIdle(key))
-                stopBakeSkipIdle++;
-            if (!LodLoginSweep.AllMapChunksLoaded(capi.World.BlockAccessor, key))
-            {
-                stopBakeSkipMaps++;
-                if (!expireRecapture) continue;
-            }
-
-            if (TryBakeOne(key))
-                stopBakeBaked++;
-        }
-
-        if (stopBakeIndex < stopBakeKeys.Count)
-            return false;
-
-        if (stopBakeBaked == 0
-            && (expireRecapture
-                || LodLoginSweep.AllMapChunksLoaded(capi.World.BlockAccessor, primaryKey)))
-        {
-            if (TryBakeOne(primaryKey))
-                stopBakeBaked = 1;
-        }
-
-        int skipIdle = stopBakeSkipIdle;
-        int skipMaps = stopBakeSkipMaps;
-        int baked = stopBakeBaked;
-        int candidates = stopBakeKeys.Count;
-        // #region agent log
-        try
-        {
-            int dayOfYear = 0;
-            float seasonRel = 0f;
-            try
-            {
-                dayOfYear = capi.World.Calendar.DayOfYear;
-                BlockPos? climatePos = capi.World.Player?.Entity?.Pos?.AsBlockPos;
-                if (climatePos != null)
-                    seasonRel = capi.World.Calendar.GetSeasonRel(climatePos);
-            }
-            catch { }
-            System.IO.File.AppendAllText(
-                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
-                "{\"sessionId\":\"40cccb\",\"runId\":\"post-fix-expire\",\"hypothesisId\":\"H-EXPIRE-SKIP\",\"location\":\"LodLoginBake.BakeBatchAtStop\",\"message\":\"visit-bake-stop\",\"data\":{\"baked\":" + baked + ",\"getColor\":" + visitBakeGetColor + ",\"changed\":" + visitBakeChanged + ",\"paleKept\":" + visitBakePale + ",\"zero\":" + visitBakeZero + ",\"leaves\":" + visitBakeLeaves + ",\"snow\":" + visitBakeSnow + ",\"boostVd\":" + viewBoost.BoostedViewDistanceBlocks + ",\"candidates\":" + candidates + ",\"idleQueued\":" + skipIdle + ",\"skipMaps\":" + skipMaps + ",\"expire\":" + (expireRecapture ? "true" : "false") + ",\"dayOfYear\":" + dayOfYear + ",\"seasonRel\":" + seasonRel.ToString(System.Globalization.CultureInfo.InvariantCulture) + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
-        }
-        catch { }
-        visitBakeGetColor = 0;
-        visitBakeChanged = 0;
-        visitBakePale = 0;
-        visitBakeZero = 0;
-        visitBakeLeaves = 0;
-        visitBakeSnow = 0;
-        // #endregion
-        stopBakePrepared = false;
-        stopBakeKeys.Clear();
-        stopBakeIndex = 0;
-        return true;
-    }
-
-    bool TryBakeOne(long key, double wallMs, out bool complete)
+    bool TryBakeOne(long key, double wallMs, out bool complete, out int getColorCalls)
     {
         complete = false;
+        getColorCalls = 0;
         bool prevExpire = LodSeasonBake.AllowExpireNoMapSample;
         if (expireRecapture) LodSeasonBake.AllowExpireNoMapSample = true;
-        try { BakeAndPersist(key, wallMs, out complete); }
+        try
+        {
+            BakeAndPersist(key, wallMs, out complete, out getColorCalls);
+        }
         finally { LodSeasonBake.AllowExpireNoMapSample = prevExpire; }
         if (!pipeline.World.Sections.ContainsKey(key)) return false;
         if (!complete) return true;
         completedKeys.Add(key);
         return true;
     }
-
-    bool TryBakeOne(long key) => TryBakeOne(key, MaxPaintWallMsPerTick, out _);
 
     void GrowRevealAround(long l0Key)
     {
@@ -1275,15 +1203,23 @@ public sealed class LodLoginBake
         double nearRsq = (double)nearR * nearR;
         const int sb = LodSection.SectionBlocks;
         int steps = 0;
+        long deadline = Stopwatch.GetTimestamp()
+            + (long)(Stopwatch.Frequency * MaxPaintWallMsPerTick / 1000.0);
         while (steps < MaxLeftoverBakePerTick && leftoverIndex < leftoverKeys.Count)
         {
+            double wallLeftMs = (deadline - Stopwatch.GetTimestamp()) * 1000.0 / Stopwatch.Frequency;
+            if (wallLeftMs <= 0 && steps > 0) break;
+
             steps++;
-            long key = leftoverKeys[leftoverIndex++];
+            long key = leftoverKeys[leftoverIndex];
             double cx = LodWorld.KeySx(key) * sb + sb * 0.5 - px;
             double cz = LodWorld.KeySz(key) * sb + sb * 0.5 - pz;
             bool near = cx * cx + cz * cz <= nearRsq;
-            if (TryBakeOne(key))
+            if (!TryBakeOne(key, wallLeftMs, out bool done, out _))
+                leftoverIndex++;
+            else if (done)
             {
+                leftoverIndex++;
                 leftoverBaked++;
                 if (near) leftoverNearBaked++;
                 else leftoverFarBaked++;
@@ -1434,6 +1370,7 @@ public sealed class LodLoginBake
         releaseKeepResume = keepResume;
         released = true;
         phase = Phase.Done;
+        LodScoutSeqDiag.SetOverlayActive(false);
         if (success)
         {
             pipeline.ExploreBake.Clear();
@@ -1636,6 +1573,41 @@ public sealed class LodLoginBake
     }
 
     // #region agent log
+    long lastPaintLogMs;
+    int paintLogCount;
+
+    void LogPaintBatch(int completed, int attempted, int getColorCalls, int resumeKeys, int queued)
+    {
+        if (completed <= 0 && attempted <= 0) return;
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (paintLogCount >= 120) return;
+        if (now - lastPaintLogMs < 1500 && paintLogCount > 0) return;
+        lastPaintLogMs = now;
+        paintLogCount++;
+        try
+        {
+            System.IO.File.AppendAllText(
+                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                "{\"sessionId\":\"40cccb\",\"runId\":\"1033\",\"hypothesisId\":\"H-PAINT\",\"location\":\"LodLoginBake.PaintReadyScouts\",\"message\":\"paint-scout-batch\",\"data\":{"
+                + "\"completed\":" + completed
+                + ",\"attempted\":" + attempted
+                + ",\"getColorCalls\":" + getColorCalls
+                + ",\"finished\":" + finished
+                + ",\"total\":" + total
+                + ",\"pending\":" + pending.Count
+                + ",\"queued\":" + queued
+                + ",\"resume\":" + resumeKeys
+                + ",\"liveScouts\":" + scoutFill.LiveCount
+                + ",\"held\":" + scoutFill.HeldCount
+                + ",\"ready\":" + scoutReady.Count
+                + ",\"wallMs\":" + MaxPaintWallMsPerTick.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"boostVd\":" + viewBoost.BoostedViewDistanceBlocks
+                + ",\"n\":" + paintLogCount
+                + "},\"timestamp\":" + now + "}\n");
+        }
+        catch { }
+    }
+
     static void AgentEscLog(string message, string hypothesisId, string extra)
     {
         try

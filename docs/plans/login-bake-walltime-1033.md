@@ -52,6 +52,7 @@ Remaining bottleneck if still >3 min: (1) near mesh-wait pinning slots, (2) chun
 | Time-budgeted overlay paint + partial L0 resume | `LodLoginBake` → `BakeSectionFromVisitChunked` |
 | Batched SQLite drain after paint batch | `LodLoginBake.PaintReadyScouts` |
 | Shorter stabilize + post-overlay horizon mesh release when spawn solid + far ready | `LodLoginBake.TickStabilizing` |
+| Scout-path NDJSON sequence (`H-SCOUT-SEQ`: spawn/phase/release/budget/thrash) | `LodScoutSeqDiag`, `LodLoginScoutFill`, `LodScoutHostSystem`, `LodScoutViewerEntity` |
 
 Invariants kept: no player teleports; exact pickup XYZ; scout despawn; spawn-solid 1024; Farseer gray tent + black tips; no false-complete; no SIMD inside GetColor; no forceRecapture on scout ticks.
 
@@ -73,3 +74,7 @@ Invariants kept: no player teleports; exact pickup XYZ; scout despawn; spawn-sol
 3. ETA shows **minutes not ~23m** after first paint batch.
 4. After overlay: spawn solid; Farseer gray tent + black tips; exact pickup XYZ.
 5. `scripts/check.sh fast` — SIMD bit-identical, new contract strings, skip honesty.
+
+## Scout sequence log (H-SCOUT-SEQ)
+
+Filter `debug-40cccb.log` for `"hypothesisId":"H-SCOUT-SEQ"`. Read in time order: `scout-spawn` → `scout-phase` (WaitChunks→Capture) → `scout-release` (`painted` = normal capture handoff to paint queue). `scout-budget` ~1/s shows slot pressure (`nearLive`/`farLive`, `held*`, `spawnsLastSec`/`releasesLastSec`, paint caps). `scout-thrash` = slot lived &lt;5 ticks or same key respawned within 2s — thrashing, not steady throughput.

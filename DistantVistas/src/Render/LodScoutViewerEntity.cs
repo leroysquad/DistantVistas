@@ -118,12 +118,15 @@ public sealed class LodScoutViewerEntity : Entity
         viewer.AlwaysActive = true;
         LodVsCompat.TryUpdatePartitioning(viewer);
         LodVsCompat.TryIndexLoadedEntity(api.World, viewer);
+        string side = api.Side == EnumAppSide.Server ? "server" : "client";
+        LodScoutSeqDiag.LogViewerSpawn(side, visitKey, x, y, z);
         return viewer;
     }
 
     public static void DespawnOne(IWorldAccessor? world, Entity? entity)
     {
         if (entity == null) return;
+        long visitKey = entity is LodScoutViewerEntity scout ? scout.VisitKey : 0;
         long id = entity.EntityId;
         try
         {
@@ -143,6 +146,11 @@ public sealed class LodScoutViewerEntity : Entity
         }
 
         LodVsCompat.TryRemoveLoadedEntity(world, id);
+        if (visitKey != 0)
+        {
+            string side = world is IServerWorldAccessor ? "server" : "client";
+            LodScoutSeqDiag.LogViewerDespawn(side, visitKey, 1);
+        }
     }
 
     [ThreadStatic] static List<Entity>? despawnScratch;

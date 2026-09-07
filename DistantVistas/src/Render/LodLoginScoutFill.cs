@@ -7,8 +7,9 @@ namespace DistantVistas;
 /// <summary>
 /// Login-overlay coverage without hopping the player: stagger real
 /// <see cref="LodScoutViewerEntity"/> workers. Each viewer is a player-style
-/// stream/render center at a visit cell. Near spawn waits for a drawable mesh;
-/// the far ring releases after FlagBaked paint so overlay % can move.
+/// stream/render center at a visit cell. Slots are capture-only; GetColor paint runs
+/// from scoutReady so slow paint never pins all 16 slots. Spawn-solid mesh wait is at
+/// overlay end (CountMissingSpawnDrawable), not by holding scouts through paint/mesh.
 /// </summary>
 public sealed class LodLoginScoutFill
 {
@@ -52,7 +53,7 @@ public sealed class LodLoginScoutFill
 
     public void Reset(ICoreClientAPI? capi = null)
     {
-        DespawnLive(capi);
+        DespawnLive(capi, "reset");
         LodScoutHostSystem.ClientInstance?.RequestClear();
         if (capi != null)
             LodScoutViewerEntity.DespawnAll(capi.World);
@@ -63,6 +64,7 @@ public sealed class LodLoginScoutFill
         liveCount = 0;
         FinishedThisTick = 0;
         LastFinishedKey = null;
+        LodScoutSeqDiag.Reset();
     }
 
     public bool HasWork => liveCount > 0 || HeldCount > 0;
@@ -179,15 +181,19 @@ public sealed class LodLoginScoutFill
                 if (!loaded)
                 {
                     if (scout.Ticks < MaxWaitTicks)
+                    {
+                        LodScoutSeqDiag.LogPhase(i, scout, renderer, pipeline);
                         continue;
+                    }
                     // Do not bake missing-tex white. Miss audit / retry can pick this L0 up.
-                    ReleaseSlot(capi, i);
+                    ReleaseSlot(capi, i, renderer, pipeline, "maxWait");
                     continue;
                 }
 
                 pipeline.QueueL0SectionForce(key);
                 scout.Current = LodScoutEntity.Phase.Capture;
                 scout.Ticks = 0;
+                LodScoutSeqDiag.LogPhase(i, scout, renderer, pipeline, forceTransition: true);
                 continue;
             }
 
@@ -195,7 +201,10 @@ public sealed class LodLoginScoutFill
             {
                 if (!pipeline.IsL0SectionCaptureIdle(key)
                     && scout.Ticks < MaxCaptureWaitTicks)
+                {
+                    LodScoutSeqDiag.LogPhase(i, scout, renderer, pipeline);
                     continue;
+                }
 
                 if (!scout.PaintQueued)
                 {
@@ -205,41 +214,22 @@ public sealed class LodLoginScoutFill
                     scout.PaintQueued = true;
                 }
 
-                scout.Current = LodScoutEntity.Phase.Paint;
-                scout.Ticks = 0;
+                // Release immediately — PaintReadyScouts owns GetColor. Holding Paint/Mesh
+                // phases pinned all 16 slots while each L0 did 4096×GetColor (~2–3s/stop).
+                ReleaseSlot(capi, i, renderer, pipeline, "painted");
                 continue;
-            }
-
-            if (scout.Current == LodScoutEntity.Phase.Paint)
-            {
-                if (!scout.Painted && scout.Ticks < MaxWaitTicks)
-                    continue;
-                if (scout.WaitForMesh)
-                {
-                    scout.Current = LodScoutEntity.Phase.Mesh;
-                    scout.Ticks = 0;
-                    continue;
-                }
-                ReleaseSlot(capi, i);
-                continue;
-            }
-
-            if (scout.Current == LodScoutEntity.Phase.Mesh)
-            {
-                // Sticky empty tessellation claims are not drawable land. Do not
-                // hold the scout slot for MaxMeshWaitTicks on a known-empty upload;
-                // drain/stabilize still waits on HasDrawableMesh at spawn.
-                bool meshed = renderer.HasDrawableMesh(key);
-                bool emptyClaim = renderer.HasEmptyMeshClaim(key);
-                if (!meshed && !emptyClaim && scout.Ticks < MaxMeshWaitTicks)
-                    continue;
-                ReleaseSlot(capi, i);
             }
         }
 
         liveCount = CountLive();
         return readyScratch;
     }
+
+    public int HeldNearCount => heldNear.Count;
+    public int HeldFarCount => heldFar.Count;
+
+    public void CountLiveBands(out int nearLive, out int farLive) =>
+        CountLiveMix(out nearLive, out farLive);
 
     void CountLiveMix(out int nearLive, out int farLive)
     {
@@ -387,12 +377,23 @@ public sealed class LodLoginScoutFill
         scout.HoldRadius = radius;
         LodLoginBakePlayerMove.RequestChunkColumnsVisible(capi, x, z, dim, ChunkVisibleRadius);
         LodScoutHostSystem.ClientInstance?.RequestUp(key, scout.Cx, scout.Cz, radius, dim, x, y, z);
+        LodScoutSeqDiag.LogSpawn(index, key, near, scout.WaitForMesh, x, y, z, radius);
+        LodScoutSeqDiag.LogPhase(index, scout, null, null, forceTransition: true);
     }
 
-    void ReleaseSlot(ICoreClientAPI capi, int index)
+    void ReleaseSlot(
+        ICoreClientAPI capi,
+        int index,
+        LodTerrainRenderer renderer,
+        LodPipeline pipeline,
+        string reason)
     {
         LodScoutEntity? scout = slots[index];
         if (scout == null) return;
+        bool near = scout.WaitForMesh;
+        int ticks = scout.Ticks;
+        long key = scout.Key;
+        LodScoutSeqDiag.LogRelease(index, key, reason, ticks, near, scout.WaitForMesh, renderer, pipeline);
         LodScoutHostSystem.ClientInstance?.RequestDown(scout.Key);
         LodScoutViewerEntity.DespawnOne(capi.World, scout.Viewer);
         scout.Viewer = null;
@@ -401,12 +402,15 @@ public sealed class LodLoginScoutFill
         slots[index] = null;
     }
 
-    void DespawnLive(ICoreClientAPI? capi)
+    void DespawnLive(ICoreClientAPI? capi, string reason)
     {
         for (int i = 0; i < slots.Length; i++)
         {
             LodScoutEntity? scout = slots[i];
             if (scout == null) continue;
+            LodScoutSeqDiag.LogRelease(
+                i, scout.Key, reason, scout.Ticks, scout.WaitForMesh, scout.WaitForMesh,
+                null, null);
             LodScoutHostSystem.ClientInstance?.RequestDown(scout.Key);
             if (capi != null)
                 LodScoutViewerEntity.DespawnOne(capi.World, scout.Viewer);
