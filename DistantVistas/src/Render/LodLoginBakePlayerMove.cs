@@ -153,4 +153,15 @@ public static class LodLoginBakePlayerMove
             }
         }
     }
+
+    /// <summary>Mark all four map columns of an L0 footprint visible on the client.</summary>
+    public static void RequestL0MapChunksVisible(ICoreClientAPI capi, long l0Key, int dimension)
+    {
+        IClientWorldAccessor world = capi.World;
+        foreach ((int cx, int cz) in LodLoginSweep.ChunkColumnsForL0(l0Key))
+        {
+            if (cx < 0 || cz < 0) continue;
+            world.SetChunkColumnVisible(cx, cz, dimension);
+        }
+    }
 }

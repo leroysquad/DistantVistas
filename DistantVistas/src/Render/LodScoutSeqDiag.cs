@@ -15,7 +15,7 @@ public static class LodScoutSeqDiag
 
     const string HypothesisId = "H-SCOUT-SEQ";
     const string SessionId = "40cccb";
-    const string RunId = "1041";
+    const string RunId = "1042";
 
     const int ThrashMaxTicks = 5;
     const long ThrashRespawnMs = 2000;
@@ -60,6 +60,8 @@ public static class LodScoutSeqDiag
         paintStarveTicks = 0;
         chunkPressureActive = false;
         lastWarmRingMs = 0;
+        lastHopResidencyMs = 0;
+        lastHopResidencyLoaded = -1;
         lastReleaseMsByKey.Clear();
         lastPhaseLogBySlot.Clear();
         lastHostUpMsByKey.Clear();
@@ -381,7 +383,9 @@ public static class LodScoutSeqDiag
         int distFromPickup,
         int pastWarmBlocks,
         int loadedAfterDwell,
-        int skippedCooldown)
+        int skippedCooldown,
+        int residencyLoaded,
+        long pumpAnchorKey)
     {
         if (!overlayActive) return;
         Write("LodLoginHopUnlock.ApplyHop", "hop-unlock",
@@ -396,6 +400,8 @@ public static class LodScoutSeqDiag
             + ",\"targetKey\":" + targetKey
             + ",\"loadedMapChunks\":" + loadedMapChunks
             + ",\"loadedAfterDwell\":" + loadedAfterDwell
+            + ",\"residencyLoaded\":" + residencyLoaded
+            + ",\"pumpAnchorKey\":" + pumpAnchorKey
             + ",\"skippedCooldown\":" + skippedCooldown
             + ",\"usedFallback\":" + Bool(usedFallback)
             + ",\"bearingRad\":" + bearingRad.ToString("0.####", Inv)
@@ -406,6 +412,54 @@ public static class LodScoutSeqDiag
     }
 
     static long lastWarmRingMs;
+    static long lastHopResidencyMs;
+    static int lastHopResidencyLoaded = -1;
+
+    /// <summary>
+    /// Prove forced residency pump: loaded map chunks at unlock L0 while hop dwells.
+    /// </summary>
+    public static void MaybeHopResidencyProbe(
+        int ring,
+        long targetKey,
+        long pumpAnchorKey,
+        int ticksAtPoint,
+        int finished,
+        int paintStarveTicks,
+        int waitChunksLive,
+        int captureLive,
+        int residencyLoaded,
+        double x,
+        double y,
+        double z,
+        bool hostConnected)
+    {
+        if (!overlayActive) return;
+        if (finished < 320 || finished > 420) return;
+        long now = NowMs();
+        bool loadedChanged = residencyLoaded != lastHopResidencyLoaded;
+        if (!loadedChanged && now - lastHopResidencyMs < 2000) return;
+        if (residencyLoaded >= LodLoginScoutFill.MapChunksPerL0 && lastHopResidencyLoaded >= LodLoginScoutFill.MapChunksPerL0)
+            return;
+        lastHopResidencyMs = now;
+        lastHopResidencyLoaded = residencyLoaded;
+
+        Write("LodLoginHopUnlock.PumpUnlockResidency", "hop-residency-probe",
+            "{\"ring\":" + ring
+            + ",\"targetKey\":" + targetKey
+            + ",\"pumpAnchorKey\":" + pumpAnchorKey
+            + ",\"ticksAtPoint\":" + ticksAtPoint
+            + ",\"residencyLoaded\":" + residencyLoaded
+            + ",\"mapChunksPerL0\":" + LodLoginScoutFill.MapChunksPerL0
+            + ",\"x\":" + x.ToString("0.##", Inv)
+            + ",\"y\":" + y.ToString("0.##", Inv)
+            + ",\"z\":" + z.ToString("0.##", Inv)
+            + ",\"finished\":" + finished
+            + ",\"paintStarveTicks\":" + paintStarveTicks
+            + ",\"waitChunksLive\":" + waitChunksLive
+            + ",\"captureLive\":" + captureLive
+            + ",\"hostConnected\":" + Bool(hostConnected)
+            + "}");
+    }
 
     /// <summary>
     /// Prove/disprove warm-ring cliff: log pending residency vs finished radius near ~358 band.

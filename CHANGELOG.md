@@ -1,3 +1,13 @@
+## 1.0.42
+- **Force map-chunk residency at hop-unlock (1.0.41 playtest failed runId 1041).** Annulus targeting worked (`distFromPickup` 750–759, 8 unique keys) but all hops stayed `loadedMapChunks=0` — invisible player move + `SetChunkColumnVisible` does not server-resident cold L0s during overlay. Fix: dedicated **pump anchor** on unlock L0 via **`LodScoutHostSystem.RequestUp`** (same KeepLoaded + ForceSend path scouts use), **`RequestL0MapChunksVisible`** for all four map columns, Pos/ServerPos sync each pump; **hold unlock until `CountLoadedMapChunks≥1`** (128-tick max) before retarget; **16-ring ban** if forced load still fails. Near-annulus selection from 1.0.41 unchanged. Telemetry: `hop-residency-probe`, `residencyLoaded`, `pumpAnchorKey` (runId **1042**). Details: `docs/plans/login-bake-walltime-1033.md` § 1.0.42.
+- Drop `distantvistas_1.0.42.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+- **Verify:** `hop-residency-probe` shows `residencyLoaded` rising to **≥1**; `captureLive>0` after unlock; `finished` past **358**; `paintReadyQueued>0`; `pickup-restore` at end.
+
+## 1.0.41
+- **Near-cliff annulus hop-unlock (1.0.40 playtest failed runId 1040).** Selector picked outer-disk keys ~4k blocks out (oscillating A↔B); loaded stayed 0. Fix: prefer cold pending L0 in **spawn-solid annulus** (750–1024 blocks from pickup) with **smallest pastWarm** score; **ban keys** that stay `loadedMapChunks=0` after 48-tick dwell (8-ring cooldown); fallback radial stays inside spawn-solid; telemetry adds `distFromPickup`, `pastWarmBlocks`, `loadedAfterDwell`, `skippedCooldown` (runId **1041**). Details: `docs/plans/login-bake-walltime-1033.md` § 1.0.41.
+- Drop `distantvistas_1.0.41.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+- **Verify:** `hop-unlock` shows `distFromPickup` **750–1024**, `pastWarmBlocks` small; **no A↔B oscillation**; `loadedAfterDwell` rises or keys get banned; `finished` past **358**.
+
 ## 1.0.40
 - **Stronger hop-unlock (1.0.39 playtest failed runId 1039).** Rings 3–4 parked at same R=960 with zero Capture. Fix: **retarget to cold pending L0 visit cells** (loaded&lt;4) instead of fixed pickup radius; **continuous retarget** (no MaxUnlockRings cap); **MinHopDeltaBlocks=128** between hops; monotonic **fallback radial +192** when needed; **enlarged stream/reveal pump** (+4 chunks) at unlock. Scouts remain primary. Telemetry `hop-unlock` adds `targetKey`, `loadedMapChunks`, `usedFallback` (runId **1040**). Details: `docs/plans/login-bake-walltime-1033.md` § 1.0.40.
 - Drop `distantvistas_1.0.40.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.

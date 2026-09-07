@@ -761,8 +761,28 @@ public static class LoginSweepChecks
                 GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
                 .Contains("1.0.41 near-cliff annulus"),
             "walltime plan documents 1.0.41 annulus fix");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
+                .Contains("1.0.42 force residency"),
+            "walltime plan documents 1.0.42 forced residency fix");
         c.Eq(48, LodLoginHopUnlock.FailedKeyDwellTicks,
             "failed hop targets banned after dwell ticks");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
+                .Contains("PumpUnlockResidency"),
+            "hop-unlock forces map-chunk residency via scout-host path");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakePlayerMove.cs"))
+                .Contains("RequestL0MapChunksVisible"),
+            "unlock marks all four L0 map columns visible");
+        c.True(bake.Contains("PumpUnlockResidency"),
+            "overlay pumps forced residency each tick while hop active");
+        c.Eq(128, LodLoginHopUnlock.MaxResidencyForceTicks,
+            "hop holds unlock up to 128 ticks while forcing residency");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
+                .Contains("hop-residency-probe"),
+            "hop residency probe telemetry for runId 1042 playtest");
         c.True(File.ReadAllText(Path.Combine(
                 GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
                 .Contains("hop-unlock"),

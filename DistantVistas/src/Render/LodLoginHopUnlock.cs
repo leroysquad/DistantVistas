@@ -1,13 +1,13 @@
 using System.Collections.Generic;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
+using Vintagestory.API.Config;
 
 namespace DistantVistas;
 
 /// <summary>
-/// Overlay hop-unlock pump (Plan C): invisibly moves the real player to near-cliff
-/// cold pending L0 visit cells (warm-ring annulus ~750–1024 blocks from pickup) so
-/// vanilla's 750-block warm disk residents map chunks for scouts.
+/// Overlay hop-unlock pump: moves player to near-cliff cold L0 cells and forces map-chunk
+/// residency via scout-host KeepLoaded + ForceSend (SetChunkColumnVisible alone is insufficient).
 /// </summary>
 public sealed class LodLoginHopUnlock
 {
@@ -17,10 +17,14 @@ public sealed class LodLoginHopUnlock
     public const int MinHopDeltaBlocks = 128;
     public const int FallbackRadiusStepBlocks = 192;
     public const int StreamPumpExtraChunks = 4;
-    /// <summary>Ticks at unlock before banning a key that stays at loaded=0.</summary>
     public const int FailedKeyDwellTicks = 48;
-    /// <summary>Retarget cycles to skip a failed hop target.</summary>
     public const int FailedKeyBanRings = 8;
+    public const int FailedKeyLongBanRings = 16;
+    /// <summary>Hold unlock while forcing server KeepLoaded before retarget.</summary>
+    public const int MaxResidencyForceTicks = 128;
+    public const int ResidencyPumpIntervalTicks = 4;
+    /// <summary>Chebyshev radius for unlock anchor — covers L0 2×2 map columns.</summary>
+    public const int UnlockHoldRadiusChunks = 2;
 
     public bool Active { get; private set; }
     public double X { get; private set; }
@@ -30,21 +34,26 @@ public sealed class LodLoginHopUnlock
     public long TargetKey { get; private set; }
     public int TicksAtPoint { get; private set; }
     public int FinishedAtHop { get; private set; }
+    public int LastResidencyLoaded { get; private set; }
 
     readonly Dictionary<long, int> failedKeyBan = new();
     readonly List<long> banScratch = new(32);
     int lastFallbackRadiusBlocks;
     int lastSkippedCooldown;
+    long pumpAnchorKey;
 
     public void Reset()
     {
+        ReleasePumpAnchor();
         Active = false;
         Ring = 0;
         TargetKey = 0;
         TicksAtPoint = 0;
         FinishedAtHop = 0;
+        LastResidencyLoaded = 0;
         lastFallbackRadiusBlocks = 0;
         lastSkippedCooldown = 0;
+        pumpAnchorKey = 0;
         failedKeyBan.Clear();
     }
 
@@ -81,6 +90,7 @@ public sealed class LodLoginHopUnlock
     }
 
     public bool ShouldAdvance(
+        ICoreClientAPI capi,
         int paintStarveTicks,
         int waitChunksLive,
         int captureLive,
@@ -90,12 +100,16 @@ public sealed class LodLoginHopUnlock
         if (!Active) return false;
         if (!MatchesStallSignature(paintStarveTicks, waitChunksLive, captureLive, liveScouts, finished))
             return false;
-        if (TicksAtPoint >= AdvanceStallTicks) return true;
-        return finished - FinishedAtHop < 4 && TicksAtPoint >= AdvanceStallTicks / 2;
+
+        LastResidencyLoaded = ReadTargetLoaded(capi);
+        if (LastResidencyLoaded >= 1 && TicksAtPoint >= 16) return true;
+        if (TicksAtPoint >= MaxResidencyForceTicks) return true;
+        return false;
     }
 
     public bool TryFirstHop(
         ICoreClientAPI capi,
+        LodLoginBakeViewBoost viewBoost,
         double pickupX,
         double pickupY,
         double pickupZ,
@@ -105,11 +119,12 @@ public sealed class LodLoginHopUnlock
         if (Active) return false;
         Ring = 1;
         lastFallbackRadiusBlocks = 0;
-        return ApplyHop(capi, pickupX, pickupY, pickupZ, pendingKeys, finished, advance: false);
+        return ApplyHop(capi, viewBoost, pickupX, pickupY, pickupZ, pendingKeys, finished, advance: false);
     }
 
     public bool TryAdvanceHop(
         ICoreClientAPI capi,
+        LodLoginBakeViewBoost viewBoost,
         double pickupX,
         double pickupY,
         double pickupZ,
@@ -120,11 +135,12 @@ public sealed class LodLoginHopUnlock
         BanCurrentTargetIfStillCold(capi);
         TickFailedKeyBans();
         Ring++;
-        return ApplyHop(capi, pickupX, pickupY, pickupZ, pendingKeys, finished, advance: true);
+        return ApplyHop(capi, viewBoost, pickupX, pickupY, pickupZ, pendingKeys, finished, advance: true);
     }
 
     bool ApplyHop(
         ICoreClientAPI capi,
+        LodLoginBakeViewBoost viewBoost,
         double pickupX,
         double pickupY,
         double pickupZ,
@@ -137,10 +153,10 @@ public sealed class LodLoginHopUnlock
         bool havePrev = Active;
         int loadedAfterDwell = 0;
         if (advance && TargetKey != 0)
-        {
-            loadedAfterDwell = LodLoginSweep.CountLoadedMapChunks(
-                capi.World.BlockAccessor, TargetKey);
-        }
+            loadedAfterDwell = LodLoginSweep.CountLoadedMapChunks(capi.World.BlockAccessor, TargetKey);
+
+        if (havePrev)
+            ReleasePumpAnchor();
 
         if (!TryPickNearAnnulusTarget(
                 capi, pickupX, pickupZ, pendingKeys, finished, prevX, prevZ, havePrev,
@@ -162,13 +178,67 @@ public sealed class LodLoginHopUnlock
         Active = true;
         TicksAtPoint = 0;
         FinishedAtHop = finished;
+        pumpAnchorKey = targetKey != 0 ? targetKey : -(long)Ring;
+
+        PumpUnlockResidency(capi, viewBoost, forceHost: true);
 
         LodScoutSeqDiag.LogHopUnlock(
             Ring, advance, x, y, z, distPickupBlocks, bearingRad, finished, pendingKeys.Count,
             targetKey, loaded, usedFallback: targetKey == 0,
             distFromPickup: distPickupBlocks, pastWarmBlocks: pastWarmBlocks,
-            loadedAfterDwell: loadedAfterDwell, skippedCooldown: lastSkippedCooldown);
+            loadedAfterDwell: loadedAfterDwell, skippedCooldown: lastSkippedCooldown,
+            residencyLoaded: LastResidencyLoaded, pumpAnchorKey: pumpAnchorKey);
         return true;
+    }
+
+    /// <summary>
+    /// Force map-chunk residency: client SetChunkColumnVisible + scout-host KeepLoaded/ForceSend.
+    /// Player Pos/ServerPos synced each pump so the stream center matches unlock XYZ.
+    /// </summary>
+    public void PumpUnlockResidency(ICoreClientAPI capi, LodLoginBakeViewBoost viewBoost, bool forceHost = false)
+    {
+        if (!Active) return;
+
+        int dim = capi.World.Player.Entity.Pos.Dimension;
+        int revealR = StreamPumpRadiusChunks(viewBoost);
+
+        if (TargetKey != 0)
+            LodLoginBakePlayerMove.RequestL0MapChunksVisible(capi, TargetKey, dim);
+        LodLoginBakePlayerMove.RequestChunkColumnsVisible(capi, X, Z, dim, revealR);
+
+        EntityPlayer? entity = capi.World.Player.Entity;
+        if (entity != null)
+        {
+            LodLoginBakePlayerMove.WriteExactPickup(entity, X, Y, Z, entity.Pos.Yaw, entity.Pos.Pitch);
+            LodVsCompat.TryUpdatePartitioning(entity);
+        }
+
+        if (!forceHost && TicksAtPoint % ResidencyPumpIntervalTicks != 0)
+        {
+            LastResidencyLoaded = ReadTargetLoaded(capi);
+            return;
+        }
+
+        int cx = (int)Math.Floor(X / GlobalConstants.ChunkSize);
+        int cz = (int)Math.Floor(Z / GlobalConstants.ChunkSize);
+        LodScoutHostSystem.ClientInstance?.RequestUp(
+            pumpAnchorKey, cx, cz, UnlockHoldRadiusChunks, dim, X, Y, Z);
+
+        LastResidencyLoaded = ReadTargetLoaded(capi);
+    }
+
+    public void MaybeResidencyProbe(
+        ICoreClientAPI capi,
+        int finished,
+        int paintStarveTicks,
+        int waitChunksLive,
+        int captureLive)
+    {
+        if (!Active || TargetKey == 0) return;
+        LodScoutSeqDiag.MaybeHopResidencyProbe(
+            Ring, TargetKey, pumpAnchorKey, TicksAtPoint, finished, paintStarveTicks,
+            waitChunksLive, captureLive, LastResidencyLoaded, X, Y, Z,
+            LodScoutHostSystem.ClientInstance?.ChannelConnected ?? false);
     }
 
     public void TickAtPoint()
@@ -176,12 +246,26 @@ public sealed class LodLoginHopUnlock
         if (Active) TicksAtPoint++;
     }
 
+    public void ReleasePumpAnchor()
+    {
+        if (pumpAnchorKey == 0) return;
+        LodScoutHostSystem.ClientInstance?.RequestDown(pumpAnchorKey);
+        pumpAnchorKey = 0;
+    }
+
+    int ReadTargetLoaded(ICoreClientAPI capi)
+    {
+        if (TargetKey == 0) return 0;
+        return LodLoginSweep.CountLoadedMapChunks(capi.World.BlockAccessor, TargetKey);
+    }
+
     void BanCurrentTargetIfStillCold(ICoreClientAPI capi)
     {
         if (TargetKey == 0 || TicksAtPoint < FailedKeyDwellTicks) return;
         int loaded = LodLoginSweep.CountLoadedMapChunks(capi.World.BlockAccessor, TargetKey);
-        if (loaded == 0)
-            failedKeyBan[TargetKey] = FailedKeyBanRings;
+        if (loaded > 0) return;
+        int ban = TicksAtPoint >= MaxResidencyForceTicks ? FailedKeyLongBanRings : FailedKeyBanRings;
+        failedKeyBan[TargetKey] = ban;
     }
 
     void TickFailedKeyBans()

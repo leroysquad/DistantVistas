@@ -2,11 +2,11 @@
     "type":  "code",
     "modid":  "distantvistas",
     "name":  "Distant Vistas",
-    "version":  "1.0.41",
+    "version":  "1.0.42",
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.41. Near-cliff annulus hop-unlock: target cold L0 inside spawn-solid ring, ban failed keys, no A/B oscillation. Scouts primary. Full seasonal colors + 4075 disk.",
+    "description":  "Official 1.0.42. Force map-chunk residency at hop-unlock via scout-host KeepLoaded; hold until loaded rises. Scouts primary. Full seasonal colors + 4075 disk.",
     "authors":  [
                     "IllLeroySquad"
                 ],

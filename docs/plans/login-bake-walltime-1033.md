@@ -512,6 +512,32 @@ Colors + full ~1680 / 4075 disk intent unchanged either branch.
 | `loadedAfterDwell` | 0 | **≥1** or key banned |
 | `finished` | 358 stall | **>358 climbing** |
 
+## 1.0.42 force residency at unlock (1.0.41 playtest failed — runId 1041)
+
+**Playtest (runId 1041):** Annulus targeting fixed — `distFromPickup` **750–759**, `pastWarmBlocks` 0–9, **8 unique targetKeys**, finished **280→358**. All 12 hops: **`loadedMapChunks=0`**, **`loadedAfterDwell=0`** even at visit XYZ. Stall unchanged: `waitChunksLive=15`, `captureLive=0`, `paintStarveTicks=506`, `finished` stuck **358**. Keys recycle after ring-8 ban expiry.
+
+**Root cause:** Client-only player hop + `SetChunkColumnVisible` does **not** trigger server map-chunk residency for cold L0s during login overlay. Scouts work because **`LodScoutHostSystem.RequestUp`** does server **KeepLoaded + ForceSend**.
+
+### Shipped
+
+| Fix | Mechanism |
+|-----|-----------|
+| **Pump anchor** | `RequestUp(pumpAnchorKey, cx, cz, radius=2, dim, x, y, z)` every 4 ticks at unlock — same path as scouts |
+| **L0 visibility** | `RequestL0MapChunksVisible` marks all four map columns of target L0 |
+| **Pos sync** | `WriteExactPickup` each pump so stream center matches unlock XYZ |
+| **Hold until loaded** | `ShouldAdvance` requires `loaded≥1` after 16 ticks, or **128-tick** forced-load timeout |
+| **Long ban** | Keys still 0 after 128 ticks → **16-ring** cooldown (was 8) |
+| **Telemetry** | `hop-residency-probe`, `residencyLoaded`, `pumpAnchorKey` on `hop-unlock` (runId **1042**) |
+
+**Expect after 1.0.42:**
+
+| Signal | 1041 @358 | Target |
+|--------|-----------|--------|
+| `residencyLoaded` | 0 always | **≥1** (ideally 4) |
+| `loadedAfterDwell` | 0 | **≥1** before retarget |
+| `captureLive` | 0 | **>0** |
+| `finished` | 358 stall | **>358 climbing** |
+
 ## Plan B — soft-release threshold (geometry, not ~600)
 
 **User clarification:** a ~600 `finished` cutoff is **not hard**. Derive release timing from **warm-ring / residency geometry** (same model as the ~358 cliff), not a magic constant.

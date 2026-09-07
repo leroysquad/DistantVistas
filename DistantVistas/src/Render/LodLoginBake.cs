@@ -802,16 +802,22 @@ public sealed class LodLoginBake
             paintStarveTicks, waitChunksLive, captureLive, liveScouts, finished);
         if (!hopUnlock.Active && stallSignature)
         {
-            if (hopUnlock.TryFirstHop(capi, pickupX, pickupY, pickupZ, hopPendingScratch, finished))
+            if (hopUnlock.TryFirstHop(
+                    capi, viewBoost, pickupX, pickupY, pickupZ, hopPendingScratch, finished))
                 spawnRevealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
         }
         else if (hopUnlock.Active && hopUnlock.ShouldAdvance(
-            paintStarveTicks, waitChunksLive, captureLive, liveScouts, finished))
+            capi, paintStarveTicks, waitChunksLive, captureLive, liveScouts, finished))
         {
-            if (hopUnlock.TryAdvanceHop(capi, pickupX, pickupY, pickupZ, hopPendingScratch, finished))
+            if (hopUnlock.TryAdvanceHop(
+                    capi, viewBoost, pickupX, pickupY, pickupZ, hopPendingScratch, finished))
                 spawnRevealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
         }
+        if (hopUnlock.Active)
+            hopUnlock.PumpUnlockResidency(capi, viewBoost);
         hopUnlock.TickAtPoint();
+        hopUnlock.MaybeResidencyProbe(
+            capi, finished, paintStarveTicks, waitChunksLive, captureLive);
 
         if (paintStarveTicks >= 8 && paintStarveTicks % 32 == 0)
             ReorderPendingByPaintReadiness();
