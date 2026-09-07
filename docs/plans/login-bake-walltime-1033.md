@@ -317,3 +317,42 @@ Filled-disk L0 count at radius R (64-block cells): **N(R) ≈ π (R/64)²**
 | `chunkPressure` | false @ starve | **true** |
 | `captureStall` vs paint | 733 vs 6 | **captureStall ≪ painted/resident** |
 | `warm-ring-probe` | n/a | pending **loaded1Plus** rises; **coldNear** throttled |
+
+**Not in 1.0.38:** overlay fade / soft-release-at-N — cliff fix only. See Plan B below.
+
+## Plan B — soft-release threshold (geometry, not ~600)
+
+**User clarification:** a ~600 `finished` cutoff is **not hard**. Derive release timing from **warm-ring / residency geometry** (same model as the ~358 cliff), not a magic constant.
+
+**Goal (unchanged):** let the player into the world when **near looks good enough**, fade the overlay if feasible, and **keep baking the full ~1680 / 4075 disk** in the background via `PlayModeBakeBudget` + `LodExploreBake` — seasonal GetColor and view distance stay non-negotiable.
+
+### Geometry (same as cliff)
+
+L0 cells in a filled disk at radius R (64-block cells):
+
+**N(R) ≈ π (R/64)²**
+
+| Radius | N(R) L0 (approx) | Meaning |
+|--------|------------------|---------|
+| **750** blocks (stream hold) | **~431** | Warm map residency — overlay scouts paint reliably |
+| **683** blocks (inverse of 358 finished) | **358** | Observed 1.0.37 cliff — warm halo exhausted |
+| **1024** blocks (spawn-solid) | **~804** | Near mesh gate disk — drawable underfoot |
+| **~890** blocks | **~600** | Illustrative only — equals N(R), not a target constant |
+
+The old “~600” suggestion sits near **N(~890)** — between warm completion and full spawn-solid disk. That is a **consequence of geometry**, not a knob to hard-code.
+
+### Proposed soft-release rule (future — after cliff playtest passes)
+
+Release overlay (hand off to `PlayModeBakeBudget`) when **all** of:
+
+1. **Spawn-solid gate** — existing `CountMissingSpawnDrawable` ≈ 0 inside 1024 (player can stand on painted land).
+2. **Warm ring substantially fed** — `finished ≥ ⌈N(R_hold) × f_w⌉` where `R_hold = SweepBoostViewDistanceBlocks` and **f_w ≈ 0.85–0.95** (tune from playtest, not 600).
+3. **Paint pipeline healthy** — `paintReadyQueued > 0` or `paintStarveTicks` below small epsilon for several seconds (cliff broken).
+
+Background work continues for remaining pending (~1680 total budget, full 4075 disk) — no fewer stops, no coarser colors.
+
+Optional fade: cosmetic only after (1)–(3); does **not** change bake scope.
+
+**Implementation hook (not 1.0.38):** compare `finished` to `LodLoginScoutFill.WarmRingL0CellEstimate(viewBoost.SweepBoostViewDistanceBlocks)` × factor; log in `warm-ring-probe` alongside `warmL0Estimate` to calibrate **f_w** from real sessions.
+
+**Reject:** fixed `finished >= 600`, releasing before spawn-solid, or shrinking visit disk to hit a number faster.
