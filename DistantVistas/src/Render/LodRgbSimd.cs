@@ -13,7 +13,8 @@ namespace DistantVistas;
 /// sampled <c>int[]</c> buffers. AVX2 (8-wide) then portable <see cref="Vector128"/>
 /// (SSE2 / NEON; same hardware as <see cref="Vector.IsHardwareAccelerated"/>), then
 /// scalar. Results are bit-identical to the scalar path (truncated integer averages,
-/// same pack/unpack layout). See docs/plans/login-bake-efficiency.md §4.
+/// same pack/unpack layout). See docs/plans/simd-after-getcolor.md and
+/// docs/plans/login-bake-efficiency.md §4.
 /// </summary>
 public static class LodRgbSimd
 {

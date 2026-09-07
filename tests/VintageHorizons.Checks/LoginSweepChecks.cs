@@ -1623,5 +1623,16 @@ public static class LoginSweepChecks
             "efficiency plan marks post-GetColor SIMD done, not a leftover TODO");
         c.True(plan.Contains("LodRgbSimd"),
             "efficiency plan names the live SIMD type");
+
+        string simdPlanPath = Path.Combine(
+            GameAssemblies.RepoRoot, "docs", "plans", "simd-after-getcolor.md");
+        c.True(File.Exists(simdPlanPath), "simd-after-getcolor research note ships");
+        string simdPlan = File.ReadAllText(simdPlanPath);
+        c.True(simdPlan.Contains("BlurLandOnceRadiusZero"),
+            "SIMD research documents radius-0 production blur path");
+        c.True(simdPlan.Contains("ForceScalar"),
+            "SIMD research documents scalar fallback / test hook");
+        c.True(simdPlan.Contains("learn.microsoft.com"),
+            "SIMD research cites Microsoft SIMD docs");
     }
 }
