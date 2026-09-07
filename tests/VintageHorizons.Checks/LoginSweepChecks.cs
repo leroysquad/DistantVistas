@@ -749,8 +749,20 @@ public static class LoginSweepChecks
             "overlay integrates hop-unlock pump for cold annulus");
         c.True(bake.Contains("hopUnlock.TryFirstHop"),
             "first hop-unlock on all-WaitChunks stall signature");
-        c.Eq(16, LodLoginHopUnlock.TriggerPaintStarveTicks,
-            "hop-unlock waits for sustained paint starve before first pump");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
+                .Contains("TryPickColdUnlockTarget"),
+            "hop-unlock retargets to cold pending L0 visit cells");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
+                .Contains("MinHopDeltaBlocks"),
+            "each hop-unlock retarget moves at least MinHopDeltaBlocks");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
+                .Contains("1.0.40 stronger hop-unlock"),
+            "walltime plan documents 1.0.40 hop-unlock fix");
+        c.Eq(128, LodLoginHopUnlock.MinHopDeltaBlocks,
+            "hop-unlock requires meaningful move between retargets");
         c.True(File.ReadAllText(Path.Combine(
                 GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
                 .Contains("hop-unlock"),

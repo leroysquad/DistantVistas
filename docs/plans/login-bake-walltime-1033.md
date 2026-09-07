@@ -460,6 +460,32 @@ Colors + full ~1680 / 4075 disk intent unchanged either branch.
 | `finished` past 358 | stall | **climbing** |
 | `paintReadyQueued` | 0 | **>0** |
 
+## 1.0.40 stronger hop-unlock (1.0.39 playtest failed — runId 1039)
+
+**Playtest (runId 1039):** hop-unlock fired rings 1–4 but rings 3–4 **same targetR=960** and same XYZ; stuck **finished=358**; `waitChunksLive=16`, `captureLive=0`; maxWait + captureStall dominate.
+
+**Root cause:** unlock used **pickup-relative radius** capped at `SpawnSolid−64=960`; golden-angle fallback reparked at same point; warm disk at 960 did not center on cold pending L0 cells scouts actually need.
+
+### Shipped
+
+| Fix | Mechanism |
+|-----|-----------|
+| **L0-centered unlock** | Player hops to **visit XYZ of cold pending key** (`loadedMapChunks&lt;4`, outside prior warm disk) |
+| **Continuous retarget** | **No MaxUnlockRings cap** — advance while stall signature persists |
+| **Min hop delta** | **128 blocks** minimum move; skip `lastTargetKey` on advance |
+| **Monotonic fallback** | Radial pump **+192 blocks** per fallback ring when no L0 target; never reuse same radius |
+| **Stream pump** | `StreamPumpExtraChunks=+4` on player reveal + scout `visitRevealCap` during hop |
+| **Telemetry** | `targetKey`, `loadedMapChunks`, `usedFallback` on `hop-unlock` (runId **1040**) |
+
+**Expect after 1.0.40:**
+
+| Signal | 1039 @358 | Target |
+|--------|-----------|--------|
+| `hop-unlock.targetKey` | 0 / same XYZ | **nonzero, changes** per retarget |
+| `targetRadiusBlocks` | 960×3 | **increases or L0-dist varies** |
+| `captureLive` | 0 | **>0** |
+| `finished` | 358 stall | **>400 climbing** |
+
 ## Plan B — soft-release threshold (geometry, not ~600)
 
 **User clarification:** a ~600 `finished` cutoff is **not hard**. Derive release timing from **warm-ring / residency geometry** (same model as the ~358 cliff), not a magic constant.

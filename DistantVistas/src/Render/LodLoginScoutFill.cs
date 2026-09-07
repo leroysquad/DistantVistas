@@ -196,8 +196,9 @@ public sealed class LodLoginScoutFill
         int rotateTicks = chunkPressure ? 8 : WaitChunksRotateTicks;
         int rotateMinLive = chunkPressure ? 4 : WaitChunksRotateMinLive;
         TickDownSpawnCooldowns();
+        int revealCap = Math.Max(LocalVisitRevealChunks, chunkVisibleTarget);
         int targetCap = Math.Min(
-            LocalVisitRevealChunks,
+            revealCap,
             Math.Max(ChunkVisibleRadius, chunkVisibleTarget));
         int nearWaitChunks = CountNearWaitChunks();
         int farWaitChunks = CountFarWaitChunks();

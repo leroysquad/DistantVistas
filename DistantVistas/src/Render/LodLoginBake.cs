@@ -817,9 +817,12 @@ public sealed class LodLoginBake
             ReorderPendingByPaintReadiness();
 
         hopUnlock.StreamCenter(pickupX, pickupZ, out double streamX, out double streamZ);
+        int visitRevealCap = hopUnlock.Active
+            ? LodLoginScoutFill.NearRevealChunks + LodLoginHopUnlock.StreamPumpExtraChunks
+            : LodLoginScoutFill.LocalVisitRevealChunks;
         List<long> ready = scoutFill.Tick(
             capi, pipeline, renderer, pending, completedKeys,
-            LodLoginScoutFill.LocalVisitRevealChunks,
+            visitRevealCap,
             viewBoost.ChunkVisibleRadius,
             streamX, streamZ,
             LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks);
@@ -1207,10 +1210,11 @@ public sealed class LodLoginBake
     {
         if (!restoreCaptured) return;
         hopUnlock.StreamCenter(pickupX, pickupZ, out double streamX, out double streamZ);
-        int target = viewBoost.SpawnStreamRadiusChunks;
-        if (spawnRevealRadius >= target) return;
+        int revealTarget = hopUnlock.StreamPumpRadiusChunks(viewBoost);
+        if (spawnRevealRadius >= revealTarget) return;
+        int grow = hopUnlock.Active ? RevealGrowPerTick * 2 : RevealGrowPerTick;
         int before = spawnRevealRadius;
-        spawnRevealRadius = Math.Min(target, spawnRevealRadius + RevealGrowPerTick);
+        spawnRevealRadius = Math.Min(revealTarget, spawnRevealRadius + grow);
         int dim = capi.World.Player.Entity.Pos.Dimension;
         LodLoginBakePlayerMove.RequestChunkColumnRing(
             capi, streamX, streamZ, dim, before, spawnRevealRadius);
@@ -1951,7 +1955,7 @@ public sealed class LodLoginBake
             LodLoginBakePlayerMove.ApplyExactPickup(
                 capi, entity, hopUnlock.X, hopUnlock.Y, hopUnlock.Z,
                 pickupYaw, pickupPitch,
-                pumpStream, viewBoost.SpawnStreamRadiusChunks);
+                pumpStream, hopUnlock.StreamPumpRadiusChunks(viewBoost));
         }
         else
         {

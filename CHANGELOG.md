@@ -1,3 +1,8 @@
+## 1.0.40
+- **Stronger hop-unlock (1.0.39 playtest failed runId 1039).** Rings 3–4 parked at same R=960 with zero Capture. Fix: **retarget to cold pending L0 visit cells** (loaded&lt;4) instead of fixed pickup radius; **continuous retarget** (no MaxUnlockRings cap); **MinHopDeltaBlocks=128** between hops; monotonic **fallback radial +192** when needed; **enlarged stream/reveal pump** (+4 chunks) at unlock. Scouts remain primary. Telemetry `hop-unlock` adds `targetKey`, `loadedMapChunks`, `usedFallback` (runId **1040**). Details: `docs/plans/login-bake-walltime-1033.md` § 1.0.40.
+- Drop `distantvistas_1.0.40.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+- **Verify:** `hop-unlock` shows changing `targetKey`/XYZ each retarget; `captureLive>0` after unlock; `finished` past **358** and climbing; `pickup-restore` at end.
+
 ## 1.0.39
 - **Hop-unlock pump (Plan C — 1.0.38 playtest failed runId 1038).** At ~353 stall signature (`waitChunksLive=16`, `captureLive=0`, paint starve, all scouts WaitChunks): invisibly move player behind overlay to geometry-derived unlock point (look-locked); **16 scouts remain primary parallel bakers**; stream center + warm disk follow unlock; advance outward on stall; **exact pickup XYZ + look restored** at overlay end. Not hop-sweep. Math: unlock radius `max(R_hold, finishedRadius+64)` then `R_hold + (ring-1)×0.88×R_hold`. Telemetry: `hop-unlock` (runId 1039). Details: `docs/plans/login-bake-walltime-1033.md` § 1.0.39.
 - Drop `distantvistas_1.0.39.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
