@@ -22,6 +22,7 @@ public static class LoginSweepChecks
         SweepResume(c);
         SweepSkipGate(c);
         SweepTiming(c);
+        VisitOnsetEnvelope(c);
         CreativeMode(c);
         HudHide(c);
         CharacterWait(c);
@@ -75,21 +76,23 @@ public static class LoginSweepChecks
         c.True(targeted.ModeLabel.Contains("incomplete"), "incomplete plan label");
 
         var manyMisses = new List<LodLoginBakeAudit.Miss>();
-        for (int i = 0; i < 120; i++)
+        for (int i = 0; i < 300; i++)
             manyMisses.Add(new(LodWorld.SectionKey(0, i, 0), LodLoginBakeAudit.MissReason.BakeIncomplete));
         var budgeted = LodLoginSweepBootstrap.PlanIncomplete(manyMisses);
         c.Eq(LodLoginSweepBootstrap.RevisitMaxVisitStops, budgeted.Keys.Count,
             "incomplete plan stays inside the revisit stop budget");
-        c.True(budgeted.ModeLabel.Contains("of 120"), "incomplete plan names the leftover gaps");
+        c.True(budgeted.ModeLabel.Contains("of 300"), "incomplete plan names the leftover gaps");
 
-        c.Eq(80, LodLoginSweepBootstrap.RevisitMaxVisitStops,
-            "revisit cap targets ~160s at fallback 2s/stop");
-        c.Eq(80, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
-            "bootstrap land cap matches revisit (~160s at fallback 2s/stop)");
-        c.Eq(16, LodLoginSweepBootstrap.RetryMaxVisitStops,
-            "retry hop is shorter than the first pass");
+        c.Eq(180, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "revisit cap targets ~180s at fallback 1s/stop");
+        c.Eq(180, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "bootstrap land cap matches revisit (~180s at fallback 1s/stop)");
+        c.Eq(48, LodLoginSweepBootstrap.RetryMaxVisitStops,
+            "retry hop matches MaxRetryStops at fallback 1s/stop");
         c.True(LodLoginSweepBootstrap.RevisitMaxVisitStops >= LodLoginSweepBootstrap.BootstrapMaxVisitStops,
             "revisit budget is at least bootstrap budget");
+        c.True(LodLoginSweepBootstrap.RetryMaxVisitStops <= LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "retry hop is shorter than the first pass");
     }
 
     static void BackdropHook(Check c)
@@ -429,7 +432,7 @@ public static class LoginSweepChecks
             "login bake settles after each bake");
         c.True(bake.Contains("BatchBakeL0Radius = 12"),
             "login bake batch-bakes neighbour disk inside the 750-block view");
-        c.True(bake.Contains("MaxBakePerTick = 8"),
+        c.True(bake.Contains("MaxBakePerTick = 12"),
             "login bake spreads GetColor across overlay ticks");
         c.True(bake.Contains("CollectExpireLeftovers"),
             "expire leftovers are queued, not baked in one tick");
@@ -614,8 +617,8 @@ public static class LoginSweepChecks
         c.Eq(LodLoginSweepWindow.StalePaintRevisionReason,
             LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 3),
             "paint revision 3 recaptures so frosted canopy and frost ground run once");
-        c.Eq(4, LodSurfaceMix.PaintRevision,
-            "paint revision 4 forces one overlay for frosted canopy and frost ground");
+        c.Eq(5, LodSurfaceMix.PaintRevision,
+            "paint revision 5 keeps live GetColor through autumn");
         c.Eq(LodLoginSweepWindow.StalePaintRevisionReason,
             LodLoginSweepWindow.RecaptureReason("fall", "winter", 10, 0, 0),
             "stale paint revision still recaptures after a season change");
@@ -684,6 +687,12 @@ public static class LoginSweepChecks
             "skip path must not stamp completion marker");
         c.True(mod.Contains("LoginVisitSweepEnabled"),
             "sweep gated by config flag");
+        c.True(mod.Contains("LoginVisitSweepAllowedHere"),
+            "overlay hop-scan is refused on vanilla multiplayer");
+        c.True(mod.Contains("assist != null && assist.ServerHasMod"),
+            "vanilla MP skip is assist-channel Connected, not Welcome");
+        c.True(mod.Contains("capi.IsSinglePlayer"),
+            "singleplayer still runs the overlay");
         c.True(mod.Contains("LodLoginBakeViewBoost.RecoverPlayerViewIfNeeded"),
             "join restores a leftover 750/1000 slider before play or overlay");
         c.True(new DistantVistasConfig().LoginVisitSweepEnabled,
@@ -741,7 +750,7 @@ public static class LoginSweepChecks
         c.True(label.Contains("fullDiskRecapture") && label.Contains(":false"),
             "expire planner logs that it did not queue every stored cell");
         c.True(label.Contains("InteriorGapsBetweenStops"),
-            "after the 64-stop sample, expire fills holes between those stops");
+            "after the timed sample, expire fills holes between those stops");
         c.True(label.Contains("RetryMaxVisitStops"),
             "interior gap-fill stays on the short retry budget");
     }
@@ -750,30 +759,38 @@ public static class LoginSweepChecks
     {
         LodLoginSweepTiming.SetMachineSecPerStop(LodLoginSweepTiming.InitialSecPerStop);
         c.Eq(30.0, LodLoginSweepTiming.TargetMinSec, "sweep target min seconds");
-        c.Eq(160.0, LodLoginSweepTiming.TargetMaxSec, "sweep target max seconds");
-        c.Eq(160.0, LodLoginSweepTiming.BootstrapTargetMaxSec, "bootstrap target max seconds");
-        c.Eq(32.0, LodLoginSweepTiming.RetryTargetSec, "retry pass wall seconds");
-        c.Eq(2.0, LodLoginSweepTiming.InitialSecPerStop, "fallback per-stop when this PC has no samples");
-        c.Eq(36000, LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks,
-            "empty-canvas bootstrap probe radius default (~36 km, 2x diameter)");
-        c.Eq(563, LodLoginSweepBootstrap.BootstrapCellRadius(),
-            "36000 blocks is 563 L0 cells radius at 64-block footprint");
-        c.Eq(64, LodLoginSweepTiming.MinVisitStops, "first-pass floor is 4x the 16-stop shrink");
-        c.Eq(96, LodLoginSweepTiming.MaxVisitStops, "first-pass ceiling leaves headroom above 64");
-        c.Eq(16, LodLoginSweepTiming.MinRetryStops, "retry floor is 2x the 8-stop shrink");
-        c.Eq(32, LodLoginSweepTiming.MaxRetryStops, "retry ceiling stays shorter than first pass");
-        c.Eq(80, LodLoginSweepTiming.VisitStopBudget(2.0, LodLoginSweepTiming.TargetMaxSec),
-            "fallback 2s/stop plans 80 first-pass stops");
-        c.Eq(64, LodLoginSweepTiming.VisitStopBudget(3.6, LodLoginSweepTiming.TargetMaxSec),
-            "3.6s/stop clamps to MinVisitStops 64, not 44 from 160/3.6");
-        c.Eq(16, LodLoginSweepTiming.RetryStopBudget(3.6),
-            "3.6s/stop retry clamps to MinRetryStops 16");
-        c.Eq(80, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
-            "bootstrap visit cap targets ~160s at fallback 2s/stop");
-        c.Eq(80, LodLoginSweepBootstrap.RevisitMaxVisitStops,
-            "revisit visit cap targets ~160s at fallback 2s/stop");
-        c.Eq(16, LodLoginSweepBootstrap.RetryMaxVisitStops,
-            "retry visit cap is the short second hop");
+        c.Eq(180.0, LodLoginSweepTiming.TargetMaxSec, "sweep target max seconds");
+        c.Eq(180.0, LodLoginSweepTiming.BootstrapTargetMaxSec, "bootstrap target max seconds");
+        c.Eq(48.0, LodLoginSweepTiming.RetryTargetSec, "retry pass wall seconds");
+        c.Eq(1.0, LodLoginSweepTiming.InitialSecPerStop, "fallback per-stop when this PC has no samples");
+        c.Eq(216000, LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks,
+            "empty-canvas bootstrap probe radius default (~216 km, 1.5x prior 144 km)");
+        c.Eq(3375, LodLoginSweepBootstrap.BootstrapCellRadius(),
+            "216000 blocks is 3375 L0 cells radius at 64-block footprint");
+        c.Eq(9216, LodLoginSweepBootstrap.MaxBootstrapClassifyCells,
+            "classify ceiling scales with the 1.5x radius (~2.25x area)");
+        c.Eq(96, LodLoginSweepTiming.MinVisitStops, "first-pass floor densifies the 216 km disk");
+        c.Eq(240, LodLoginSweepTiming.MaxVisitStops, "first-pass ceiling for fast machines");
+        c.Eq(24, LodLoginSweepTiming.MinRetryStops, "retry floor stays shorter than first pass");
+        c.Eq(48, LodLoginSweepTiming.MaxRetryStops, "retry ceiling matches retry wall at 1s/stop");
+        c.Eq(180, LodLoginSweepTiming.VisitStopBudget(1.0, LodLoginSweepTiming.TargetMaxSec),
+            "fallback 1s/stop plans 180 first-pass stops");
+        c.Eq(96, LodLoginSweepTiming.VisitStopBudget(2.0, LodLoginSweepTiming.TargetMaxSec),
+            "2s/stop clamps to MinVisitStops 96, not 90 from 180/2");
+        c.Eq(96, LodLoginSweepTiming.VisitStopBudget(3.6, LodLoginSweepTiming.TargetMaxSec),
+            "3.6s/stop clamps to MinVisitStops 96");
+        c.Eq(24, LodLoginSweepTiming.RetryStopBudget(3.6),
+            "3.6s/stop retry clamps to MinRetryStops 24");
+        c.Eq(180, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "bootstrap visit cap targets ~180s at fallback 1s/stop");
+        c.Eq(180, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "revisit visit cap targets ~180s at fallback 1s/stop");
+        c.Eq(48, LodLoginSweepBootstrap.RetryMaxVisitStops,
+            "retry visit cap matches MaxRetryStops (48s wall at 1s/stop)");
+        c.Eq(48, LodLoginSweepTiming.MaxRetryStops,
+            "retry ceiling is 48");
+        c.True(LodLoginSweepBootstrap.RetryMaxVisitStops <= LodLoginSweepTiming.MaxVisitStops,
+            "retry hop is not longer than the first pass");
 
         var harvest = LodLoginSweepTimingStore.HarvestSecPerStop(new[]
         {
@@ -784,8 +801,8 @@ public static class LoginSweepChecks
         });
         c.Eq(1, harvest.Count, "log harvest keeps budgeted passes and drops 300+ hole hops");
         c.True(Math.Abs(harvest[0] - (43.0 / 30.0)) < 0.01, "harvested rate is 43s / 30 stops");
-        c.Eq(40, LodLoginSweep.MaxChunkWaitTicks, "chunk wait capped ~2.0s at 50ms pulse for 750 view");
-        c.Eq(28, LodLoginSweep.MaxCaptureWaitTicks, "capture wait capped ~1.4s at 50ms pulse for recapture");
+        c.Eq(24, LodLoginSweep.MaxChunkWaitTicks, "chunk wait capped ~1.2s at 50ms pulse");
+        c.Eq(16, LodLoginSweep.MaxCaptureWaitTicks, "capture wait capped ~0.8s at 50ms pulse");
         c.Eq(3, LodLoginSweepBootstrap.OpenOceanMaxSamples,
             "open-ocean full-bake samples capped for 1-min sweep");
 
@@ -832,6 +849,47 @@ public static class LoginSweepChecks
             "login bake progress includes ETA suffix");
         c.True(bake.Contains("LodLoginSweepTimingStore.EnsureApplied"),
             "login bake seeds ETA from this PC before planning");
+    }
+
+    static void VisitOnsetEnvelope(Check c)
+    {
+        int sb = LodSection.SectionBlocks;
+        var world = new LodWorld();
+        world.InstallStoredKey(0, 0, 0, applyToParent: true, provisional: false);
+        world.InstallStoredKey(0, 10, 0, applyToParent: true, provisional: false);
+
+        double radius = FarseerVisitOnset.CaptureEnvelopeRadiusBlocks(world, 0, 0, padBlocks: 0);
+        double expected = (10 + 0.5) * sb;
+        c.True(Math.Abs(radius - expected) < 1.0,
+            "envelope radius reaches farthest L0 centre from origin");
+
+        double padded = FarseerVisitOnset.CaptureEnvelopeRadiusBlocks(
+            world, 0, 0, FarseerVisitOnset.EnvelopePadBlocks);
+        c.True(padded > radius, "envelope pad extends past farthest L0");
+
+        c.True(FarseerVisitOnset.IsVisitedForOnset(
+                5, 0, sb, 0, 0, padded, key => world.HasDataSet.Contains(key)),
+            "gap L0 between hop cells is visited via envelope fill");
+        c.False(FarseerVisitOnset.IsVisitedForOnset(
+                200, 200, sb, 0, 0, padded, key => world.HasDataSet.Contains(key)),
+            "far outside envelope stays unvisited for early silhouette");
+        c.True(FarseerVisitOnset.IsVisitedForOnset(
+                10, 0, sb, 0, 0, 0, key => world.HasDataSet.Contains(key)),
+            "exact captured L0 is visited even with zero envelope");
+
+        string onset = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "FarseerVisitOnset.cs"));
+        c.True(onset.Contains("CaptureEnvelopeRadiusBlocks"),
+            "visit-onset paints continuous capture envelope");
+        c.True(onset.Contains("IsVisitedForOnset"),
+            "visit-onset classifies envelope + exact L0");
+
+        string complete = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepComplete.cs"));
+        c.True(complete.Contains("SweepRadiusBlocks"),
+            "complete stamp stores sweep envelope radius");
+        c.True(complete.Contains("SweepOriginX"),
+            "complete stamp stores sweep envelope origin");
     }
 
     static void CreativeMode(Check c)

@@ -1,4 +1,4 @@
-﻿using Vintagestory.API.Client;
+using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Config;
 using Vintagestory.API.MathTools;
@@ -523,6 +523,7 @@ public class LodTerrainRenderer : IRenderer
         clientMain.MainCamera.ZFar = needed;
         capi.Render.Reset3DProjection();
         appliedZFar = needed;
+        LodCloudHorizon.NotifyFarDistanceChanged();
     }
 
     void UpdateEffectiveFarDistance(float vanillaViewDistance)
@@ -907,10 +908,15 @@ public class LodTerrainRenderer : IRenderer
         return queued;
     }
 
+    /// <summary>
+    /// Tight seam at the vanilla edge for mesh warm-up only. A half-VD band
+    /// used to OR into drawFullDetail and dual-draw L0/L1/L2 (seam flicker).
+    /// </summary>
     bool InHandoffRing(double nearDist, double vanillaCoverageRadius)
     {
-        double outer = liveViewDistance + LodSection.SectionBlocks * 6;
-        return nearDist >= vanillaCoverageRadius * 0.45 && nearDist <= outer;
+        double inner = Math.Max(0, vanillaCoverageRadius - LodSection.SectionBlocks * 2);
+        double outer = liveViewDistance + LodSection.SectionBlocks * 2;
+        return nearDist >= inner && nearDist <= outer;
     }
 
     bool SectionFullyInsideVanilla(long key, LodSection section, double radius)
@@ -1125,9 +1131,10 @@ public class LodTerrainRenderer : IRenderer
         }
 
         bool handoff = InHandoffRing(nearDist, vanillaCoverageRadius);
-        // Draw full L0/L1 only inside live view distance and the vanilla seam.
-        // The keep-circle is larger and only holds GPU meshes.
-        bool drawFullDetail = LodCoveragePolicy.IsDrawFullDetail(nearDist, liveViewDistance) || handoff;
+        // Full L0/L1 only inside live view distance. Do not OR the handoff seam:
+        // that forced parent+child dual-draw across mid LOD rings (z-fight flicker).
+        // Handoff still warms L0/L1 meshes below.
+        bool drawFullDetail = LodCoveragePolicy.IsDrawFullDetail(nearDist, liveViewDistance);
         if (TrySkipTurnOnlyOffscreen(key, insideVanilla, drawFullDetail, inLeadCone, hasMesh))
             return false;
 
@@ -2779,6 +2786,22 @@ public class LodTerrainRenderer : IRenderer
             {
             }
         }
+        try
+        {
+            // Always read the live calendar for frost — after login bake the
+            // shader seasonRel path may stay parked; May must not stay frosted.
+            float seasonForFrost = seasonRel;
+            try { seasonForFrost = capi.World.Calendar.GetSeasonRel(climatePos); }
+            catch { }
+            float winter = LodSurfaceMix.WinterAmount(seasonForFrost);
+            float prevWinter = LodSeasonBake.LiveWinterAmount;
+            LodSeasonBake.LiveWinterAmount = winter;
+            bool wasFrost = prevWinter >= LodSeasonBake.FrostSeasonMin;
+            bool nowFrost = winter >= LodSeasonBake.FrostSeasonMin;
+            if (wasFrost != nowFrost)
+                InvalidateAllResidentMeshesForSeason();
+        }
+        catch { }
         if (!keepClimateValid)
             CaptureKeepClimate(climatePos.X, climatePos.Z);
         prog.Uniform("seasonRel", seasonRel);
@@ -3208,6 +3231,25 @@ public class LodTerrainRenderer : IRenderer
                 + ",\"n\":" + slabInvLog);
         }
         // #endregion
+    }
+
+    /// <summary>
+    /// Frost top-wash follows calendar winter. Drop GPU meshes once when that
+    /// gate flips so May remesh stops looking like snow.
+    /// </summary>
+    void InvalidateAllResidentMeshesForSeason()
+    {
+        var keys = new List<long>(sectionMeshes.Count + waterMeshes.Count);
+        keys.AddRange(sectionMeshes.Keys);
+        foreach (long key in waterMeshes.Keys)
+        {
+            if (!sectionMeshes.ContainsKey(key)) keys.Add(key);
+        }
+        foreach (long key in keys)
+        {
+            InvalidateGpuMesh(key);
+            world.RequestGpuSwap(key);
+        }
     }
 
     public void ClearMeshes()

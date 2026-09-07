@@ -1,3 +1,70 @@
+## 1.0.16
+- **Swept and traveled land no longer get the close Farseer silhouette.** The visit mask was only painting exact L0 hop cells, so gaps between login teleports read as unvisited and pulled stock Farseer in at 1x view distance across land you already swept. The mask now fills the continuous capture envelope (farthest visited L0 from spawn / sweep origin, plus pad) so that land stays late until 4.5x view distance. Land you have not traveled to or swept still gets the early silhouette. Past 4.5x stays Farseer (visited sharpened, unvisited stock).
+- Drop `distantvistas_1.0.16.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+
+## 1.0.15
+- **Login sweep hops faster and covers denser land.** More visit stops in the same overlay window (up to ~180 at the fallback rate, ceiling 240 on fast machines), shorter chunk/capture waits, and quicker settle between teleports so the 216 km disk fills before Farseer takes the rim. Servers without Distant Vistas still skip the overlay hop and stay on walk-capture (0.7.78-style).
+- Drop `distantvistas_1.0.15.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+
+## 1.0.14
+- **Far LOD colours match the season canvas.** Sweep bake already samples every column with vanilla GetColor. Autumn was then pulling that tint toward untinted texture camouflage, which killed orange-to-red ground and plants. Live climate+season colour now stays through autumn; deep winter still gets speck camouflage and frosted tree crowns. Paint revision 5 forces a recapture of stale FlagBaked RGB.
+- Drop `distantvistas_1.0.14.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again. Expect one season overlay pass on worlds baked under older paint revisions.
+
+## 1.0.13
+- **Login sweep disk is 1.5x wider** (~216 km around the player, was ~144 km). Same visit budget, larger footprint.
+- **Near LOD handoff is sharper.** Full 1-block L0 stays a bit past the vanilla view cut (1.2x), detail ladder defaults to 400 / fidelity 1.35 so those little slab plates at the near rim are less obvious.
+- Drop `distantvistas_1.0.13.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again. Existing ModConfig may still hold older DetailDistance/FidelityStep; delete those keys or set DetailDistance 400 and FidelityStep 1.35 if you want the new defaults.
+
+## 1.0.12
+- **Clouds reach the LOD horizon.** Vanilla cloud tiles stopped at about 4x view distance while Distant Vistas draws to 4.5x (and farther on captured land), so the sky looked like a nearby cloud box over far mountains. Classic and volumetric cloud grids now stretch to the LOD rim. Rebuilds when ZFar grows.
+- Drop `distantvistas_1.0.12.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+
+## 1.0.11
+- **Visit-aware Farseer silhouettes.** Undiscovered land starts the silhouette near 1x view distance (at the discovery frontier) so looking out from the edge of explored land is not empty sky with a floating rim. Visited land stays late at 4.5x so captured midground keeps Distant Vistas meshes. Needs Farseer installed; keep Far View past about 4.5x graphics view distance.
+- Drop `distantvistas_1.0.11.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+
+## 1.0.10
+- **Farseer silhouettes push farther out.** Onset targets 4.5x view distance (past our last drawn LOD ring), not 3x. When Far View Distance is shorter than that, start at the Far View rim itself, never the old 0.85 pull that put silhouettes on our outer textured band. Keep Far View past about 4.5x your graphics view distance.
+- **Mid LOD band no longer washes all-white.** Frost UP-face whitening is lighter at L1/L2 and backs off when autumn leaf chroma is still in the stored colour, so orange crowns keep frost tips instead of a white sheet.
+- **Outer LOD band keeps autumn leaf crowns.** Visit-baked and frost canopy win mip surface picks; floating leaf tops are not stripped as plant scrap; mid-far scrap cull exempts FlagBaked/FlagFrost. Outer mountains should keep leaf colour instead of green dirt.
+- **LOD seam flicker calmed.** The vanilla handoff ring was huge (from ~0.45x view distance outward) and forced full-detail draw, so adjacent LOD levels dual-drew and z-fought at the ring. Full detail stays inside live view distance; handoff is a tight seam for mesh warm-up only.
+- Drop `distantvistas_1.0.10.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+
+## 1.0.9
+- **No more crash when sharpening loaded Farseer regions.** Refresh was enumerating Farseer's live `activeRegionModels` dictionary while `BuildRegion` mutated it (`Collection was modified`). Snapshot the SourceData list first, then rebuild.
+- Drop `distantvistas_1.0.9.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+
+## 1.0.8
+- **Farseer far silhouettes compile again.** 1.0.6/1.0.7 wrote UTF-8 em dashes and multiply signs into Farseer's `region.vsh` comments. NVIDIA GLSL rejected that with `unexpected $end, expecting "::"`, so Farseer past 3x never drew and the client spammed OpenGL InvalidOperation after final compose. Overlay source is ASCII-only now.
+- Drop `distantvistas_1.0.8.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+
+## 1.0.7
+- **Past 3x view distance: unvisited is stock Farseer; visited is still Farseer, but sharper.** Both stay on Farseer's silhouettes past the hard handoff. Land you already captured overwrites Farseer heightmap samples with our column tops so mountains match what you walked. Unvisited far land stays soft worldgen heightmaps. Inside 3x is still ours. Keep Farseer's Far View Distance past about 3x your graphics view distance.
+- Drop `distantvistas_1.0.7.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+
+## 1.0.6
+- **Farseer starts at our last draw circle (3× view distance), not inside our LOD.** Stock Farseer began at 0.785× view distance and tore mountains inside vanilla and Distant Vistas meshes. With Farseer installed we rewrite its region shaders: silhouettes begin at the same 3× handoff where our lead-cone land drops off (`HorizonDrawScale`). Inside that circle is ours. Past it, unvisited far land is still Farseer's. Also killed the near Y-sink trench. Keep Farseer's Far View Distance past about 3× your graphics view distance so the outer rim still has room.
+- **May LODs no longer wash white like snow.** Frost bake and mesher top-white now follow calendar winter. Late spring and summer skip the frost sheet; old winter FlagFrost bits no longer force a snow crown until winter returns.
+- Drop `distantvistas_1.0.6.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+
+## 1.0.5
+- **Far mountain sides no longer punch sky holes.** FOV occlusion was hiding mid-slope cliff tiles behind a nearer shoulder of the same mountain. High-relief tiles always draw now, and the last stretch of the occlusion ray is ignored so the face itself is not treated as a wall in front of itself. Drop `distantvistas_1.0.5.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+
+## 1.0.4
+- **144 km hop-scan no longer freezes the client at plan time.** Empty-canvas bootstrap was classifying every L0 cell in the probe disk (~4M GetMapChunk calls on the main thread). Planning now samples at most 4096 cells across the same radius, then budget-picks the usual ~64 visit stops. Drop `distantvistas_1.0.4.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+
+## 1.0.3
+- **Login hop-scan covers twice the linear radius again.** First-join / season-expire probe disk is ~144 km around you (`EmptyCanvasBootstrapRadiusBlocks` 72000 → 144000). Same visit-stop wall budget; stops spread farther. MP skip gate and LeaveWorld re-init unchanged.
+- **Broken-up mountain peaks no longer punch sky holes.** FOV occlusion used to treat a whole 64-block tile as a solid wall from its tallest column (`SurfaceYMax`). Sparse floating high chunks then hid the real land behind them, and you saw sky through the gaps. Occlusion now peeks the actual column under each sample, and if the local neighborhood is broken-up (tall next to low / sky gap) it fails open and draws what is behind. Solid ridges still cull. Drop `distantvistas_1.0.3.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+
+## 1.0.2
+- **Login hop-scan covers twice the linear radius.** First-join / season-expire probe disk is ~72 km around you (`EmptyCanvasBootstrapRadiusBlocks` 36000 → 72000). Same visit-stop wall budget; stops spread farther. MP skip gate and LeaveWorld re-init unchanged.
+- Drop `distantvistas_1.0.2.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+
+## 1.0.1
+- **Public servers without Distant Vistas no longer run the join overlay.** 1.0 hop-scan teleported you and sent a gamemode command, which kicked people off vanilla servers. This build skips overlay, hops, /gamemode, client teleports, and the 750 view hold on vanilla multiplayer. Capture while you walk, same as 0.7.78. Singleplayer still runs the overlay when the gate says so (empty canvas / new world). A server that also has Distant Vistas still gets the overlay. Skip does not stamp completion or turn the sweep off in config.
+- Drop `distantvistas_1.0.1.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+
 ## 1.0.0
 Official 1.0.
 

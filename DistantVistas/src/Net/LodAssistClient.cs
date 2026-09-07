@@ -33,6 +33,12 @@ public sealed class LodAssistClient
     /// <summary>True once a server has confirmed it will serve terrain.</summary>
     public bool Available => NegotiatedProtocol > 0;
 
+    /// <summary>
+    /// The other end registered this channel at handshake. That is how we know the
+    /// server has Distant Vistas. A vanilla public server never reaches Connected.
+    /// </summary>
+    public bool ServerHasMod => channel != null && channel.Connected;
+
     /// <summary>One line for .vhinfo. Always set to something a player can act on.</summary>
     public string Status { get; private set; } = "not connected yet";
 

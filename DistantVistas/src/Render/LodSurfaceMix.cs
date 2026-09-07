@@ -6,22 +6,24 @@ namespace DistantVistas;
 
 /// <summary>
 /// Overlay and walk share this mix. Tree canopy and real snow keep the visual
-/// top. Thin snowlayer-1 is texture specks, not a snow plate. No-snow ground
-/// is MixSeasonGround from calendar winter amount: summer live GetColor
-/// (bright green), winter texture camouflage (brown/tan/olive plus speck luma).
-/// Neighbour blur is off. Land is not quantized.
+/// top GetColor (climate + season maps — autumn orange/red, winter frost wash).
+/// No-snow ground keeps live GetColor through summer and autumn. Texture
+/// camouflage only kicks in deep winter without frost, so far LODs match the
+/// near canvas instead of mud-brown plates. Neighbour blur is off.
 /// </summary>
 public static class LodSurfaceMix
 {
     /// <summary>
     /// Bump when stored FlagBaked RGB must be recaptured. Old complete markers
     /// with a lower revision run one overlay even inside the 30-day window.
+    /// 5 = keep live GetColor through autumn (no early texture-camouflage pull).
     /// </summary>
-    public const int PaintRevision = 4;
+    public const int PaintRevision = 5;
 
     public const int BlurRadius = 0;
     public const int QuantizeStep = 12;
-    public const int StackDepth = 8;
+    /// <summary>How many blocks down from the visual top we sample for the mix.</summary>
+    public const int StackDepth = 16;
 
     [ThreadStatic] static int[]? rawMix;
     [ThreadStatic] static int[]? blurredMix;
@@ -130,8 +132,8 @@ public static class LodSurfaceMix
 
     /// <summary>
     /// Shared overlay + walk paint. Canopy and real snow keep the top GetColor.
-    /// No-snow ground uses <see cref="MixSeasonGround"/> from calendar winter amount.
-    /// Snow weight is dropped so frost-pale grass cannot become a snow sheet.
+    /// Season-tinted plants (leaves already handled) and ground keep live GetColor
+    /// through autumn. Deep-winter no-frost ground may use texture camouflage.
     /// </summary>
     public static int FinishColumnPaint(
         Kind topKind,
@@ -157,7 +159,13 @@ public static class LodSurfaceMix
         if (IsActualSnowTop(topKind, topPath) && topRgb != 0)
             return topRgb;
 
+        // Tree crowns: exact GetColor (season orange/red + visit frost). Never camouflage.
         if (LodCanopyGray.IsVanillaTreeCanopyPath(topPath) && topRgb != 0)
+            return topRgb;
+
+        // Other plants (tallgrass, ferns): keep live GetColor until deep winter.
+        // Autumn chroma is on GetColor; texture mean has no season map.
+        if (topKind == Kind.Plant && topRgb != 0 && winter < DeepWinterCamouflageStart)
             return topRgb;
 
         int mixed = MixSeasonGround(plant, ground, texPlant, texGround, winter, frost);
@@ -166,8 +174,8 @@ public static class LodSurfaceMix
 
     /// <summary>
     /// One-block season mix when the column stack is not streamed (expire
-    /// leftover). Same MixSeasonGround as overlay/walk. Canopy and real snow
-    /// keep live GetColor. Texture mean supplies winter specks.
+    /// leftover). Canopy and plants keep live GetColor through autumn. Ground
+    /// uses the same MixSeasonGround rules as overlay/walk.
     /// </summary>
     public static int MixVisitBlock(ICoreClientAPI capi, Block block, int x, int y, int z, int liveRgb)
     {
@@ -177,8 +185,9 @@ public static class LodSurfaceMix
         if (k == Kind.Water) return liveRgb;
         if (IsActualSnowTop(k, path) && liveRgb != 0) return liveRgb;
         if (LodCanopyGray.IsVanillaTreeCanopyPath(path) && liveRgb != 0) return liveRgb;
-        int tex = LodSeasonBake.SampleTextureMean(capi, block, x, y, z);
         float winter = WinterAmount(ReadSeasonRel(capi, x, y, z));
+        if (k == Kind.Plant && winter < DeepWinterCamouflageStart) return liveRgb;
+        int tex = LodSeasonBake.SampleTextureMean(capi, block, x, y, z);
         float frost = 0f;
         try
         {
@@ -245,8 +254,9 @@ public static class LodSurfaceMix
     }
 
     /// <summary>
-    /// 0 = late spring and summer (bright green live GetColor). 1 = winter
-    /// (texture camouflage). Autumn ramps 0→1. Early spring thaws 1→0 before May.
+    /// 0 = late spring and summer (bright green live GetColor). 1 = winter.
+    /// Autumn ramps 0→1. Early spring thaws 1→0 before May.
+    /// Texture camouflage only uses the high end — see <see cref="DeepWinterCamouflageStart"/>.
     /// </summary>
     public static float WinterAmount(float seasonRel)
     {
@@ -258,6 +268,13 @@ public static class LodSurfaceMix
         return c >= thaw ? 0f : 1f - c / thaw;
     }
 
+    /// <summary>
+    /// WinterAmount at/above this may lerp ground toward untinted texture mean.
+    /// Below it, live GetColor (climate + season) is authoritative — that is what
+    /// carries autumn orange/red and frosted grass. Was 0, which muddied autumn.
+    /// </summary>
+    public const float DeepWinterCamouflageStart = 0.88f;
+
     public static void SeasonGroundWeights(float winter, out float groundW, out float plantW)
     {
         winter = Math.Clamp(winter, 0f, 1f);
@@ -266,10 +283,9 @@ public static class LodSurfaceMix
     }
 
     /// <summary>
-    /// No-snow ground paint. Live GetColor is summer green; texture mean is the
-    /// mottled winter camouflage (brown/tan/olive plus speck luma). When frost
-    /// is present, keep live GetColor (plus a light frost wash) instead of the
-    /// manila texture plate. Pale climate grass is not snow.
+    /// No-snow ground paint. Live GetColor carries climate + season (green → orange
+    /// → red → frost). Texture mean is only the deep-winter speck camouflage when
+    /// there is no frost sheet. Frost keeps live GetColor plus a light wash.
     /// </summary>
     public static int MixSeasonGround(
         int livePlant, int liveGround, int texPlant, int texGround, float winter, float frost = 0f)
@@ -280,7 +296,13 @@ public static class LodSurfaceMix
         int groundLive = PreferLandColor(liveGround, texGround, livePlant, texPlant);
         int plantTex = texPlant != 0 ? texPlant : plantLive;
         int groundTex = texGround != 0 ? texGround : groundLive;
-        float texPull = winter * (1f - frost);
+
+        // Keep season GetColor through autumn and most of winter. Only deep winter
+        // without frost pulls toward untinted texture (brown/tan speck plates).
+        float texPull = 0f;
+        if (frost < 0.05f && winter > DeepWinterCamouflageStart)
+            texPull = (winter - DeepWinterCamouflageStart) / (1f - DeepWinterCamouflageStart);
+
         int plant = LerpRgb(plantLive, plantTex, texPull);
         int ground = LerpRgb(groundLive, groundTex, texPull);
         if (plant == 0 && ground == 0) return 0;
@@ -292,8 +314,9 @@ public static class LodSurfaceMix
             SeasonGroundWeights(winter, out float gw, out float pw);
             mixed = Weighted(0, 0f, ground, gw, plant, pw);
         }
-        if (frost > 0f && mixed != 0)
-            mixed = LodSeasonBake.MixTowardWhite(mixed, frost * LodSeasonBake.GroundFrostAlpha);
+        if (frost > 0f && mixed != 0 && LodSeasonBake.SeasonAllowsFrost)
+            mixed = LodSeasonBake.MixTowardWhite(
+                mixed, frost * LodSeasonBake.GroundFrostAlpha * LodSeasonBake.LiveWinterAmount);
         return mixed;
     }
 

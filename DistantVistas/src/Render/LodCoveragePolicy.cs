@@ -49,14 +49,17 @@ public static class LodCoveragePolicy
         viewDistanceAnchor * KeepCircleScale;
 
     /// <summary>
-    /// Draw at full L0/L1 only inside live vanilla view distance. The keep-circle
-    /// is larger and only about holding GPU meshes, not about which mesh we submit.
+    /// Draw at full L0/L1 inside live vanilla view distance times this scale.
+    /// 1.2 keeps 1-block columns a bit past the vanilla cut so the handoff ring
+    /// does not snap to 2-block "slab" L1 immediately. Keep-circle is still wider.
     /// </summary>
+    public const float DrawFullDetailScale = 1.2f;
+
     public static bool IsDrawFullDetail(double distance, double viewDistanceAnchor) =>
-        distance < viewDistanceAnchor;
+        viewDistanceAnchor > 0 && distance < viewDistanceAnchor * DrawFullDetailScale;
 
     public static double DrawFullDetailRadius(double viewDistanceAnchor) =>
-        viewDistanceAnchor;
+        viewDistanceAnchor * DrawFullDetailScale;
 
     public static bool ShouldKeepVisitedDraw(int level, bool hasDataSet, double distance, double viewDistanceAnchor) =>
         hasDataSet && IsVisitedKeepLevel(level) && IsNearVisitedTrail(distance, viewDistanceAnchor);
@@ -356,13 +359,18 @@ public static class LodCoveragePolicy
     public const float LeadConeFineScale = 1.5f;
 
     /// <summary>
-    /// Farthest we hand off in the lead cone when a companion is actually
-    /// drawing past us, as a multiple of view distance. 3x is our L1 hills
-    /// through the fog band. Past it Farseer's heightmaps are the cheap
-    /// silhouettes. When the companion is off we keep DV land-like cover
-    /// instead of stopping into empty sky.
+    /// Farseer onset as a multiple of view distance (visited and unvisited).
+    /// Past this DV empty-stops in the lead cone when a companion is drawing.
+    /// Midground stays ours; LodFrontierScout fills capture toward this rim.
+    /// Early 1x onset was retired — it put a close silhouette on midground.
     /// </summary>
-    public const float HorizonDrawScale = 3f;
+    public const float HorizonDrawScale = 4.5f;
+
+    /// <summary>
+    /// Same as <see cref="HorizonDrawScale"/>. Kept as a named alias so
+    /// FarseerVisitOnset / shaders stay late-only (no early unvisited ring).
+    /// </summary>
+    public const float UnvisitedFarseerOnsetScale = HorizonDrawScale;
 
     public static double HorizonDrawDistance(double viewDistance) =>
         viewDistance <= 0 ? 0 : viewDistance * HorizonDrawScale;

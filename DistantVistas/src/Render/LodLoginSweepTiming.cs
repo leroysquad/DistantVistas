@@ -12,24 +12,28 @@ public sealed class LodLoginSweepTiming
     /// <summary>Lower bound of the first-pass wall target.</summary>
     public const double TargetMinSec = 30.0;
 
-    /// <summary>First-pass wall-clock cap. 4x the 0.8.64/65 shrink (40s → 160s).</summary>
-    public const double TargetMaxSec = 160.0;
+    /// <summary>
+    /// First-pass wall-clock cap. 1.0.15: 180s with a faster stop rate so the
+    /// 216 km disk gets denser hops before Farseer takes the rim.
+    /// </summary>
+    public const double TargetMaxSec = 180.0;
 
     /// <summary>First-join bootstrap uses the same first-pass wall cap.</summary>
     public const double BootstrapTargetMaxSec = TargetMaxSec;
 
-    /// <summary>Retry pass wall cap — 2x the shrink, still shorter than first pass.</summary>
-    public const double RetryTargetSec = 32.0;
+    /// <summary>Retry pass wall cap — denser gap-fill after the first hop.</summary>
+    public const double RetryTargetSec = 48.0;
 
     /// <summary>
     /// Fallback per-stop seconds only when this machine has no measured samples yet.
+    /// 1.0.15 assumes rapid hop+bake; slow PCs remeasure upward from live stops.
     /// </summary>
-    public const double InitialSecPerStop = 2.0;
+    public const double InitialSecPerStop = 1.0;
 
-    public const int MinVisitStops = 64;
-    public const int MaxVisitStops = 96;
-    public const int MinRetryStops = 16;
-    public const int MaxRetryStops = 32;
+    public const int MinVisitStops = 96;
+    public const int MaxVisitStops = 240;
+    public const int MinRetryStops = 24;
+    public const int MaxRetryStops = 48;
 
     /// <summary>This PC's measured (or fallback) seconds per visit stop.</summary>
     public static double MachineSecPerStop { get; private set; } = InitialSecPerStop;
@@ -41,10 +45,10 @@ public sealed class LodLoginSweepTiming
     int lastFinished;
 
     public static void SetMachineSecPerStop(double secPerStop) =>
-        MachineSecPerStop = Math.Clamp(secPerStop, 0.75, 6.0);
+        MachineSecPerStop = Math.Clamp(secPerStop, 0.5, 6.0);
 
     public void Seed(double secPerStop) =>
-        seeded = Math.Clamp(secPerStop, 0.75, 6.0);
+        seeded = Math.Clamp(secPerStop, 0.5, 6.0);
 
     public void BeginSession(double seededSec)
     {
@@ -106,13 +110,13 @@ public sealed class LodLoginSweepTiming
     /// </summary>
     public static int VisitStopBudget(double secPerStop, double targetMaxSec) =>
         (int)Math.Clamp(
-            Math.Round(targetMaxSec / Math.Max(0.75, secPerStop)),
+            Math.Round(targetMaxSec / Math.Max(0.5, secPerStop)),
             MinVisitStops,
             MaxVisitStops);
 
     public static int RetryStopBudget(double secPerStop) =>
         (int)Math.Clamp(
-            Math.Round(RetryTargetSec / Math.Max(0.75, secPerStop)),
+            Math.Round(RetryTargetSec / Math.Max(0.5, secPerStop)),
             MinRetryStops,
             MaxRetryStops);
 

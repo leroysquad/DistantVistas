@@ -25,16 +25,16 @@ public sealed class LodLoginBake
 
     const int OverlayWarmupMinTicks = 1;
     const int OverlayWarmupMaxTicks = 20;
-    /// <summary>~0.1s — chunk column request fires on teleport; no long pose settle needed.</summary>
-    const int TeleportSettleTicks = 2;
-    /// <summary>~0.1s — season bake is synchronous; brief gap before next teleport.</summary>
-    const int BakeSettleTicks = 2;
+    /// <summary>~50 ms — chunk request fires on teleport; move on fast.</summary>
+    const int TeleportSettleTicks = 1;
+    /// <summary>~50 ms — season bake is synchronous; brief gap before next teleport.</summary>
+    const int BakeSettleTicks = 1;
     /// <summary>L0 neighbour disk at a stop. 12 × 64-block cells ≈ 768, matching the 750-block bake view.</summary>
     const int BatchBakeL0Radius = 12;
     const int MaxBatchBakePerStop = 256;
-    /// <summary>GetColor + persist budget per overlay tick. The old 256-in-one-tick dump froze Windows.</summary>
-    const int MaxBakePerTick = 8;
-    const int MaxLeftoverBakePerTick = 8;
+    /// <summary>GetColor + persist per overlay tick. 12 keeps Windows responsive while hopping faster.</summary>
+    const int MaxBakePerTick = 12;
+    const int MaxLeftoverBakePerTick = 12;
     const int SweepRowsPerCall = 2;
     const int RevealGrowPerTick = 2;
 
@@ -445,7 +445,7 @@ public sealed class LodLoginBake
         LodWorld world = pipeline.World;
         int visitedCount = LodLoginSweep.VisitedL0Keys(world).Count();
 
-        // First successful sweep for this world: always bootstrap the ~36 km player disk
+        // First successful sweep for this world: always bootstrap the ~216 km player disk
         // (coast guard / radius), even if the player already walked some land. Revisit/
         // refresh of VisitedL0Keys would only re-cover the tiny walked frontier and leave
         // vistas beyond it as sky (0.8.26).

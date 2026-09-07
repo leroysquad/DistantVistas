@@ -1,4 +1,4 @@
-﻿using Vintagestory.API.Client;
+using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
 using Vintagestory.API.Config;
@@ -14,10 +14,10 @@ public class DistantVistasConfig
     public int FarViewDistanceCap = 0;
 
     /// <summary>Distance at which detail starts halving; see LodWorld.DetailDistance.</summary>
-    public int DetailDistance = 320;
+    public int DetailDistance = 400;
 
-    /// <summary>0 = 0.7.9 ladder aggressiveness; 1 = one fidelity step up (default).</summary>
-    public float FidelityStep = 1.0f;
+    /// <summary>0 = 0.7.9 ladder aggressiveness; 1.35 = 1.0.13 near-ring sharpening.</summary>
+    public float FidelityStep = 1.35f;
 
     /// <summary>
     /// Coarsest visible LOD. Default is the full pyramid so the horizon can
@@ -72,8 +72,10 @@ public class DistantVistasConfig
 
     /// <summary>
     /// Login visit sweep on join (overlay + teleports + season bake). ON by default —
-    /// skipped automatically when the visited canvas is complete within the 30-day window.
-    /// Set false in distantvistas.json for immediate 0.7.78-style play without overlay.
+    /// skipped automatically when the visited canvas is complete within the 30-day window,
+    /// and skipped on a multiplayer server that does not have Distant Vistas (no overlay,
+    /// no /gamemode, no client teleports; capture while walking like 0.7.78).
+    /// Set false in distantvistas.json for immediate 0.7.78-style play everywhere.
     /// </summary>
     public bool LoginVisitSweepEnabled = true;
 }
@@ -109,6 +111,7 @@ public class DistantVistasModSystem : ModSystem
     int exploreStep;     // steps taken on current leg
     int exploreDirX = 1, exploreDirZ;
     double exploreX, exploreZ;
+    bool visitEnrichForcedAfterBake;
 
     public override bool ShouldLoad(EnumAppSide forSide) => forSide == EnumAppSide.Client;
 
@@ -240,6 +243,13 @@ public class DistantVistasModSystem : ModSystem
         renderer.HeightOcclusion.PeekMarginBlocks = config.FovOcclusionPeekMargin;
         renderer.HeightOcclusion.MaxTestsPerFrame = config.FovOcclusionMaxTestsPerFrame;
         pipeline.InvalidateGpuMesh = renderer.InvalidateGpuMesh;
+        LodCloudHorizon.Bind(capi);
+        LodCloudHorizon.AttachRenderer(renderer);
+        if (farseerCompanion)
+        {
+            FarseerVisitedHeightEnrich.Bind(capi, pipeline.World);
+            FarseerVisitOnset.Bind(capi, pipeline.World);
+        }
         loginBakePulse = new LodLoginBakePulse();
         loginBakeOverlay = new LodLoginBakeOverlay(capi);
         // Real holes (captured land with no mesh at any rung) are reported with
@@ -497,6 +507,13 @@ public class DistantVistasModSystem : ModSystem
         sessionTelemetry?.Tick(pipeline, renderer, deferringTo, Mod.Info.Version);
         ReportFillIn();
         PumpServerAssist();
+        if (renderer.LoginBakeComplete && !visitEnrichForcedAfterBake)
+        {
+            visitEnrichForcedAfterBake = true;
+            FarseerVisitedHeightEnrich.RefreshLoadedIfNeeded(force: true);
+        }
+        else
+            FarseerVisitedHeightEnrich.RefreshLoadedIfNeeded();
         // #region agent log
         if (logPlay) AgentPlayTickLog("after-assist", playTickCount, playTickEnter, "\"ok\":true");
         // #endregion
@@ -890,6 +907,9 @@ public class DistantVistasModSystem : ModSystem
     {
         bakedColor = 0;
         if (loginBake?.Active == true) return false;
+        // After login, ExploreBake owns visit GetColor under a per-tick wall budget.
+        // Doing SampleColumnStack here too doubled the hitch (apply 20–70 ms + explore 50 ms).
+        if (renderer.LoginBakeComplete) return false;
         if (pipeline.CurrentCaptureProvisional) return false;
         if (!IsCaptureColumnMapLoaded(x, z)) return false;
 
@@ -1341,6 +1361,18 @@ public class DistantVistasModSystem : ModSystem
         config.LoginVisitSweepEnabled
         || Environment.GetEnvironmentVariable("VINTAGEHORIZONS_LOGIN_SWEEP") == "1";
 
+    /// <summary>
+    /// Overlay hop-scan is singleplayer, or a server that registered the Distant Vistas
+    /// assist channel. A vanilla public server never reaches Connected; running the scan
+    /// there teleports the player and sends /gamemode, which kicks people off.
+    /// </summary>
+    bool LoginVisitSweepAllowedHere()
+    {
+        if (!LoginVisitSweepEnabled()) return false;
+        if (capi.IsSinglePlayer) return true;
+        return assist != null && assist.ServerHasMod;
+    }
+
     void DeferLoginVisitSweep()
     {
         if (loginSweepDeferred) return;
@@ -1364,15 +1396,23 @@ public class DistantVistasModSystem : ModSystem
             EnsureJoinPipelineOpen();
             EnsureJoinAtlasColors();
 
-            if (!LoginVisitSweepEnabled())
+            if (!LoginVisitSweepAllowedHere())
             {
                 StopLoginSweepDeferListener();
                 renderer.LoginBakeComplete = true;
                 renderer.LoginBakeBlocked = false;
                 try { LodLoginBakeViewBoost.RecoverPlayerViewIfNeeded(capi); } catch { }
                 try { LodLoginBakeAudioMute.ForceUnmuteIfSilent(capi); } catch { }
-                Mod.Logger.Notification(
-                    "[DistantVistas] Login visit sweep disabled in config — entering play without overlay.");
+                if (!LoginVisitSweepEnabled())
+                {
+                    Mod.Logger.Notification(
+                        "[DistantVistas] Login visit sweep disabled in config — entering play without overlay.");
+                }
+                else
+                {
+                    Mod.Logger.Notification(
+                        "[DistantVistas] Login visit sweep skipped on this server (no Distant Vistas) — entering play without overlay, capture while walking.");
+                }
                 return;
             }
 
@@ -1412,6 +1452,10 @@ public class DistantVistasModSystem : ModSystem
         if (pipeline.Active) return;
 
         pipeline.Open("ModData/distantvistas");
+        FarseerVisitedHeightEnrich.AttachWorld(pipeline.World);
+        FarseerVisitOnset.AttachWorld(pipeline.World);
+        LodCloudHorizon.AttachRenderer(renderer);
+        visitEnrichForcedAfterBake = false;
         joinClock.Restart();
         nextMilestone = 0;
 
@@ -1519,6 +1563,17 @@ public class DistantVistasModSystem : ModSystem
 
     void StartLoginVisitSweepIfNeeded()
     {
+        if (!LoginVisitSweepAllowedHere())
+        {
+            renderer.LoginBakeComplete = true;
+            AllowLodDraws();
+            try { LodLoginBakeViewBoost.RecoverPlayerViewIfNeeded(capi); } catch { }
+            try { LodLoginBakeAudioMute.ForceUnmuteIfSilent(capi); } catch { }
+            Mod.Logger.Notification(
+                "[DistantVistas] Login visit sweep not allowed here — entering play without overlay.");
+            return;
+        }
+
         renderer.EnsureJoinRenderer();
         EnsureJoinPipelineOpen();
         EnsureJoinAtlasColors();
@@ -1529,6 +1584,12 @@ public class DistantVistasModSystem : ModSystem
 
         if (!sweepGate.RunSweep)
         {
+            // Same play-mode throttle as a finished sweep: without DiscoverOnly the
+            // pipeline catch-up-props 48 mip dirty and recaptures the whole painted
+            // canvas while walking — measured 50–100 ms tick spikes on discover.
+            pipeline.DiscoverOnly = true;
+            pipeline.DeferLegacyHeal = false;
+            pipeline.ExploreBake.Clear();
             renderer.LoginBakeComplete = true;
             AllowLodDraws();
             try { LodLoginBakeViewBoost.RecoverPlayerViewIfNeeded(capi); } catch { }
@@ -1542,6 +1603,7 @@ public class DistantVistasModSystem : ModSystem
                     + (sweepGate.Reason ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"")
                     + "\",\"cachedSections\":" + pipeline.CachedSectionsLoaded
                     + ",\"meshes\":" + renderer.MeshCount
+                    + ",\"discoverOnly\":true"
                     + ",\"complete\":true"
                     + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
             }
@@ -1582,11 +1644,19 @@ public class DistantVistasModSystem : ModSystem
         renderer.LoginBakeBlocked = true;
         try
         {
-            if (!LoginVisitSweepEnabled())
+            if (!LoginVisitSweepAllowedHere())
             {
                 renderer.LoginBakeComplete = true;
-                Mod.Logger.Notification(
-                    "[DistantVistas] Login visit sweep disabled in config — delaying play GL until after the first present.");
+                if (!LoginVisitSweepEnabled())
+                {
+                    Mod.Logger.Notification(
+                        "[DistantVistas] Login visit sweep disabled in config — delaying play GL until after the first present.");
+                }
+                else
+                {
+                    Mod.Logger.Notification(
+                        "[DistantVistas] Login visit sweep skipped on this server (no Distant Vistas) — delaying play GL until after the first present.");
+                }
             }
 
             DeferLoginVisitSweep();
@@ -1853,8 +1923,17 @@ public class DistantVistasModSystem : ModSystem
         loginBake?.Dispose();
         loginBake = null;
         loginBakePulse?.Bind(null, PumpLoginBakeWhileSweeping);
+        // Kick / leave mid-overlay can leave 750 view or silent audio stuck for the next
+        // world in this process. LevelFinalize + defer reopen pipeline/renderer; this
+        // only clears session flags so the next join is a clean overlay/skip decision.
+        try { LodLoginBakeViewBoost.RecoverPlayerViewIfNeeded(capi); } catch { }
+        try { LodLoginBakeAudioMute.ForceUnmuteIfSilent(capi); } catch { }
         renderer.LoginBakeComplete = false;
+        visitEnrichForcedAfterBake = false;
         pipeline.ResetDiscover();
+        FarseerVisitedHeightEnrich.DetachWorld();
+        FarseerVisitOnset.DetachWorld();
+        LodCloudHorizon.DetachRenderer();
         pipeline.DeferLegacyHeal = false;
         pipeline.ExploreBake.Clear();
         renderer.LoginBakeOverlayActive = false;
@@ -2036,6 +2115,9 @@ public class DistantVistasModSystem : ModSystem
         Quietly(() => pipeline?.Dispose());
         Quietly(() => renderer?.Dispose());
         Quietly(() => loginBakeOverlay?.Dispose());
+        Quietly(FarseerVisitedHeightEnrich.Unbind);
+        Quietly(FarseerVisitOnset.Unbind);
+        Quietly(LodCloudHorizon.Unbind);
     }
 
     /// <summary>

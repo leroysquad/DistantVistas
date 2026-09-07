@@ -28,6 +28,20 @@ public sealed class LodLoginSweepComplete
     public int VisitedKeyCount { get; set; }
     public int PaintRevision { get; set; }
 
+    /// <summary>
+    /// World X of the capture-envelope centre (login return pose / spawn).
+    /// Used by FarseerVisitOnset so sparse visit stops still count as swept.
+    /// </summary>
+    public double SweepOriginX { get; set; }
+
+    /// <summary>World Z of the capture-envelope centre.</summary>
+    public double SweepOriginZ { get; set; }
+
+    /// <summary>
+    /// Blocks from origin to farthest visited L0 plus pad. Zero on older stamps.
+    /// </summary>
+    public int SweepRadiusBlocks { get; set; }
+
     static readonly JsonSerializerOptions JsonOptions = new()
     {
         WriteIndented = true,
@@ -108,6 +122,12 @@ public sealed class LodLoginSweepComplete
             "Y{0}M{1}D{2}H{3:0.#}_{4}",
             cal.Year, cal.Month, cal.DayOfYear, cal.HourOfDay, seasonSlug);
 
+        var at = capi.World.Player.Entity.Pos;
+        double originX = at.X;
+        double originZ = at.Z;
+        int envelope = (int)Math.Ceiling(
+            FarseerVisitOnset.CaptureEnvelopeRadiusBlocks(world, originX, originZ));
+
         return new LodLoginSweepComplete
         {
             WorldId = LodWorldKey.For(capi.World),
@@ -117,6 +137,9 @@ public sealed class LodLoginSweepComplete
             WindowStartedUtcMs = LodLoginSweepWindow.NowUtcMs(),
             VisitedKeyCount = LodLoginSweep.VisitedL0Keys(world).Count(),
             PaintRevision = LodSurfaceMix.PaintRevision,
+            SweepOriginX = originX,
+            SweepOriginZ = originZ,
+            SweepRadiusBlocks = envelope,
         };
     }
 

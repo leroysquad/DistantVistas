@@ -3,10 +3,13 @@
 
 // DV_FARSEER_OVERLAY
 // Distant Vistas overlay of Farseer's region.vsh (MIT, Badgerson).
-// Inner start is stock viewDistance * 0.785. Farseer regions are 512 blocks;
-// 1.5 * VD (~294) discarded the whole spawn heightmap (dist < 0).
-// Dist=1 is the real far rim. Stock subtracted 512 and discarded the
-// silhouette mountains.
+// Visit-aware onset (FarseerVisitOnset uniforms):
+//   unvisited -> UnvisitedFarseerOnsetScale (1.0x VD) so silhouettes sit on the
+//     discovery frontier instead of floating in empty sky past a late circle
+//   visited/swept envelope -> HorizonDrawScale (4.5x VD); sparse login hops
+//     still count as swept via continuous capture-envelope mask fill
+// Cap onset at FarViewDistance itself when Far View is shorter than the pick.
+// No stock Y-sink trench. ASCII-only comments (NVIDIA GLSL).
 
 layout(location = 0) in vec3 vertexPositionIn;
 
@@ -20,6 +23,14 @@ uniform float fogDensityIn;
 
 uniform float farViewDistance;
 uniform float globeEffect;
+
+uniform sampler2D visitMask;
+uniform float visitMaskReady;
+uniform float visitOnsetEarly;
+uniform float visitOnsetLate;
+uniform vec2 camWorldXZ;
+uniform vec2 visitMaskOrigin;
+uniform float visitMaskSize;
 
 out vec4 worldPos;
 out float yLevel;
@@ -40,10 +51,26 @@ void main()
     worldPos = modelMatrix * vec4(vertexPositionIn, 1.0);
     worldPos = applyGlobalWarping(worldPos);
 
-    float distStart = viewDistance * 0.785;
+    // worldPos.xz is camera-relative (Farseer modelMatrix subtracts cam).
+    float visited = 1.0;
+    if (visitMaskReady > 0.5 && visitMaskSize > 1.0)
+    {
+        vec2 absXZ = worldPos.xz + camWorldXZ;
+        vec2 uv = (absXZ - visitMaskOrigin) / visitMaskSize;
+        if (uv.x >= 0.0 && uv.y >= 0.0 && uv.x <= 1.0 && uv.y <= 1.0)
+            visited = texture(visitMask, uv).r;
+        else
+            visited = 0.0;
+    }
+
+    float onsetScale = mix(visitOnsetEarly, visitOnsetLate, clamp(visited, 0.0, 1.0));
+    float distStart = viewDistance * onsetScale;
+    float maxStart = farViewDistance;
+    if (distStart > maxStart) distStart = maxStart;
+    if (distStart < viewDistance * 0.5) distStart = viewDistance * 0.5;
     dist = (length(worldPos.xz) - distStart) / max(64.0, farViewDistance - distStart);
 
-    worldPos.y -= max(0.0, mix(8.0, 0.0, dist * 50.0));
+    // No stock Y-sink. That dug a trench through mountains at the onset band.
     worldPos.y -= globeEffect * pow(max(0.0, dist), 2.0) * farViewDistance;
 
     fogAmount = getFogLevel(worldPos, fogMinIn, fogDensityIn);

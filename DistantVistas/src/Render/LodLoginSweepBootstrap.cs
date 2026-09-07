@@ -52,17 +52,17 @@ public readonly struct LodLoginSweepPlan
 
 /// <summary>
 /// Plans which L0 cells the login visit sweep should touch. With no per-world complete
-/// marker, always bootstraps a coast-guard ocean sweep or ~36 km radius around the player
+/// marker, always bootstraps a coast-guard ocean sweep or ~216 km radius around the player
 /// (even if some land was already walked). After a successful complete, existing visited
 /// canvases are spatially subsampled to a wall-clock revisit budget.
 /// </summary>
 public static class LodLoginSweepBootstrap
 {
     /// <summary>
-    /// Season-expired / first-join disk around the player. 36000 = 2× the old 18 km
-    /// radius (2× diameter). Canvas outside this disk is kept, never wiped.
+    /// Season-expired / first-join disk around the player. 216000 = 1.5× the prior
+    /// 144 km radius. Canvas outside this disk is kept, never wiped.
     /// </summary>
-    public const int EmptyCanvasBootstrapRadiusBlocks = 36000;
+    public const int EmptyCanvasBootstrapRadiusBlocks = 216000;
 
     /// <summary>
     /// Hard cap on bootstrap visit stops at this PC's measured stop rate.
@@ -94,6 +94,14 @@ public static class LodLoginSweepBootstrap
     /// <summary>Representative open-ocean sample visits (full bake) spread across the body.</summary>
     public const int OpenOceanMaxSamples = 3;
 
+    /// <summary>
+    /// Hard ceiling on rain-height ClassifyCell calls during empty-canvas planning.
+    /// Full-disk classify at 216 km would freeze the client; visit stops stay on the
+    /// wall budget, so a stratified sample is enough. Scaled with the 1.5× radius
+    /// (area ~2.25×) so coast/land classify still covers the larger disk.
+    /// </summary>
+    public const int MaxBootstrapClassifyCells = 9216;
+
     internal enum CellKind { Unknown, Ocean, Land }
 
     public static LodLoginSweepPlan Plan(
@@ -121,7 +129,7 @@ public static class LodLoginSweepBootstrap
         Plan(world, clientWorld, pipeline, blocks, plantTintFallback, untintedOf, capi, RevisitMaxVisitStops);
 
     /// <summary>
-    /// First-sweep / empty-canvas plan: coast-guard or ~36 km player-radius disk, spatially
+    /// First-sweep / empty-canvas plan: coast-guard or ~216 km player-radius disk, spatially
     /// subsampled to <see cref="BootstrapMaxVisitStops"/>. Skips L0 cells already fully
     /// baked in the per-world cache; ocean sample/stamp rules unchanged.
     /// </summary>
@@ -369,9 +377,23 @@ public static class LodLoginSweepBootstrap
         int cellRadius = BootstrapCellRadius(footprint);
         int sea = world.SeaLevel;
         double radiusSq = EmptyCanvasBootstrapRadiusBlocks * (double)EmptyCanvasBootstrapRadiusBlocks;
+        int diskEstimate = EstimateDiskCellCount(cellRadius);
 
-        var disk = EnumerateDiskCells(centerSx, centerSz, cellRadius, footprint, pos.X, pos.Z, radiusSq)
-            .ToList();
+        // Never walk every L0 cell in the probe disk on the main thread. At 216 km that is
+        // millions of ClassifyCell / GetMapChunk calls and the client looks frozen forever.
+        List<(int Sx, int Sz)> disk = diskEstimate <= MaxBootstrapClassifyCells
+            ? EnumerateDiskCells(centerSx, centerSz, cellRadius, footprint, pos.X, pos.Z, radiusSq)
+                .ToList()
+            : SampleDiskCells(
+                centerSx, centerSz, cellRadius, footprint, pos.X, pos.Z, radiusSq,
+                MaxBootstrapClassifyCells);
+
+        if (diskEstimate > MaxBootstrapClassifyCells)
+        {
+            capi?.Logger.Notification(
+                "[DistantVistas] Bootstrap plan: classifying {0} of ~{1} L0 cells in the {2} km disk (sample — full classify freezes the client).",
+                disk.Count, diskEstimate, EmptyCanvasBootstrapRadiusBlocks / 1000);
+        }
 
         var kinds = new Dictionary<long, CellKind>(disk.Count);
         foreach ((int sx, int sz) in disk)
@@ -387,14 +409,16 @@ public static class LodLoginSweepBootstrap
                 lodWorld, pipeline, blocks, plantTintFallback, untintedOf,
                 kinds, centerSx, centerSz, capi,
                 LodLoginSweepPlanMode.BootstrapCoastGuard,
-                "Bootstrap (coast guard)");
+                "Bootstrap (coast guard)",
+                diskEstimate);
         }
 
         return PlanBootstrapDisk(
             lodWorld, pipeline, blocks, plantTintFallback, untintedOf,
             kinds, centerSx, centerSz, capi,
             LodLoginSweepPlanMode.BootstrapRadius,
-            "Bootstrap (new world)");
+            "Bootstrap (new world)",
+            diskEstimate);
     }
 
     static LodLoginSweepPlan PlanBootstrapDisk(
@@ -408,7 +432,8 @@ public static class LodLoginSweepBootstrap
         int centerSz,
         ICoreClientAPI? capi,
         LodLoginSweepPlanMode mode,
-        string labelBase)
+        string labelBase,
+        int diskCellEstimate = 0)
     {
         List<long> landAll = SelectLandVisitCells(kinds);
         List<long> landVisit = LodLoginBakeAudit.FilterNeedsVisit(
@@ -438,14 +463,18 @@ public static class LodLoginSweepBootstrap
                 visitKeys.Add(key);
         }
 
+        // Prefer the geometric disk size in UI/logs when we only classified a sample,
+        // so "64 of ~4M" still reads as the probe footprint Jack asked for.
+        int plannedForLabel = diskCellEstimate > landVisit.Count ? diskCellEstimate : landVisit.Count;
+
         LogOceanPlan(capi, openOceanNeeding.Count, oceanSamples.Count, openOceanFill.Count, landBudgeted.Count);
-        LogBudget(capi, landVisit.Count, landBudgeted.Count);
+        LogBudget(capi, plannedForLabel, landBudgeted.Count);
         visitKeys.Sort();
 
         return new LodLoginSweepPlan(
             mode,
             visitKeys,
-            LabelForBudgetedBootstrap(labelBase, landVisit.Count, landBudgeted.Count),
+            LabelForBudgetedBootstrap(labelBase, plannedForLabel, landBudgeted.Count),
             oceanSamples,
             openOceanFill);
     }
@@ -556,7 +585,7 @@ public static class LodLoginSweepBootstrap
     }
 
     /// <summary>
-    /// First-join bootstrap subsample across the ~36 km probe disk. Linear distance picks
+    /// First-join bootstrap subsample across the ~216 km probe disk. Linear distance picks
     /// (see <see cref="BudgetVisitStops"/>) left ~1 stop per long outer arc. Outer-weighted
     /// distance bands put more teleports on the horizon ring so the far LOD looks filled.
     /// </summary>
@@ -760,6 +789,10 @@ public static class LodLoginSweepBootstrap
         return Math.Abs(y - sea) <= OceanSeaDelta ? CellKind.Ocean : CellKind.Land;
     }
 
+    /// <summary>Approximate L0 cells inside a square-bounded circle of the given cell radius.</summary>
+    internal static int EstimateDiskCellCount(int cellRadius) =>
+        (int)Math.Ceiling(Math.PI * cellRadius * (double)cellRadius);
+
     static IEnumerable<(int Sx, int Sz)> EnumerateDiskCells(
         int centerSx,
         int centerSz,
@@ -783,5 +816,73 @@ public static class LodLoginSweepBootstrap
                     yield return (sx, sz);
             }
         }
+    }
+
+    /// <summary>
+    /// Outer-weighted ring sample of L0 cells across the probe disk. Same spirit as
+    /// <see cref="BudgetBootstrapVisitStops"/>, but chosen before ClassifyCell so a
+    /// 216 km radius never freezes on millions of map-chunk probes.
+    /// </summary>
+    internal static List<(int Sx, int Sz)> SampleDiskCells(
+        int centerSx,
+        int centerSz,
+        int cellRadius,
+        int footprint,
+        double originX,
+        double originZ,
+        double radiusSq,
+        int maxSamples)
+    {
+        var result = new List<(int Sx, int Sz)>(Math.Min(maxSamples, 512));
+        var used = new HashSet<(int, int)>();
+
+        void TryAdd(int sx, int sz)
+        {
+            if (sx < 0 || sz < 0) return;
+            if (result.Count >= maxSamples) return;
+            double cx = sx * footprint + footprint * 0.5;
+            double cz = sz * footprint + footprint * 0.5;
+            double dx = cx - originX;
+            double dz = cz - originZ;
+            if (dx * dx + dz * dz > radiusSq) return;
+            if (!used.Add((sx, sz))) return;
+            result.Add((sx, sz));
+        }
+
+        TryAdd(centerSx, centerSz);
+        if (cellRadius <= 0 || maxSamples <= 1)
+            return result;
+
+        int bands = Math.Clamp(maxSamples / 8, 12, 48);
+        int weightSum = bands * (bands + 1) / 2;
+
+        for (int b = 0; b < bands && result.Count < maxSamples; b++)
+        {
+            double t0 = b / (double)bands;
+            double t1 = (b + 1) / (double)bands;
+            double rCells = (t0 + t1) * 0.5 * cellRadius;
+            int weight = b + 1;
+            int picks = Math.Max(1, (int)Math.Round(maxSamples * weight / (double)weightSum));
+            picks = Math.Min(picks, maxSamples - result.Count);
+
+            for (int p = 0; p < picks; p++)
+            {
+                double ang = (2.0 * Math.PI * (p + 0.5) / picks) + (b * 0.41);
+                int dsx = (int)Math.Round(rCells * Math.Cos(ang));
+                int dsz = (int)Math.Round(rCells * Math.Sin(ang));
+                TryAdd(centerSx + dsx, centerSz + dsz);
+            }
+        }
+
+        // If rings collided / clipped, pad with a denser outer ring.
+        for (int p = 0; result.Count < maxSamples && p < maxSamples * 2; p++)
+        {
+            double ang = 2.0 * Math.PI * p / (maxSamples * 2.0);
+            int dsx = (int)Math.Round(cellRadius * 0.92 * Math.Cos(ang));
+            int dsz = (int)Math.Round(cellRadius * 0.92 * Math.Sin(ang));
+            TryAdd(centerSx + dsx, centerSz + dsz);
+        }
+
+        return result;
     }
 }

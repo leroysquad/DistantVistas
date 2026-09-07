@@ -817,15 +817,25 @@ public class LodPipeline
         return tickCounter % 1200 == 0;
     }
 
+    const int InstallsPerTick = 8;
+    const double InstallBudgetMs = 2.0;
+    static readonly long InstallBudgetTicks =
+        (long)(System.Diagnostics.Stopwatch.Frequency * InstallBudgetMs / 1000.0);
+
     /// <summary>
     /// Adopt sections the storage thread finished reading. Cheap: the decompress
-    /// already happened off-thread, this only publishes the reference.
+    /// already happened off-thread, this only publishes the reference. Bounded so a
+    /// join/discover flood of async loads cannot dump 50–90 ms onto one game tick.
     /// </summary>
     void InstallLoadedSections()
     {
         if (storageThread == null) return;
 
-        while (storageThread.LoadResults.TryDequeue(out (long Key, LodSection? Section) result))
+        int installed = 0;
+        long start = System.Diagnostics.Stopwatch.GetTimestamp();
+        while (installed < InstallsPerTick
+               && System.Diagnostics.Stopwatch.GetTimestamp() - start < InstallBudgetTicks
+               && storageThread.LoadResults.TryDequeue(out (long Key, LodSection? Section) result))
         {
             int repaired = 0;
             // Palette ids are resolved here, on the world thread, before anything can
@@ -849,6 +859,7 @@ public class LodPipeline
                 PaletteEntriesRepaired += repaired;
                 World.MarkChanged(result.Key);
             }
+            installed++;
         }
     }
 
@@ -864,9 +875,12 @@ public class LodPipeline
         {
             if (LodWorld.KeyLevel(key) == 0)
             {
-                // Live visit bake when chunks load — FlagBaked cells overwrite from
-                // the visual top, including snow that the stored run skipped.
-                ExploreBake.Queue(key, section, false);
+                // Only queue live-tint L0 for explore GetColor. FlagBaked canvases
+                // already have season paint; re-queueing every streamed disk load
+                // flooded ExploreBake (40–70 pending) and hitch-baked on discover.
+                // Near-player FlagBaked refresh stays on QueueExploreBakeNearPlayer.
+                if (LodExploreBake.SectionHasLiveTint(section))
+                    ExploreBake.Queue(key, section, false);
                 World.RequestGpuSwap(key);
                 // #region agent log
                 if (++debugLoadDrop <= 16)
@@ -983,6 +997,7 @@ public class LodPipeline
         // when a single apply overruns; a result is never split.
         bool busy = Worker.CaptureResults.Count >= CaptureBusyThreshold || deferredCaptures.Count > 0;
         int budget = busy ? CaptureAppliesPerTickBusy : CaptureAppliesPerTick;
+        if (DiscoverOnly) budget = Math.Min(budget, 1);
         int applied = 0;
         applyClock.Restart();
         LastAppliedCount = 0;

@@ -162,7 +162,7 @@ public sealed class LodLoginSweepTimingStore
     }
 
     /// <summary>
-    /// Budgeted first-pass rate: time from "quiet teleports begin ù N" to the next
+    /// Budgeted first-pass rate: time from "quiet teleports begin ÔøΩ N" to the next
     /// retry/finish, only when N is a planned subsample (not a 200+ hole hop).
     /// </summary>
     public static List<double> HarvestSecPerStop(IEnumerable<string> lines)
@@ -189,7 +189,7 @@ public sealed class LodLoginSweepTimingStore
             if (!ended) continue;
 
             double sec = (at - beginAt.Value).TotalSeconds;
-            // Wider than the live budget so older 16ñ36 stop logs and the 4x 64ñ96
+            // Wider than the live budget so older 16ÔøΩ36 stop logs and the 4x 64ÔøΩ96
             // first pass both harvest. Drop 200+ hole hops. Allow ~10 min walls.
             if (beginStops >= 12
                 && beginStops <= 120

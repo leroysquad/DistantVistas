@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 
@@ -6,23 +7,49 @@ namespace DistantVistas;
 /// <summary>
 /// Budgeted explore-time <strong>live visit bake</strong> — same
 /// <see cref="LodSeasonBake.BakeSectionFromVisit"/> / <c>GetColor</c> path as login sweep,
-/// not shader-repro or live-tint sheets. Queues L0 including FlagBaked so a walk
-/// into loaded winter chunks can overwrite stored May/fall tops. Drained 1–2
-/// L0 sections/tick while chunks load.
+/// not shader-repro or live-tint sheets.
+///
+/// Contract for chunked / incomplete work:
+/// <list type="bullet">
+/// <item>Capture already published the section mesh via <c>RequestGpuSwap</c> — incomplete
+/// bake never drops drawing of that land.</item>
+/// <item>Each drain paints more columns, remeshes what changed, and re-queues the same
+/// L0 until every captured top is done. Time elongates; work is not abandoned.</item>
+/// <item>In-progress sections are finished before a new one starts, so paint fills in
+/// steadily instead of many half-baked cells competing.</item>
+/// </list>
 /// </summary>
 public sealed class LodExploreBake
 {
-    /// <summary>L0 sections baked per game tick during normal play.</summary>
+    /// <summary>L0 sections started per game tick during normal play (finish-first).</summary>
     public const int SectionsPerTick = 1;
 
-    /// <summary>Extra drain while capture results are stacked (still time-budgeted).</summary>
+    /// <summary>Extra start while capture results are stacked (still time-budgeted).</summary>
     public const int SectionsPerTickBusy = 2;
+
+    /// <summary>
+    /// Hard ceiling on explore GetColor work per tick. Spreads a full L0 across
+    /// several ticks so discover walking does not freeze the frame.
+    /// </summary>
+    public const double DrainBudgetMs = 2.5;
+
+    /// <summary>Captured tops painted per drain call (chunked walk bake).</summary>
+    public const int ColumnsPerDrain = 96;
+
+    /// <summary>
+    /// Max not-ready / map-chunk probes per tick when nothing is in progress.
+    /// </summary>
+    public const int MaxReadinessSpinsPerTick = 8;
 
     readonly Queue<long> pending = new();
     readonly HashSet<long> queued = new();
     readonly HashSet<long> readyAttempted = new();
+    readonly Dictionary<long, int> resumeCol = new();
 
-    public int PendingCount => pending.Count;
+    /// <summary>L0 currently mid-bake; finished before any other pending key starts.</summary>
+    long inProgressKey;
+
+    public int PendingCount => pending.Count + (inProgressKey != 0 ? 1 : 0);
     public int SectionsBaked { get; private set; }
     public int LastDrainSpins { get; private set; }
 
@@ -31,9 +58,16 @@ public sealed class LodExploreBake
         pending.Clear();
         queued.Clear();
         readyAttempted.Clear();
+        resumeCol.Clear();
+        inProgressKey = 0;
     }
 
-    public void ResetAttempt(long sectionKey) => readyAttempted.Remove(sectionKey);
+    public void ResetAttempt(long sectionKey)
+    {
+        readyAttempted.Remove(sectionKey);
+        resumeCol.Remove(sectionKey);
+        if (inProgressKey == sectionKey) inProgressKey = 0;
+    }
 
     public void Queue(long sectionKey, LodSection section, bool defer)
     {
@@ -41,11 +75,16 @@ public sealed class LodExploreBake
         if (LodWorld.KeyLevel(sectionKey) != 0) return;
         if (readyAttempted.Contains(sectionKey)) return;
         _ = section;
+        // Already mid-bake for this key — resume owns it; do not duplicate in pending.
+        if (sectionKey == inProgressKey || resumeCol.ContainsKey(sectionKey)) return;
         if (!queued.Add(sectionKey)) return;
         pending.Enqueue(sectionKey);
     }
 
-    /// <summary>Drain queued L0 sections. Returns how many sections were baked this tick.</summary>
+    /// <summary>
+    /// Drain queued L0 sections under the wall budget. Incomplete sections stay
+    /// resident and keep remeshing; only the GetColor work is elongated.
+    /// </summary>
     public int Drain(
         ICoreClientAPI capi,
         LodPipeline pipeline,
@@ -53,91 +92,130 @@ public sealed class LodExploreBake
         System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
         int captureBacklog)
     {
-        if (pipeline.DeferLegacyHeal || pending.Count == 0) return 0;
+        if (pipeline.DeferLegacyHeal) return 0;
+        if (pending.Count == 0 && inProgressKey == 0) return 0;
 
-        int budget = captureBacklog >= LodPipeline.CaptureBusyThreshold
+        int startsLeft = captureBacklog >= LodPipeline.CaptureBusyThreshold
             ? SectionsPerTickBusy
             : SectionsPerTick;
         int baked = 0;
-        // One pass over the current queue. Re-queued not-ready keys must not be
-        // retried this tick — budget only dropped on a successful bake, so a
-        // live-tint L0 whose sweep chunks are already unloaded livelocked Tick.
-        int remaining = pending.Count;
+        int readinessSpins = 0;
         LastDrainSpins = 0;
+        long drainStart = Stopwatch.GetTimestamp();
+        long drainBudgetTicks = (long)(Stopwatch.Frequency * DrainBudgetMs / 1000.0);
 
-        while (budget > 0 && remaining-- > 0 && pending.Count > 0)
+        while (Stopwatch.GetTimestamp() - drainStart < drainBudgetTicks)
         {
             LastDrainSpins++;
-            long key = pending.Dequeue();
-            queued.Remove(key);
 
-            if (!pipeline.World.Sections.TryGetValue(key, out LodSection? section)
-                || section == null)
+            if (!TryTakeNext(capi, pipeline, ref readinessSpins, ref startsLeft, out long key, out LodSection section))
+                break;
+
+            resumeCol.TryGetValue(key, out int startCol);
+            double remainMs = DrainBudgetMs
+                - 1000.0 * (Stopwatch.GetTimestamp() - drainStart) / Stopwatch.Frequency;
+            if (remainMs < 0.4) remainMs = 0.4;
+
+            int changed = LodSeasonBake.BakeSectionFromVisitChunked(
+                capi, section, key, plantTintFallback, untintedOf,
+                startCol, ColumnsPerDrain, remainMs,
+                out int nextCol, out bool complete);
+
+            if (!complete)
             {
-                continue;
+                // Prolong: same L0 stays in progress, mesh already drawn, more columns next tick.
+                resumeCol[key] = nextCol;
+                inProgressKey = key;
             }
-
-            bool ready = CanBakeSectionNow(capi.World, key);
-            if (!ready)
+            else
             {
-                if (queued.Add(key))
-                    pending.Enqueue(key);
-                continue;
+                resumeCol.Remove(key);
+                readyAttempted.Add(key);
+                if (inProgressKey == key) inProgressKey = 0;
             }
-
-            // #region agent log
-            string prevVisit = LodSeasonBake.DebugVisitKind;
-            LodSeasonBake.DebugVisitKind = "walk";
-            LodSeasonBake.FlagBakedLuma(section, out int lumaBeforeN, out int lumaBefore, out int paleBefore);
-            // #endregion
-            int changed = LodSeasonBake.BakeSectionFromVisit(
-                capi, section, key, plantTintFallback, untintedOf);
-            // #region agent log
-            LodSeasonBake.DebugVisitKind = prevVisit;
-            LodSeasonBake.FlagBakedLuma(section, out int lumaAfterN, out int lumaAfter, out int paleAfter);
-            // #endregion
 
             if (changed > 0)
             {
+                // Remesh what we have so far — incomplete paint still renders; colours fill in.
                 pipeline.World.MarkChanged(key);
                 pipeline.World.RequestGpuSwap(key);
-                pipeline.DrainLoginPersistence(1);
+                if (complete)
+                    pipeline.DrainLoginPersistence(1);
                 baked++;
-                SectionsBaked++;
-                // #region agent log
-                if (baked == 1 && SectionsBaked <= 24)
-                {
-                    try
-                    {
-                        System.IO.File.AppendAllText(
-                            @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
-                            "{\"sessionId\":\"40cccb\",\"runId\":\"post-fix-walk\",\"hypothesisId\":\"H-WHITE-1\",\"location\":\"LodExploreBake.Drain\",\"message\":\"explore-invalidate\",\"data\":{\"swap\":true,\"keyL0\":true,\"sx\":"
-                            + LodWorld.KeySx(key) + ",\"sz\":" + LodWorld.KeySz(key)
-                            + ",\"changed\":" + changed
-                            + ",\"pending\":" + pending.Count
-                            + ",\"dirty\":" + pipeline.World.RenderDirty.Count
-                            + ",\"mipDirty\":" + pipeline.World.MipDirty.Count
-                            + ",\"baked\":" + SectionsBaked
-                            + ",\"lumaBefore\":" + lumaBefore
-                            + ",\"lumaAfter\":" + lumaAfter
-                            + ",\"nBefore\":" + lumaBeforeN
-                            + ",\"nAfter\":" + lumaAfterN
-                            + ",\"paleBefore\":" + paleBefore
-                            + ",\"paleAfter\":" + paleAfter
-                            + ",\"towardWhite\":" + (lumaAfter > lumaBefore + 12 ? "true" : "false")
-                            + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
-                    }
-                    catch { }
-                }
-                if (SectionsBaked <= 6)
-                    TryLogWalkVsHorizon(pipeline.World, key, lumaAfter, paleAfter);
-                // #endregion
+                if (complete) SectionsBaked++;
             }
-            readyAttempted.Add(key);
-            budget--;
+
+            // Prefer finishing the in-progress section over starting another this tick.
+            if (!complete || Stopwatch.GetTimestamp() - drainStart >= drainBudgetTicks)
+                break;
         }
 
         return baked;
+    }
+
+    bool TryTakeNext(
+        ICoreClientAPI capi,
+        LodPipeline pipeline,
+        ref int readinessSpins,
+        ref int startsLeft,
+        out long key,
+        out LodSection section)
+    {
+        key = 0;
+        section = null!;
+
+        // Finish-first: never abandon a half-baked L0 for a newer arrival.
+        if (inProgressKey != 0)
+        {
+            key = inProgressKey;
+            if (!pipeline.World.Sections.TryGetValue(key, out LodSection? prog) || prog == null)
+            {
+                resumeCol.Remove(key);
+                inProgressKey = 0;
+                return TryTakeNext(capi, pipeline, ref readinessSpins, ref startsLeft, out key, out section);
+            }
+
+            if (!CanBakeSectionNow(capi.World, key))
+            {
+                // Chunks unloaded mid-bake — keep resume; try again when maps return.
+                // Do not drop the section or clear resumeCol.
+                return false;
+            }
+
+            section = prog;
+            return true;
+        }
+
+        if (startsLeft <= 0 || pending.Count == 0) return false;
+
+        int guard = pending.Count;
+        while (guard-- > 0 && pending.Count > 0)
+        {
+            key = pending.Dequeue();
+            queued.Remove(key);
+
+            if (!pipeline.World.Sections.TryGetValue(key, out LodSection? next) || next == null)
+            {
+                resumeCol.Remove(key);
+                continue;
+            }
+
+            if (!CanBakeSectionNow(capi.World, key))
+            {
+                if (queued.Add(key))
+                    pending.Enqueue(key);
+                if (++readinessSpins >= MaxReadinessSpinsPerTick)
+                    return false;
+                continue;
+            }
+
+            startsLeft--;
+            section = next;
+            inProgressKey = key;
+            return true;
+        }
+
+        return false;
     }
 
     public static bool SectionHasLiveTint(LodSection section)
@@ -153,44 +231,4 @@ public sealed class LodExploreBake
 
     public static bool CanBakeSectionNow(IClientWorldAccessor world, long l0Key) =>
         LodLoginSweep.AllMapChunksLoaded(world.BlockAccessor, l0Key);
-
-    // #region agent log
-    static void TryLogWalkVsHorizon(LodWorld world, long walkedKey, int walkLuma, int walkPale)
-    {
-        int sx = LodWorld.KeySx(walkedKey);
-        int sz = LodWorld.KeySz(walkedKey);
-        long farKey = 0;
-        int farLuma = -1;
-        int farPale = 0;
-        int farN = 0;
-        foreach (var kv in world.Sections)
-        {
-            if (LodWorld.KeyLevel(kv.Key) != 0 || kv.Value == null) continue;
-            int dsx = LodWorld.KeySx(kv.Key) - sx;
-            int dsz = LodWorld.KeySz(kv.Key) - sz;
-            if (dsx * dsx + dsz * dsz < 36) continue;
-            LodSeasonBake.FlagBakedLuma(kv.Value, out farN, out farLuma, out farPale);
-            if (farN == 0) continue;
-            farKey = kv.Key;
-            break;
-        }
-        if (farN == 0) return;
-        try
-        {
-            System.IO.File.AppendAllText(
-                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
-                "{\"sessionId\":\"40cccb\",\"runId\":\"post-fix-walk\",\"hypothesisId\":\"H-WHITE-4\",\"location\":\"LodExploreBake.Drain\",\"message\":\"walk-vs-horizon\",\"data\":{\"walkSx\":"
-                + sx + ",\"walkSz\":" + sz
-                + ",\"walkLuma\":" + walkLuma
-                + ",\"walkPale\":" + walkPale
-                + ",\"farSx\":" + LodWorld.KeySx(farKey)
-                + ",\"farSz\":" + LodWorld.KeySz(farKey)
-                + ",\"farLuma\":" + farLuma
-                + ",\"farPale\":" + farPale
-                + ",\"farN\":" + farN
-                + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
-        }
-        catch { }
-    }
-    // #endregion
 }
