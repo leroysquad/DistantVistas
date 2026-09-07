@@ -811,18 +811,31 @@ public class LodPipeline
         double applyMs = applyClock.Elapsed.TotalMilliseconds;
         LastApplyMs = applyMs;
         AgentTickStep("tick-apply-exit", t0, ref mark, captureBacklog, LastAppliedCount);
-        if (applyMs <= 8.0)
-            DrainExploreBake(captureBacklog);
+        bool paused = false;
+        try { paused = api is ICoreClientAPI capiPause && capiPause.IsGamePaused; } catch { }
+
+        PlayModeBakeBudget.TickBudget playBudget = PlayModeBakeBudget.Compute(
+            DiscoverOnly, paused, captureBacklog, applyMs);
+
+        if (applyMs <= PlayModeBakeBudget.ApplySpikeMs || !DiscoverOnly)
+        {
+            if (!DiscoverOnly || playBudget.AllowExploreDrain)
+                DrainExploreBake(captureBacklog, playBudget);
+        }
         AgentTickStep("tick-explore-exit", t0, ref mark, ExploreBake.LastDrainSpins, ExploreBake.PendingCount);
-        int propagationBudget = PropagationsPerTick;
+        int propagationBudget = DiscoverOnly
+            ? playBudget.MipPropagations
+            : PropagationsPerTick;
         if (!DiscoverOnly && World.MipDirty.Count > CatchUpPropagationThreshold)
             propagationBudget = CatchUpPropagationsPerTick;
-        if (applyMs > 8.0)
-            propagationBudget = Math.Min(propagationBudget, 2);
+        if (applyMs > PlayModeBakeBudget.ApplySpikeMs)
+            propagationBudget = Math.Min(propagationBudget, DiscoverOnly ? 1 : 2);
         World.ProcessPropagation(propagationBudget, World.RequestGpuSwap);
-        int saveBudget = DiscoverOnly ? 1 : SectionSavesPerTick;
-        if (applyMs > 8.0) saveBudget = 0;
+        int saveBudget = DiscoverOnly ? playBudget.SaveRows : SectionSavesPerTick;
+        if (applyMs > PlayModeBakeBudget.ApplySpikeMs) saveBudget = DiscoverOnly ? 0 : 0;
         SaveSomeDirtySections(saveBudget);
+        if (DiscoverOnly)
+            PlayModeBakeBudget.MaybeLogBudget(ExploreBake.PendingCount, World.RenderDirty.Count);
         AgentTickStep("tick-exit", t0, ref mark, World.SaveDirty.Count, ExploreBake.PendingCount);
         tickCounter++;
     }
@@ -846,7 +859,7 @@ public class LodPipeline
     }
     // #endregion
 
-    void DrainExploreBake(int captureBacklog)
+    void DrainExploreBake(int captureBacklog, PlayModeBakeBudget.TickBudget budget)
     {
         if (api.Side != EnumAppSide.Client || ExploreUntintedOf == null) return;
         var capi = (ICoreClientAPI)api;
@@ -855,7 +868,8 @@ public class LodPipeline
             this,
             ExplorePlantTintFallback,
             ExploreUntintedOf,
-            captureBacklog);
+            captureBacklog,
+            budget);
     }
 
     /// <summary>

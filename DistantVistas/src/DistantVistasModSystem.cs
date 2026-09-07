@@ -538,6 +538,20 @@ public class DistantVistasModSystem : ModSystem
         // #region agent log
         if (logPlay) AgentPlayTickLog("after-offers", playTickCount, playTickEnter, "\"ok\":true");
         // #endregion
+
+        bool discoverOnly = pipeline.DiscoverOnly;
+        bool paused = false;
+        try { paused = capi.IsGamePaused; } catch { }
+        PlayModeBakeBudget.NotePlayerFrame(capi, dt, pipeline.LastApplyMs, discoverOnly);
+        if (discoverOnly && PlayModeBakeBudget.ReprioritizePending)
+        {
+            pipeline.ExploreBake.ReprioritizeNear(
+                PlayModeBakeBudget.PlayerX,
+                PlayModeBakeBudget.PlayerZ,
+                PlayModeBakeBudget.NearPriorityBlocks);
+            PlayModeBakeBudget.ClearReprioritizeFlag();
+        }
+
         pipeline.DebugPlayTick = playTickCount;
         pipeline.Tick();
         pipeline.DebugPlayTick = 0;
@@ -567,7 +581,8 @@ public class DistantVistasModSystem : ModSystem
         pipeline.NotePlayerColumn(sweepCx, sweepCz);
         pipeline.SweepLoadedColumns(sweepCx, sweepCz, sweepRadius);
         QueueExploreBakeNearPlayer();
-        if (loginBake?.Active != true)
+        if (loginBake?.Active != true
+            && PlayModeBakeBudget.Last.AllowFrontierScout)
             frontierScout?.Tick(capi, pipeline, renderer);
         // #region agent log
         if (logPlay) AgentPlayTickLog("after-sweep", playTickCount, playTickEnter,
@@ -1916,9 +1931,10 @@ public class DistantVistasModSystem : ModSystem
         int footprint = LodSection.SectionBlocks;
         int sx = (int)Math.Floor(pos.X / footprint);
         int sz = (int)Math.Floor(pos.Z / footprint);
-        for (int dz = -1; dz <= 1; dz++)
+        int ring = PlayModeBakeBudget.Active ? 2 : 1;
+        for (int dz = -ring; dz <= ring; dz++)
         {
-            for (int dx = -1; dx <= 1; dx++)
+            for (int dx = -ring; dx <= ring; dx++)
             {
                 if (sx + dx < 0 || sz + dz < 0) continue;
                 long key = LodWorld.SectionKey(0, sx + dx, sz + dz);
@@ -1963,6 +1979,7 @@ public class DistantVistasModSystem : ModSystem
         LodCloudHorizon.DetachRenderer();
         pipeline.DeferLegacyHeal = false;
         pipeline.ExploreBake.Clear();
+        PlayModeBakeBudget.Reset();
         renderer.LoginBakeOverlayActive = false;
         renderer.LoginBakeBlocked = true;
         joinAtlasResolved = false;

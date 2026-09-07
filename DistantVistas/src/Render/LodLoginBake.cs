@@ -1347,7 +1347,7 @@ public sealed class LodLoginBake
         UpdateProgress(1f, "Ready.", force: true);
         ReleaseResources(success: true);
         capi.Logger.Notification(
-            "[DistantVistas] Login visit sweep finished: {0}/{1} regions captured. New land still bakes on discover.",
+            "[DistantVistas] Login visit sweep finished: {0}/{1} regions captured. Horizon paint continues in the background while you play.",
             finished, total);
     }
 
@@ -1373,12 +1373,32 @@ public sealed class LodLoginBake
         LodScoutSeqDiag.SetOverlayActive(false);
         if (success)
         {
-            pipeline.ExploreBake.Clear();
+            double px = 0, pz = 0;
+            try
+            {
+                var pos = capi.World.Player.Entity.Pos;
+                px = pos.X;
+                pz = pos.Z;
+            }
+            catch { }
+
+            var readyKeys = scoutReady.ToArray();
+            pipeline.ExploreBake.HandoffFromLogin(readyKeys, paintResumeCol, pipeline);
+            int seeded = pipeline.ExploreBake.SeedUnfinishedSections(pipeline.World, px, pz);
+            PlayModeBakeBudget.ActivateSoftRelease();
             pipeline.FreezeCapture = false;
             pipeline.HoldUnloadedCaptures = false;
             pipeline.DiscoverOnly = true;
             pipeline.PurgeUnloadedPendingColumns();
             pipeline.DeferLegacyHeal = false;
+            scoutReady.Clear();
+            paintResumeCol.Clear();
+            if (seeded > 0 || readyKeys.Length > 0)
+            {
+                capi.Logger.Notification(
+                    "[DistantVistas] Background season paint continues quietly ({0} queued). Full canvas may take longer while you play.",
+                    pipeline.ExploreBake.PendingCount);
+            }
         }
         else
         {

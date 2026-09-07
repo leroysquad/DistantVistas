@@ -24,6 +24,7 @@ public static class Program
         ("pure", "tint clamp", TintClampChecks.Run),
         ("pure", "spatial climate", ClimateFieldChecks.Run),
         ("pure", "explore bake", ExploreBakeChecks.Run),
+        ("pure", "play-mode bake budget", PlayModeBakeBudgetChecks.Run),
         ("pure", "splash resolution", SplashResolutionChecks.Run),
         ("pure", "snow overlay", SnowOverlayChecks.Run),
         ("pure", "login season bake", SeasonBakeChecks.Run),

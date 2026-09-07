@@ -2576,6 +2576,11 @@ public class LodTerrainRenderer : IRenderer
         // needed two passes to appear and only four could be touched per frame.
         int meshBudget = MeshSchedulesPerFrame + IncompleteFillPerTick;
         int loadBudget = MeshLoadRequestsPerFrame;
+        if (LastDiscoverOnly && PlayModeBakeBudget.Active)
+        {
+            var b = PlayModeBakeBudget.Last;
+            meshBudget = b.MeshSchedules + b.IncompleteFill;
+        }
 
         // ONE pass over the dirty set, keeping the nearest few, rather than a fresh scan
         // of the whole set for every key scheduled.
@@ -2657,6 +2662,8 @@ public class LodTerrainRenderer : IRenderer
     void UploadFinishedMeshes()
     {
         int budget = MeshUploadsPerFrame;
+        if (LastDiscoverOnly && PlayModeBakeBudget.Active)
+            budget = PlayModeBakeBudget.Last.MeshUploads;
         long uploadStart = LodPhaseCost.Start();
 
         while (budget-- > 0 && worker.MeshResults.TryDequeue(out MeshResult? result))

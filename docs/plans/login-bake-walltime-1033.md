@@ -53,8 +53,26 @@ Remaining bottleneck if still >3 min: (1) near mesh-wait pinning slots, (2) chun
 | Batched SQLite drain after paint batch | `LodLoginBake.PaintReadyScouts` |
 | Shorter stabilize + post-overlay horizon mesh release when spawn solid + far ready | `LodLoginBake.TickStabilizing` |
 | Scout-path NDJSON sequence (`H-SCOUT-SEQ`: spawn/phase/release/budget/thrash) | `LodScoutSeqDiag`, `LodLoginScoutFill`, `LodScoutHostSystem`, `LodScoutViewerEntity` |
+| **PlayModeBakeBudget** after soft-release (steady background GetColor/mesh/SQLite) | `PlayModeBakeBudget`, `LodExploreBake`, `LodPipeline`, `LodTerrainRenderer` |
 
 Invariants kept: no player teleports; exact pickup XYZ; scout despawn; spawn-solid 1024; Farseer gray tent + black tips; no false-complete; no SIMD inside GetColor; no forceRecapture on scout ticks.
+
+## PlayModeBakeBudget (post soft-release)
+
+After overlay releases (spawn solid + far ready), unfinished horizon GetColor / mesh / SQLite continues under **DiscoverOnly** with per-tick caps so normal movement stays hitch-free. Full canvas completion takes **longer in wall clock while playing** — intentional; status stays honest (no fake 100%).
+
+| Knob | Baseline | Motion / hitch | Paused / idle |
+|------|----------|----------------|---------------|
+| GetColor wall / tick | **2.0 ms** | ×0.45 motion, ×0.35 hitch | ×2.5 |
+| Columns / drain | **48** | scaled down | scaled up |
+| Mesh schedules + fill / frame | **4 + 4** | scaled down | scaled up |
+| Mesh uploads / frame | **3** | scaled down | scaled up |
+| SQLite rows / tick | **1** | 0 on apply spike | up to 2 |
+| Mip propagations / tick | **2** | min 1 | up to 5 |
+
+**Near-first:** `ReprioritizeNear` when the player moves ≥6 blocks/s avg; `QueueExploreBakeNearPlayer` uses a 5×5 L0 ring under play budget. Frontier scout pauses when budget tier is `motion`, `hitch`, or `apply-spike`.
+
+**Trade:** playable within ~2–3 min overlay + spawn solid; remaining ~hundreds of L0 may need **tens of minutes** of background trickle during play (faster if paused). Filter `H-PLAY-BUDGET` in `debug-40cccb.log` for live tier + pending counts.
 
 ## Rejected
 

@@ -62,6 +62,107 @@ public sealed class LodExploreBake
         inProgressKey = 0;
     }
 
+    /// <summary>
+    /// Soft-release handoff: overlay paint queue + partial resumes continue under
+    /// <see cref="PlayModeBakeBudget"/> instead of being dropped on overlay end.
+    /// </summary>
+    public void HandoffFromLogin(
+        IEnumerable<long> readyKeys,
+        IReadOnlyDictionary<long, int> partialCols,
+        LodPipeline pipeline)
+    {
+        foreach (KeyValuePair<long, int> kv in partialCols)
+        {
+            resumeCol[kv.Key] = kv.Value;
+            readyAttempted.Remove(kv.Key);
+            queued.Remove(kv.Key);
+            if (inProgressKey == 0)
+                inProgressKey = kv.Key;
+        }
+
+        foreach (long key in readyKeys)
+        {
+            if (resumeCol.ContainsKey(key)) continue;
+            if (!pipeline.World.Sections.TryGetValue(key, out LodSection? section) || section == null)
+                continue;
+            Queue(key, section, defer: false);
+        }
+    }
+
+    /// <summary>
+    /// Queue resident L0 that still need visit GetColor, near player first.
+    /// </summary>
+    public int SeedUnfinishedSections(LodWorld world, double px, double pz, int maxScan = 512)
+    {
+        int added = 0;
+        int scanned = 0;
+        var candidates = new List<(double DistSq, long Key)>(64);
+        foreach (long key in world.HasDataSet)
+        {
+            if (LodWorld.KeyLevel(key) != 0) continue;
+            if (++scanned > maxScan) break;
+            if (readyAttempted.Contains(key) || resumeCol.ContainsKey(key) || queued.Contains(key))
+                continue;
+            if (key == inProgressKey) continue;
+            if (!world.Sections.TryGetValue(key, out LodSection? section) || section == null)
+                continue;
+            if (!SectionHasLiveTint(section)) continue;
+
+            int sb = LodSection.SectionBlocks;
+            double cx = (LodWorld.KeySx(key) + 0.5) * sb - px;
+            double cz = (LodWorld.KeySz(key) + 0.5) * sb - pz;
+            candidates.Add((cx * cx + cz * cz, key));
+        }
+
+        candidates.Sort((a, b) => a.DistSq.CompareTo(b.DistSq));
+        for (int i = 0; i < candidates.Count; i++)
+        {
+            long key = candidates[i].Key;
+            if (!world.Sections.TryGetValue(key, out LodSection? section) || section == null)
+                continue;
+            int before = pending.Count;
+            Queue(key, section, defer: false);
+            if (pending.Count > before) added++;
+        }
+
+        return added;
+    }
+
+    public void ReprioritizeNear(double px, double pz, int nearBlocks)
+    {
+        if (pending.Count < 2) return;
+        double nearRsq = (double)nearBlocks * nearBlocks;
+        int sb = LodSection.SectionBlocks;
+        int n = pending.Count;
+        var nearQ = new Queue<long>();
+        var farQ = new Queue<long>();
+        for (int i = 0; i < n; i++)
+        {
+            long key = pending.Dequeue();
+            queued.Remove(key);
+            double cx = (LodWorld.KeySx(key) + 0.5) * sb - px;
+            double cz = (LodWorld.KeySz(key) + 0.5) * sb - pz;
+            if (cx * cx + cz * cz <= nearRsq)
+                nearQ.Enqueue(key);
+            else
+                farQ.Enqueue(key);
+        }
+
+        while (nearQ.Count > 0)
+        {
+            long key = nearQ.Dequeue();
+            if (queued.Add(key))
+                pending.Enqueue(key);
+        }
+
+        while (farQ.Count > 0)
+        {
+            long key = farQ.Dequeue();
+            if (queued.Add(key))
+                pending.Enqueue(key);
+        }
+    }
+
     public void ResetAttempt(long sectionKey)
     {
         readyAttempted.Remove(sectionKey);
@@ -92,17 +193,36 @@ public sealed class LodExploreBake
         System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
         int captureBacklog)
     {
+        PlayModeBakeBudget.TickBudget budget = pipeline.DiscoverOnly
+            ? PlayModeBakeBudget.Last
+            : PlayModeBakeBudget.Compute(
+                discoverOnly: false,
+                paused: false,
+                captureBacklog: captureBacklog,
+                applyMs: 0);
+        return Drain(capi, pipeline, plantTintFallback, untintedOf, captureBacklog, budget);
+    }
+
+    public int Drain(
+        ICoreClientAPI capi,
+        LodPipeline pipeline,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
+        int captureBacklog,
+        PlayModeBakeBudget.TickBudget budget)
+    {
         if (pipeline.DeferLegacyHeal) return 0;
+        if (!budget.AllowExploreDrain) return 0;
         if (pending.Count == 0 && inProgressKey == 0) return 0;
 
-        int startsLeft = captureBacklog >= LodPipeline.CaptureBusyThreshold
-            ? SectionsPerTickBusy
-            : SectionsPerTick;
+        int startsLeft = budget.ExploreStarts;
         int baked = 0;
         int readinessSpins = 0;
         LastDrainSpins = 0;
         long drainStart = Stopwatch.GetTimestamp();
-        long drainBudgetTicks = (long)(Stopwatch.Frequency * DrainBudgetMs / 1000.0);
+        double wallMs = budget.ExploreWallMs;
+        int columnsPerDrain = budget.ExploreColumns;
+        long drainBudgetTicks = (long)(Stopwatch.Frequency * wallMs / 1000.0);
 
         while (Stopwatch.GetTimestamp() - drainStart < drainBudgetTicks)
         {
@@ -112,18 +232,17 @@ public sealed class LodExploreBake
                 break;
 
             resumeCol.TryGetValue(key, out int startCol);
-            double remainMs = DrainBudgetMs
+            double remainMs = wallMs
                 - 1000.0 * (Stopwatch.GetTimestamp() - drainStart) / Stopwatch.Frequency;
             if (remainMs < 0.4) remainMs = 0.4;
 
             int changed = LodSeasonBake.BakeSectionFromVisitChunked(
                 capi, section, key, plantTintFallback, untintedOf,
-                startCol, ColumnsPerDrain, remainMs,
+                startCol, columnsPerDrain, remainMs,
                 out int nextCol, out bool complete);
 
             if (!complete)
             {
-                // Prolong: same L0 stays in progress, mesh already drawn, more columns next tick.
                 resumeCol[key] = nextCol;
                 inProgressKey = key;
             }
@@ -136,16 +255,14 @@ public sealed class LodExploreBake
 
             if (changed > 0)
             {
-                // Remesh what we have so far — incomplete paint still renders; colours fill in.
                 pipeline.World.MarkChanged(key);
                 pipeline.World.RequestGpuSwap(key);
                 if (complete)
-                    pipeline.DrainLoginPersistence(1);
+                    pipeline.DrainLoginPersistence(Math.Min(budget.SaveRows, 1));
                 baked++;
                 if (complete) SectionsBaked++;
             }
 
-            // Prefer finishing the in-progress section over starting another this tick.
             if (!complete || Stopwatch.GetTimestamp() - drainStart >= drainBudgetTicks)
                 break;
         }
