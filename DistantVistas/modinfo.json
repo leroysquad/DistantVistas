@@ -6,7 +6,7 @@
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.32. ~31k lines C# · fork of Vintage Horizons. Real 3D far LOD, live seasons, join overlay (16 scouts, stay-at-spawn bake), Farseer coexistence. See ModDB page for Horizons diff and full fix history.",
+    "description":  "Official 1.0.32. 39,763 lines C#. Login bake disk: 4075-block radius, 8150 blocks end to end, 52168110 block². 16 scouts, stay at spawn. Vintage Horizons fork.",
     "authors":  [
                     "IllLeroySquad"
                 ],
