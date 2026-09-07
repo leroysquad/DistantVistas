@@ -160,3 +160,23 @@ Invariants unchanged: no teleports; scout viewers; exact pickup; spawn-solid 102
 | Spawn neighbourhood FlagBaked | lags rim | **Done first** (spawn-first queue + revisit budget) |
 | `paintReadyQueued` | healthy | stays **&gt;0** when scouts live |
 | Look lock | intact | no `H-LOOK` delta storms |
+
+## 1.0.35 WaitChunks freeze fix (~13:50 PT playtest)
+
+**Symptom:** After paint was flowing (`finished` climbing, `paintReadyQueued` ~60), overlay **froze**: `paintReadyQueued=0`, `scoutReady=0`, **`nearLive=16`** stuck, **`avgNearTicks` ~77**, only **`maxWait`** releases (112), **zero `painted`**, **3420 WaitChunks** phase logs, **zero H-PAINT** batches.
+
+**Root cause:** All 16 spawn-disk scouts parked in **WaitChunks** waiting for **all four** map chunks. Chunk IO saturated → no Capture → no paint handoff. **`maxWait` requeued without paint** when `CapturedColumns &lt; 256`, so slots immediately respawned on the same near keys — a **WaitChunks dead-end**, not a FIFO stall.
+
+**Shipped (scout unblock):**
+
+| Fix | Change |
+|-----|--------|
+| Partial map escalation | `AnyMapChunksLoaded` + **32-tick** force **WaitChunks→Capture** |
+| Tiered partial paint | `PartialCaptureMin`: 256 → 64 → 16 → **1** by wait age |
+| Full-grid rotation | All **16** in WaitChunks **≥48 ticks** → **`waitExpirePaint` / `partialPaint`** handoff (min 1 col) |
+| Near WaitChunks cap | **`MaxNearWaitChunksLive=8`** — new slots prefer far ring while spawn streams catch up |
+| Key deferral | **`waitRetries`** + **`SelectPendingIndex`** skips hot stuck keys when alternatives exist |
+| Capture timeout | **`captureTimeout` / `waitExpirePaint`** when capture idle but columns exist |
+| Store resident | **`TryGetSection`** loads disk section before partial / expire handoff |
+
+**Expect after fix:** H-PAINT batches resume within seconds of a WaitChunks pile-up; `paintReadyQueued&gt;0`; `painted` releases return; `avgNearTicks` stays in **teens–30s**, not **77+** with zero paint; `maxWait`-only slices alternate with **`partialPaint` / `waitExpirePaint` / `painted`**.

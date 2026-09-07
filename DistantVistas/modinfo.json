@@ -6,7 +6,7 @@
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.35. Login overlay speed cut: wider GetColor/season caches, defer palette snapshot rebuilds, 120ms paint wall + near-first queue, throttled inline loads during sweep. Builds on 1.0.34 scout FIFO stall fix + look lock. Farseer gray tent + black tips. Vintage Horizons fork.",
+    "description":  "Official 1.0.35. Login overlay speed + WaitChunks freeze fix: wider GetColor caches, spawn-near paint queue, partial-map capture escalation, 8-cap near WaitChunks. Builds on 1.0.34 scout FIFO + look lock. Farseer gray tent + black tips. Vintage Horizons fork.",
     "authors":  [
                     "IllLeroySquad"
                 ],

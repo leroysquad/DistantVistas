@@ -18,8 +18,16 @@ public sealed class LodLoginScoutFill
     public const int MaxNearConcurrent = 8;
     public const int MaxFarConcurrent = 8;
     public const int MaxWaitTicks = 96;
+    /// <summary>Do not park more than this many spawn-disk scouts in WaitChunks at once.</summary>
+    public const int MaxNearWaitChunksLive = 8;
+    /// <summary>Escalate WaitChunks → Capture when partial map or resident capture exists.</summary>
+    public const int WaitChunksForceCaptureTicks = 32;
+    /// <summary>When all slots WaitChunks, rotate oldest into paint/capture handoff.</summary>
+    public const int WaitChunksRotateTicks = 48;
     public const int MaxCaptureWaitTicks = 16;
     public const int MaxMeshWaitTicks = 120;
+    /// <summary>After this many maxWait requeues, hand off paint if any section data exists.</summary>
+    public const int MaxWaitKeyedRetries = 2;
     public const int ChunkVisibleRadius = 2;
     public const int SweepRadiusChunks = 2;
     public const int SweepRowsPerCall = 1;
@@ -41,6 +49,8 @@ public sealed class LodLoginScoutFill
     readonly Queue<long> heldNear = new();
     readonly Queue<long> heldFar = new();
     readonly List<long> readyScratch = new(MaxConcurrent);
+    readonly List<long> pendingScratch = new(256);
+    readonly Dictionary<long, int> waitRetries = new();
     int liveCount;
 
     public int LiveCount => liveCount;
@@ -58,6 +68,8 @@ public sealed class LodLoginScoutFill
         heldNear.Clear();
         heldFar.Clear();
         readyScratch.Clear();
+        pendingScratch.Clear();
+        waitRetries.Clear();
         liveCount = 0;
         FinishedThisTick = 0;
         LastFinishedKey = null;
@@ -124,13 +136,17 @@ public sealed class LodLoginScoutFill
         int targetCap = Math.Min(
             LocalVisitRevealChunks,
             Math.Max(ChunkVisibleRadius, chunkVisibleTarget));
+        int nearWaitChunks = CountNearWaitChunks();
 
         for (int i = 0; i < slots.Length; i++)
         {
             if (slots[i] is { Live: true }) continue;
-            long? key = TakeNextPending(pending, completedKeys);
+            long? key = TakeNextPending(
+                capi, pending, completedKeys, pickupX, pickupZ, nearWaitChunks);
             if (key == null) break;
             StartSlot(capi, i, key.Value, pickupX, pickupZ, onsetChunks, targetCap);
+            if (VisitIsNear(capi, key.Value, pickupX, pickupZ))
+                nearWaitChunks++;
         }
 
         for (int i = 0; i < slots.Length; i++)
@@ -164,30 +180,55 @@ public sealed class LodLoginScoutFill
                 }
 
                 bool loaded = LodLoginSweep.AllMapChunksLoaded(capi.World.BlockAccessor, key);
-                if (!loaded)
+                bool anyLoaded = LodLoginSweep.AnyMapChunksLoaded(capi.World.BlockAccessor, key);
+                int partialMin = PartialCaptureMin(scout.Ticks);
+
+                if (loaded)
                 {
-                    if (scout.Ticks < MaxWaitTicks)
-                    {
-                        LodScoutSeqDiag.LogPhase(i, scout, renderer, pipeline);
-                        continue;
-                    }
-
                     pipeline.QueueL0SectionForce(key);
-                    if (HasPartialCapture(pipeline, key) && TryHandoffPaint(key, scout))
-                    {
-                        ReleaseSlot(capi, i, renderer, pipeline, "partialPaint");
-                        continue;
-                    }
+                    scout.Current = LodScoutEntity.Phase.Capture;
+                    scout.Ticks = 0;
+                    LodScoutSeqDiag.LogPhase(i, scout, renderer, pipeline, forceTransition: true);
+                    continue;
+                }
 
-                    RequeuePending(pending, key);
-                    ReleaseSlot(capi, i, renderer, pipeline, "maxWait");
+                if (scout.Ticks >= WaitChunksForceCaptureTicks
+                    && (anyLoaded || HasPartialCapture(pipeline, key, partialMin)))
+                {
+                    pipeline.QueueL0SectionForce(key);
+                    scout.Current = LodScoutEntity.Phase.Capture;
+                    scout.Ticks = 0;
+                    LodScoutSeqDiag.LogPhase(i, scout, renderer, pipeline, forceTransition: true);
+                    continue;
+                }
+
+                if (scout.Ticks >= WaitChunksRotateTicks
+                    && CountPhase(LodScoutEntity.Phase.WaitChunks) >= MaxConcurrent
+                    && TryTimeoutHandoff(pipeline, key, scout, minCols: 1, out string rotateReason))
+                {
+                    ReleaseSlot(capi, i, renderer, pipeline, rotateReason);
+                    waitRetries.Remove(key);
+                    continue;
+                }
+
+                if (scout.Ticks < MaxWaitTicks)
+                {
+                    LodScoutSeqDiag.LogPhase(i, scout, renderer, pipeline);
                     continue;
                 }
 
                 pipeline.QueueL0SectionForce(key);
-                scout.Current = LodScoutEntity.Phase.Capture;
-                scout.Ticks = 0;
-                LodScoutSeqDiag.LogPhase(i, scout, renderer, pipeline, forceTransition: true);
+                if (TryTimeoutHandoff(pipeline, key, scout, minCols: 1, out string handoffReason))
+                {
+                    ReleaseSlot(capi, i, renderer, pipeline, handoffReason);
+                    waitRetries.Remove(key);
+                    continue;
+                }
+
+                waitRetries.TryGetValue(key, out int retries);
+                waitRetries[key] = retries + 1;
+                RequeuePending(pending, key);
+                ReleaseSlot(capi, i, renderer, pipeline, "maxWait");
                 continue;
             }
 
@@ -195,12 +236,21 @@ public sealed class LodLoginScoutFill
             {
                 if (!CaptureReady(pipeline, key, scout.Ticks))
                 {
+                    if (scout.Ticks >= MaxCaptureWaitTicks
+                        && TryTimeoutHandoff(pipeline, key, scout, minCols: 1, out string captureReason))
+                    {
+                        ReleaseSlot(capi, i, renderer, pipeline, captureReason);
+                        waitRetries.Remove(key);
+                        continue;
+                    }
+
                     LodScoutSeqDiag.LogPhase(i, scout, renderer, pipeline);
                     continue;
                 }
 
                 TryHandoffPaint(key, scout);
                 ReleaseSlot(capi, i, renderer, pipeline, "painted");
+                waitRetries.Remove(key);
                 continue;
             }
         }
@@ -236,32 +286,172 @@ public sealed class LodLoginScoutFill
             pending.Enqueue(heldFar.Dequeue());
     }
 
-    static long? TakeNextPending(Queue<long> pending, HashSet<long> completedKeys)
+    long? TakeNextPending(
+        ICoreClientAPI capi,
+        Queue<long> pending,
+        HashSet<long> completedKeys,
+        double pickupX,
+        double pickupZ,
+        int nearWaitChunksLive)
     {
+        if (pending.Count == 0) return null;
+
+        pendingScratch.Clear();
         while (pending.Count > 0)
+            pendingScratch.Add(pending.Dequeue());
+        if (pendingScratch.Count == 0) return null;
+
+        int pick = SelectPendingIndex(capi, pendingScratch, completedKeys, pickupX, pickupZ, nearWaitChunksLive);
+        if (pick < 0)
         {
-            long key = pending.Dequeue();
-            if (!completedKeys.Contains(key))
-                return key;
+            for (int i = 0; i < pendingScratch.Count; i++)
+                pending.Enqueue(pendingScratch[i]);
+            return null;
         }
-        return null;
+
+        long chosen = pendingScratch[pick];
+        for (int i = 0; i < pendingScratch.Count; i++)
+        {
+            if (i == pick) continue;
+            pending.Enqueue(pendingScratch[i]);
+        }
+        return chosen;
+    }
+
+    int SelectPendingIndex(
+        ICoreClientAPI capi,
+        List<long> keys,
+        HashSet<long> completedKeys,
+        double pickupX,
+        double pickupZ,
+        int nearWaitChunksLive)
+    {
+        int best = -1;
+        int bestRetries = int.MaxValue;
+        bool bestNear = false;
+        int fallback = -1;
+
+        for (int i = 0; i < keys.Count; i++)
+        {
+            long key = keys[i];
+            if (completedKeys.Contains(key)) continue;
+            waitRetries.TryGetValue(key, out int retries);
+            bool near = VisitIsNear(capi, key, pickupX, pickupZ);
+
+            if (nearWaitChunksLive >= MaxNearWaitChunksLive && near)
+            {
+                if (fallback < 0) fallback = i;
+                continue;
+            }
+
+            if (retries >= MaxWaitKeyedRetries)
+            {
+                if (fallback < 0) fallback = i;
+                continue;
+            }
+
+            if (best < 0
+                || retries < bestRetries
+                || (retries == bestRetries && near && !bestNear))
+            {
+                best = i;
+                bestRetries = retries;
+                bestNear = near;
+            }
+        }
+
+        return best >= 0 ? best : fallback;
     }
 
     static void RequeuePending(Queue<long> pending, long key) => pending.Enqueue(key);
 
+    static int PartialCaptureMin(int waitTicks)
+    {
+        if (waitTicks >= MaxWaitTicks - 1) return 1;
+        if (waitTicks >= 72) return 16;
+        if (waitTicks >= 48) return 64;
+        return 256;
+    }
+
     static bool CaptureReady(LodPipeline pipeline, long key, int ticksInCapture)
     {
-        if (pipeline.IsL0SectionCaptureIdle(key)) return true;
-        if (ticksInCapture >= MaxCaptureWaitTicks) return true;
-        if (ticksInCapture >= 8 && HasPartialCapture(pipeline, key)) return true;
+        if (pipeline.IsL0SectionCaptureIdle(key) && HasPartialCapture(pipeline, key, 1))
+            return true;
+        if (ticksInCapture >= MaxCaptureWaitTicks)
+            return HasPartialCapture(pipeline, key, 64) || HasPartialCapture(pipeline, key, 1);
+        if (ticksInCapture >= 8 && HasPartialCapture(pipeline, key, 256))
+            return true;
+        if (ticksInCapture >= 4 && HasPartialCapture(pipeline, key, 64))
+            return true;
         return false;
     }
 
-    static bool HasPartialCapture(LodPipeline pipeline, long key)
+    static bool HasPartialCapture(LodPipeline pipeline, long key, int minCols)
     {
-        if (!pipeline.World.Sections.TryGetValue(key, out LodSection? section) || section == null)
+        if (!TryGetSection(pipeline, key, out LodSection? section) || section == null)
             return false;
-        return section.CapturedColumns >= 256;
+        return section.CapturedColumns >= minCols;
+    }
+
+    static bool TryGetSection(LodPipeline pipeline, long key, out LodSection? section)
+    {
+        if (pipeline.World.Sections.TryGetValue(key, out section) && section != null)
+            return true;
+        section = pipeline.World.LoadFromStore?.Invoke(key);
+        if (section == null) return false;
+        pipeline.World.InstallLoaded(key, section);
+        return true;
+    }
+
+    bool TryTimeoutHandoff(
+        LodPipeline pipeline,
+        long key,
+        LodScoutEntity scout,
+        int minCols,
+        out string reason)
+    {
+        reason = "";
+        if (HasPartialCapture(pipeline, key, minCols) && TryHandoffPaint(key, scout))
+        {
+            reason = minCols <= 16 ? "waitExpirePaint" : "partialPaint";
+            return true;
+        }
+
+        waitRetries.TryGetValue(key, out int retries);
+        if (retries >= MaxWaitKeyedRetries
+            && TryGetSection(pipeline, key, out LodSection? section)
+            && section != null
+            && section.CapturedColumns > 0
+            && TryHandoffPaint(key, scout))
+        {
+            reason = "waitExpirePaint";
+            return true;
+        }
+
+        return false;
+    }
+
+    int CountPhase(LodScoutEntity.Phase phase)
+    {
+        int n = 0;
+        for (int i = 0; i < slots.Length; i++)
+        {
+            LodScoutEntity? scout = slots[i];
+            if (scout is { Live: true } && scout.Current == phase) n++;
+        }
+        return n;
+    }
+
+    int CountNearWaitChunks()
+    {
+        int n = 0;
+        for (int i = 0; i < slots.Length; i++)
+        {
+            LodScoutEntity? scout = slots[i];
+            if (scout is { Live: true, WaitForMesh: true, Current: LodScoutEntity.Phase.WaitChunks })
+                n++;
+        }
+        return n;
     }
 
     bool TryHandoffPaint(long key, LodScoutEntity scout)

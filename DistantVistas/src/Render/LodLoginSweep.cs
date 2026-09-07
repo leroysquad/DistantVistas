@@ -79,6 +79,16 @@ public static class LodLoginSweep
             (cx, cz) => blockAccessor.GetMapChunk(cx, cz) != null);
     }
 
+    /// <summary>At least one map chunk of the L0 footprint is resident (partial stream).</summary>
+    public static bool AnyMapChunksLoaded(IBlockAccessor blockAccessor, long l0Key)
+    {
+        foreach ((int cx, int cz) in ChunkColumnsForL0(l0Key))
+        {
+            if (blockAccessor.GetMapChunk(cx, cz) != null) return true;
+        }
+        return false;
+    }
+
     /// <summary>
     /// Spawn neighbourhood has map chunks so teleports can stream real terrain.
     /// </summary>

@@ -669,6 +669,22 @@ public static class LoginSweepChecks
             "overlay scouts fill pending FIFO without heldNear starvation");
         c.True(scoutFill.Contains("FlushHeldToPending"),
             "legacy heldNear/heldFar queues drain into pending each tick");
+        c.True(scoutFill.Contains("AnyMapChunksLoaded"),
+            "scouts escalate to Capture on partial map load, not all-or-nothing");
+        c.True(scoutFill.Contains("WaitChunksForceCaptureTicks"),
+            "WaitChunks escalates to Capture before maxWait when stream is partial");
+        c.True(scoutFill.Contains("WaitChunksRotateTicks"),
+            "all-slot WaitChunks stall rotates oldest scout into paint handoff");
+        c.True(scoutFill.Contains("MaxNearWaitChunksLive"),
+            "spawn-disk WaitChunks capped so 16 near scouts do not starve chunk IO");
+        c.True(scoutFill.Contains("TryTimeoutHandoff"),
+            "maxWait / rotate releases hand off paint when any capture exists");
+        c.Eq(8, LodLoginScoutFill.MaxNearWaitChunksLive,
+            "at most 8 spawn-disk scouts park in WaitChunks concurrently");
+        c.Eq(32, LodLoginScoutFill.WaitChunksForceCaptureTicks,
+            "partial map load escalates to Capture at ~1.6s");
+        c.Eq(48, LodLoginScoutFill.WaitChunksRotateTicks,
+            "full WaitChunks grid rotates into paint at ~2.4s");
         c.Eq(96, LodLoginScoutFill.MaxWaitTicks,
             "chunk wait capped ~4.8s at 50ms pulse (partial paint on timeout)");
         c.Eq(16, LodLoginScoutFill.MaxCaptureWaitTicks,
