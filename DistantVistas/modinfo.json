@@ -6,7 +6,7 @@
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.32. Far 3D land that stays. Join overlay paints the horizon while you stay at spawn — 16 parallel scouts, faster bake, seasons and frost on far terrain, Farseer gray tent + black tips. Vintage Horizons fork.",
+    "description":  "Official 1.0.32. ~31k lines C# · fork of Vintage Horizons. Real 3D far LOD, live seasons, join overlay (16 scouts, stay-at-spawn bake), Farseer coexistence. See ModDB page for Horizons diff and full fix history.",
     "authors":  [
                     "IllLeroySquad"
                 ],
