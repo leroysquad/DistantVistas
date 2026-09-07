@@ -731,12 +731,16 @@ public static class LoginSweepChecks
             "stalled-live-probe aggregates live scouts in cliff band when paint starves");
         c.True(File.ReadAllText(Path.Combine(
                 GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
-                .Contains("Player presence vs scout KeepLoaded"),
-            "walltime plan documents player-hop vs scout branch decision");
+                .Contains("can't enter the next huge square"),
+            "walltime plan documents user hypothesis verdict");
         c.True(File.ReadAllText(Path.Combine(
                 GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
-                .Contains("captureRequiresPlayer"),
-            "stall telemetry documents capture does not require player at L0 cell");
+                .Contains("Scouts primary; hop-unlock only if proven"),
+            "walltime plan locks scouts as primary bake workers");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
+                .Contains("hop-unlock pump"),
+            "Plan C is stream unlock pump only, not hop-sweep replacement");
         c.Eq(1, LodLoginScoutFill.MaxColdNearWaitChunksWhenStarving,
             "one cold-near WaitChunks streamer while paint starves");
         c.True(scoutFill.Contains("PendingPickScore"),

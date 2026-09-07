@@ -357,9 +357,27 @@ Filled-disk L0 count at radius R (64-block cells): **N(R) ≈ π (R/64)²**
 
 **Playtest pass criteria:** `finished` past 358; `stalled-live-probe` shows `zeroLoadedLive` falling as `loadedMapChunks` rises on annulus keys; `captureStall` ≪ `painted`; same-key `key-thrash` rare.
 
-### Player presence vs scout KeepLoaded — branch decision (1.0.38)
+### Scouts primary; hop-unlock only if proven (1.0.38)
 
-**User proposal (conditional):** if the cliff is “next L0’s map chunks won’t load unless the player is there,” hop the player behind the overlay through needed regions, then restore exact pickup XYZ/look.
+**User intent (locked for 1.0.38):**
+
+- **Scouts remain the primary bake workers.** Sixteen parallel `LodScoutViewerEntity` stream anchors cover far more ground than one player could hop-sweep; the overlay already solved visible teleportation and look-glitch problems with `PinPickupPose` + look lock while scouts work visit cells.
+- **Do not regress** to a single-player hop-teleport sweep as the main login algorithm.
+- **Prefer** fixing scout/host chunk streaming (`RequestUp` → KeepLoaded → ForceSend, scheduling gates, IO budgets) so hops are not needed.
+- **If and only if** playtest proves cold map-chunk streaming cannot unlock without real `IPlayer` presence at a region, an overlay **hop-unlock** is allowed — but only as a **stream / residency pump**, not as the baker:
+  1. Move player invisibly behind overlay to a geometry-derived unlock point (look locked).
+  2. Let the **full scout fleet** continue parallel WaitChunks → Capture → paint around that region while vanilla + host IO warm the annulus.
+  3. When that unlock disk is fed (or progress stalls on IO despite held scouts), **hop the unlock point** outward again.
+  4. **Restore exact pickup XYZ + look** at overlay end — unchanged from today.
+
+**Product hierarchy:**
+
+```text
+Primary:  scout fleet (parallel capture + GetColor + mesh)
+Fix now:  scout/host scheduling + IO (1.0.38)
+Fallback: hop-unlock pump ONLY if scout KeepLoaded provably fails after fixes
+Reject:   per-L0 player hops; hop-sweep replacing scouts; visible motion
+```
 
 #### Proof: Capture does **not** require player at the L0 cell
 
@@ -379,36 +397,39 @@ If scout streaming is **broken/saturated** (not player-required), `stall-forensi
 
 | Pattern | Meaning |
 |---------|---------|
-| `hostOutcome=held`, `loadedMapChunks` stays 0 for many WaitChunks ticks, **no** `captureStall` thrash | KeepLoaded/ForceSend slow or starved — **fix host IO**, not player hop |
+| `hostOutcome=held`, `loadedMapChunks` stays 0 for many WaitChunks ticks, **no** `captureStall` thrash | KeepLoaded/ForceSend slow or starved — **fix host IO first**, not hop-unlock |
 | `hostOutcome=capped` / `pending` frequent | `MaxConcurrentHolds=16` saturated — drain pending ups / boost ForceSend budget |
 | `loadedMapChunks` rises 1→4 then Capture succeeds | Scout path **works** — 1.0.38 scheduling fix is sufficient |
-| `hostOutcome=held`, `loadedMapChunks=0`, ticks ≫ `MaxWaitTicks`, **after** 1.0.38 gates | Rare — reconsider Plan C below |
+| `hostOutcome=held`, `loadedMapChunks=0`, ticks ≫ `MaxWaitTicks`, **after** 1.0.38 gates | Rare — reconsider Plan C hop-unlock pump below |
 
 Telemetry fields `captureRequiresPlayer:false` and `playerAtPickup:true` on stall events document the architectural assumption during playtest.
 
-#### **Chosen branch: scout/host fix — do NOT reintroduce player hops (1.0.38)**
+#### **Chosen branch: scout/host fix — scouts stay primary (1.0.38)**
 
-**Why:**
+**Why not hop-unlock now:**
 
-1. **Architecture already implements the correct workaround** — moving the player would duplicate what KeepLoaded + ForceSend already does, with higher risk (pose drift, look unlock, server position broadcast).
-2. **1.0.37 evidence fits scheduling/saturation**, not player-absence — scouts reached Capture on cold keys without waiting for IO.
-3. **Standing invariant preserved** — no player teleports; exact pickup restore; scout viewers as stream anchors.
+1. **Scouts already implement the correct parallel path** — KeepLoaded + ForceSend at visit cells while player stays at pickup; a hop-unlock only warms one vanilla disk at a time and does not replace 16 parallel workers.
+2. **1.0.37 evidence fits scheduling/saturation**, not player-absence — scouts reached Capture on cold keys without waiting for IO; the fleet thrashed instead of streaming.
+3. **Efficiency** — scouts cover far more ground than hop-sweep; overlay already solved visible teleport / look-glitch with `PinPickupPose` + look lock.
 4. **Fixes already shipped** — `CanEnterCapture`, one cold-near WaitChunks streamer, residency order, `chunkPressure`, stall forensics.
 
-**Do not implement player hops unless** playtest after 1.0.38 shows sustained `hostOutcome=held` + `loadedMapChunks=0` past wait budgets **after** scheduling gates — i.e. scout IO provably cannot resident annulus keys in reasonable time.
+**Do not implement hop-unlock unless** playtest after 1.0.38 shows sustained `hostOutcome=held` + `loadedMapChunks=0` past wait budgets **after** scheduling gates **and** host IO fixes (ForceSend budget, hold drain, capped pending) are exhausted.
 
-#### Plan C — overlay hop rings (fallback only, not 1.0.38)
+#### Plan C — hop-unlock pump (fallback only, not 1.0.38)
 
-If Plan C is ever needed, design from **warm-ring geometry**, not user guesses:
+**Not a sweep replacement.** If Plan C is ever needed, the invisible player move is only a **stream / residency pump** so the scout fleet can keep parallel-capturing; all 16 slots remain primary bakers throughout.
+
+Design from **warm-ring geometry**, not user guesses:
 
 | Parameter | Derivation |
 |-----------|------------|
-| **Hop ring spacing** | `ΔR ≈ f_overlap × R_hold` where `R_hold = SweepBoostViewDistanceBlocks` (750) and `f_overlap ≈ 0.85–0.95` so adjacent warm disks cover the cold annulus without gaps |
-| **First hop center** | Radius `R_hold` from pickup (edge of warm halo) — covers cold-near annulus 750–1024 with one hop at `~750–890` blocks |
-| **Ring count** | `⌈(R_spawn − R_hold) / ΔR⌉` for `R_spawn = SpawnSolidRadiusBlocks` (1024) → often **1 hop** suffices for near annulus; far ring uses existing far scouts |
-| **During hop** | Behind overlay: `ApplyExactPickup` to hop XYZ, **look lock unchanged**, scouts + view boost centered on hop; **no** visible motion |
-| **Restore** | Exact saved pickup XYZ + yaw/pitch via existing `restorePos` / `RestorePlayerPose` |
-| **Reject** | Per-L0 micro-hops (teleport per 64×64 cell), hops before playtest proves scout IO failure |
+| **Unlock point spacing** | `ΔR ≈ f_overlap × R_hold` where `R_hold = SweepBoostViewDistanceBlocks` (750) and `f_overlap ≈ 0.85–0.95` so adjacent warm disks cover the cold annulus without gaps |
+| **First unlock center** | Radius `R_hold` from pickup (edge of warm halo) — e.g. `~750–890` blocks for cold-near annulus 750–1024 |
+| **Unlock count** | `⌈(R_spawn − R_hold) / ΔR⌉` for `R_spawn = SpawnSolidRadiusBlocks` (1024) → often **1 unlock** for near annulus; far ring stays on scout-only streaming |
+| **During unlock** | Behind overlay: invisible `ApplyExactPickup` to unlock XYZ; **look lock unchanged**; **scout fleet unchanged** (all 16 slots parallel); view boost may follow unlock center for vanilla warm disk |
+| **Advance unlock** | When `finished` within unlock disk crosses `⌈N(R_hold)×f_w⌉` or scout `loadedMapChunks` stall persists → next unlock point outward |
+| **Restore** | Exact saved pickup XYZ + yaw/pitch via `restorePos` / `RestorePlayerPose` — same as today |
+| **Reject** | Hop-sweep as main algorithm; per-L0 micro-hops; unlock before scout IO failure is proven; reducing scout concurrency “because player moved” |
 
 Colors + full ~1680 / 4075 disk intent unchanged either branch.
 

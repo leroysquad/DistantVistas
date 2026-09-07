@@ -11,8 +11,11 @@ namespace DistantVistas;
 /// Login visit sweep — gather live season truth at each visited square.
 ///
 /// Purpose (locked): during the HUD overlay, staggered <see cref="LodScoutViewerEntity"/>
-/// workers sit on visit cells as player-style stream/render centers. The real player
-/// never teleports. Near spawn: stream → capture → GetColor → mesh. Far ring: stream →
+/// workers sit on visit cells as player-style stream/render centers — the primary
+/// parallel bake fleet (far more throughput than hop-sweep). The real player stays
+/// at pickup (PinPickupPose + look lock). Optional future hop-unlock is only a cold
+/// stream/residency pump behind the overlay, not a replacement for scouts.
+/// Near spawn: stream → capture → GetColor → mesh. Far ring: stream →
 /// capture → FlagBaked paint, then despawn (meshes fill in under the splash). Canvases
 /// persist to SQLite.
 /// </summary>
