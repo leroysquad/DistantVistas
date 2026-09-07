@@ -39,9 +39,70 @@
 <li><strong>Max vanilla view slider:</strong> 2,048 radius · <strong>4,096 blocks end to end</strong> · <strong>13,176,795 block²</strong></li>
 <li><strong>Hard render cap</strong> (<code>.dvfar</code> command max): 262,144 radius · <strong>524,288 blocks end to end</strong> · <strong>215,888,603,272 block²</strong></li>
 </ul>
-<p>Conversion: <strong>1 mile = 1,609 blocks</strong> · <strong>1 square mile = 2,589,988 block²</strong>.</p>
+<p>Conversion constants (1 block = 1 meter in Vintage Story):</p>
+<ul>
+<li><strong>1 mile = 1,609.344 blocks</strong></li>
+<li><strong>1 square mile = 1,609.344 × 1,609.344 = 2,589,988 block²</strong></li>
+</ul>
 
-<h3>What it does (1.0.32)</h3>
+<h3>How these numbers are calculated (show the math)</h3>
+<p>Every distance below is a <strong>circle on the flat ground</strong> (X/Z plane). The code tests <code>distance² ≤ radius²</code> from spawn (<code>LodLoginSweepBootstrap.cs</code>).</p>
+
+<p><strong>Step 1 — Radius from code (1.0.32 login bake disk)</strong></p>
+<ul>
+<li>Graphics hold during login = <strong>750 blocks</strong> (<code>SweepBoostViewDistanceBlocks</code>)</li>
+<li>Horizon scale = <strong>4.5</strong> (<code>HorizonDrawScale</code>)</li>
+<li>Farseer extra pad = <strong>700 blocks</strong> (<code>FarseerOnsetExtraBlocks</code>)</li>
+<li><strong>Radius = 4.5 × 750 + 700 = 3,375 + 700 = 4,075 blocks</strong> (<code>SweepVisitRadiusBlocks</code> / <code>EmptyCanvasBootstrapRadiusBlocks</code>)</li>
+</ul>
+
+<p><strong>Step 2 — End to end (walk straight across)</strong></p>
+<ul>
+<li><strong>Diameter = 2 × radius = 2 × 4,075 = 8,150 blocks</strong></li>
+<li>That is the answer if someone asks “how many blocks from one side of the bake circle to the other, walking straight.”</li>
+</ul>
+
+<p><strong>Step 3 — Square blocks inside the circle (block²)</strong></p>
+<ul>
+<li>Ground area = <strong>π × radius²</strong></li>
+<li><strong>π × 4,075 × 4,075 = 52,168,110 block²</strong> (52,168,109.5 rounded)</li>
+<li>That is the total flat ground tiles inside the circle, not the walk distance.</li>
+</ul>
+
+<p><strong>Step 4 — Miles (same circle)</strong></p>
+<ul>
+<li>Radius in miles: <strong>4,075 ÷ 1,609.344 = 2.53 miles</strong></li>
+<li>End to end in miles: <strong>8,150 ÷ 1,609.344 = 5.06 miles</strong></li>
+<li>Square blocks in square miles: <strong>52,168,110 ÷ 2,589,988 = 20.1 square miles</strong></li>
+</ul>
+
+<p><strong>Step 5 — L0 bake grid cells in the circle (from code)</strong></p>
+<ul>
+<li>Each L0 section covers <strong>64 × 64 = 4,096 block²</strong> of ground (<code>LodSection.SectionBlocks = 64</code>)</li>
+<li>Section grid radius = <strong>ceil(4,075 ÷ 64) = ceil(63.67) = 64 sections</strong> from center</li>
+<li>Estimated cells in disk = <strong>ceil(π × 64²) = ceil(12,867.96) = 12,868 L0 cells</strong> (<code>EstimateDiskCellCount</code>)</li>
+<li>Scout visit budget (separate cap): <strong>1,680 stops max</strong> (<code>MaxVisitStops</code>) — not every cell is visited.</li>
+</ul>
+
+<p><strong>Worked example — old 1.0.1 disk (the 36,000 number)</strong></p>
+<ul>
+<li>Radius = <strong>36,000 blocks</strong> (old <code>EmptyCanvasBootstrapRadiusBlocks</code>, not lines of code)</li>
+<li>End to end = <strong>2 × 36,000 = 72,000 blocks</strong></li>
+<li>Square blocks inside = <strong>π × 36,000² = 4,071,504,079 block²</strong></li>
+<li>Miles: radius <strong>36,000 ÷ 1,609.344 = 22.37 mi</strong> · end to end <strong>44.74 mi</strong> · area <strong>1,572 sq mi</strong></li>
+</ul>
+
+<p><strong>Code line counts (how counted)</strong></p>
+<ul>
+<li>Run <code>wc -l</code> on every <code>*.cs</code> file under <code>DistantVistas/src/</code> → sum = <strong>30,917 lines</strong> in <strong>89 files</strong></li>
+<li>Same under <code>tests/</code> → <strong>8,846 lines</strong> in <strong>34 files</strong></li>
+<li>Total C# = <strong>30,917 + 8,846 = 39,763 lines</strong> in <strong>123 files</strong></li>
+<li>Shaders: <strong>10</strong> <code>.vsh</code>/<code>.fsh</code> files → <strong>1,282 lines</strong> total</li>
+</ul>
+
+<p><strong>Plain English summary for 1.0.32 login bake:</strong> The overlay bakes a circle around spawn <strong>4,075 blocks</strong> out from the middle. Walk straight across that circle and you cross <strong>8,150 blocks</strong>. The ground inside that circle is about <strong>52 million square blocks (52,168,110 block²)</strong>, or about <strong>20 square miles</strong>. The mod visits up to <strong>1,680</strong> points inside it during the loading screen, not all ~12,868 grid cells.</p>
+
+<h3>World scale — blocks, square blocks, and miles (plain English)</h3>
 <ul>
 <li>Real 3D far terrain from a persistent per-world cache; unlimited render cap with <code>.dvfar 0</code></li>
 <li>Join overlay (singleplayer + Distant Vistas servers): <strong>16 parallel scouts</strong> bake the <strong>4,075-block / 8,150-block-across</strong> disk while you <strong>stay at spawn</strong>; graphics view held at <strong>750 blocks</strong> then restored</li>
