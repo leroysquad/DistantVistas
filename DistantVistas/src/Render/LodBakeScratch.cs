@@ -20,7 +20,11 @@ static class LodBakeScratch
     [ThreadStatic] static bool[]? frostCol;
     [ThreadStatic] static Dictionary<int, int>? texMeanByBlockId;
     [ThreadStatic] static Dictionary<long, int>? getColorByKey;
+    [ThreadStatic] static int getColorCalls;
     [ThreadStatic] static int texMeanScope;
+
+    /// <summary>Scalar GetColor calls this section bake (cache misses only).</summary>
+    public static int SectionGetColorCalls => getColorCalls;
 
     /// <summary>
     /// 8×8 climate tile + block id + Y band. GetColor is stable within a tile for
@@ -73,6 +77,7 @@ static class LodBakeScratch
         texMeanByBlockId.Clear();
         getColorByKey ??= new Dictionary<long, int>(4096);
         getColorByKey.Clear();
+        getColorCalls = 0;
         texMeanScope++;
     }
 
@@ -81,7 +86,10 @@ static class LodBakeScratch
         if (texMeanScope > 0) texMeanScope--;
         texMeanByBlockId?.Clear();
         getColorByKey?.Clear();
+        getColorCalls = 0;
     }
+
+    public static void NoteGetColorCall() => getColorCalls++;
 
     public static bool TryGetSectionGetColor(int blockId, int x, int y, int z, out int rgb)
     {

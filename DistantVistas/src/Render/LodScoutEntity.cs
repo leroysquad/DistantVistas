@@ -3,8 +3,8 @@ namespace DistantVistas;
 /// <summary>
 /// One staggered coverage scout. A real <see cref="LodScoutViewerEntity"/> sits on the
 /// visit cell so Vintage Story has a player-style stream/render center there. The
-/// human player never moves to that cell. Near spawn: stream → capture → paint → mesh.
-/// Far ring: stream → capture → FlagBaked paint, then despawn (mesh fill-in after overlay).
+/// human player never moves to that cell. Stream → capture → release slot; GetColor
+/// paint runs from the shared scoutReady queue. Spawn-solid mesh is gated at overlay end.
 /// </summary>
 public sealed class LodScoutEntity
 {

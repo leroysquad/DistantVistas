@@ -54,6 +54,7 @@ public static class LodScoutSeqDiag
         paintScoutReady = 0;
         lastReleaseMsByKey.Clear();
         lastPhaseLogBySlot.Clear();
+        lastHostUpMsByKey.Clear();
     }
 
     public static void SetOverlayActive(bool active) => overlayActive = active;
@@ -230,6 +231,13 @@ public static class LodScoutSeqDiag
 
     public static void LogHostUp(long key, int cx, int cz, int radius, bool capped, bool pending)
     {
+        long now = NowMs();
+        if (!capped && !pending
+            && lastHostUpMsByKey.TryGetValue(key, out long lastUp)
+            && now - lastUp < 2000)
+            return;
+        lastHostUpMsByKey[key] = now;
+
         Write("LodScoutHostSystem.RequestUp", "scout-host-up",
             "{\"key\":" + key
             + ",\"cx\":" + cx

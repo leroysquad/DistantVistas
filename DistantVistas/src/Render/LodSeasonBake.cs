@@ -182,6 +182,7 @@ public static class LodSeasonBake
         try
         {
             int color = block.GetColor(capi, LodBakeScratch.Pos(x, y, z));
+            LodBakeScratch.NoteGetColorCall();
             if (color != 0)
             {
                 // Pure GetColor. FlagFrost + mesher apply the wash so early-spring
@@ -1037,9 +1038,26 @@ public static class LodSeasonBake
         int maxColumns,
         double maxMs,
         out int nextCol,
-        out bool complete)
+        out bool complete) =>
+        BakeSectionFromVisitChunked(
+            capi, section, sectionKey, plantTintFallback, untintedOf,
+            startCol, maxColumns, maxMs, out nextCol, out complete, out _);
+
+    public static int BakeSectionFromVisitChunked(
+        ICoreClientAPI capi,
+        LodSection section,
+        long sectionKey,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
+        int startCol,
+        int maxColumns,
+        double maxMs,
+        out int nextCol,
+        out bool complete,
+        out int getColorCalls)
     {
         _ = plantTintFallback;
+        getColorCalls = 0;
         nextCol = startCol;
         complete = false;
         if (maxColumns <= 0 || maxMs <= 0) return 0;
@@ -1063,10 +1081,12 @@ public static class LodSeasonBake
         LodBakeScratch.BeginSectionTextureMeans();
         try
         {
-            return BakeSectionFromVisitChunkedBody(
+            int changed = BakeSectionFromVisitChunkedBody(
                 capi, world, section, sectionKey, untintedOf,
                 startCol, maxColumns, cols, mapH, deadline,
                 out nextCol, out complete, ref painted);
+            getColorCalls = LodBakeScratch.SectionGetColorCalls;
+            return changed;
         }
         finally
         {
