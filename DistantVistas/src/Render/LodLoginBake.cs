@@ -37,10 +37,21 @@ public sealed class LodLoginBake
     const int SweepRowsPerCall = 2;
     const int RevealGrowPerTick = 4;
 
+    /// <summary>Near-field disk that must have drawable meshes before overlay Hide.</summary>
+    public const double SpawnSolidRadiusBlocks = 768;
+
+    /// <summary>
+    /// Extra overlay hold after visit drain so spawn holes and a half-empty
+    /// desert are not the login snapshot. 1.0.28 timed out in 3s.
+    /// </summary>
+    public const double SpawnReadyTimeoutSec = 90.0;
+
+    /// <summary>Far canvas is ready at this fraction of Farseer-onset radius.</summary>
+    public const float FarReadyHorizonScale = 0.5f;
+
     const int StabilizeWindowFrames = 90;
     const int StabilizeWindowsRequired = 4;
     const double StabilizeMaxMs = 28.0;
-    const double StabilizeTimeoutSec = 3.0;
     const int MaxDrainTicks = 1800;
     const int DrainStallTicks = 240;
     const int AuditSettleTicks = 4;
@@ -1233,10 +1244,9 @@ public sealed class LodLoginBake
         drainStallTicks = 0;
         lastDrainDirty = -1;
         lastDrainPending = -1;
-        // Splash HUD stays up; let the renderer upload meshes now so play does not
-        // inherit a 200+ renderDirty backlog.
-        renderer.LoginBakeOverlayActive = false;
-        UpdateProgress(Progress, "Updating distant land…", force: true);
+        // Splash stays up. Renderer pumps meshes while LoginBakeOverlayActive;
+        // do not drop the overlay here — that was the 1.0.28 hole snapshot.
+        UpdateProgress(Progress, "Building land around spawn…", force: true);
         AgentReleaseLog("drain-mesh-unlock", "H-A3",
             "\"renderDirty\":" + pipeline.World.RenderDirty.Count
             + ",\"mipDirty\":" + pipeline.World.MipDirty.Count);
@@ -1249,7 +1259,7 @@ public sealed class LodLoginBake
         stabilizeClock.Restart();
         stabilizeWindow.Clear();
         windowMedians.Clear();
-        UpdateProgress(Progress, "Waiting for frame time to settle…", force: true);
+        UpdateProgress(Progress, "Waiting for spawn land to finish…", force: true);
     }
 
     void TickStabilizing(float dt)
@@ -1267,9 +1277,6 @@ public sealed class LodLoginBake
             stabilizeWindow.Clear();
         }
 
-        UpdateProgress(Progress,
-            $"Stabilizing frame time… {windowMedians.Count}/{StabilizeWindowsRequired}");
-
         bool leftover = pipeline.World.RenderDirty.Count > 0
             || pipeline.HasPendingLoginMip
             || pipeline.HasPendingLoginPersistence
@@ -1278,15 +1285,40 @@ public sealed class LodLoginBake
         {
             pipeline.DrainLoginMip(16);
             pipeline.DrainLoginPersistence(8);
+        }
+
+        double ox = restoreCaptured ? restorePos.X : capi.World.Player.Entity.Pos.X;
+        double oz = restoreCaptured ? restorePos.Z : capi.World.Player.Entity.Pos.Z;
+        int spawnMissing = renderer.CountMissingSpawnDrawable(ox, oz, SpawnSolidRadiusBlocks);
+        bool spawnSolid = spawnMissing == 0;
+        double farNeed = LodLoginBakeViewBoost.SweepVisitRadiusBlocks * FarReadyHorizonScale;
+        bool farReady = renderer.FarthestMeshedDistance >= farNeed;
+
+        if (!spawnSolid)
+        {
+            UpdateProgress(Progress,
+                spawnMissing == int.MaxValue
+                    ? "Streaming land around spawn…"
+                    : $"Filling holes around spawn… ({spawnMissing} left)");
+            if (now < SpawnReadyTimeoutSec) return;
+        }
+        else if (!farReady)
+        {
+            UpdateProgress(Progress,
+                $"Loading distant land… ({renderer.FarthestMeshedDistance:0} / {farNeed:0})");
+            if (now < SpawnReadyTimeoutSec) return;
+        }
+        else if (leftover && now < SpawnReadyTimeoutSec)
+        {
             UpdateProgress(Progress,
                 $"Building horizon meshes… ({pipeline.World.RenderDirty.Count} left)");
-            if (now < 20.0) return;
+            return;
         }
 
         bool stable = windowMedians.Count >= StabilizeWindowsRequired
             && windowMedians.All(m => m <= StabilizeMaxMs);
-        bool timedOut = now >= StabilizeTimeoutSec;
-        if (!stable && !timedOut && !leftover) return;
+        if (!stable && now < 8.0 && spawnSolid && farReady && !leftover)
+            return;
 
         Finish();
     }

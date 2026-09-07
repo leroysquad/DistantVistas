@@ -22,6 +22,7 @@ public static class LoginSweepChecks
         SweepResume(c);
         SweepSkipGate(c);
         SweepTiming(c);
+        BootstrapSpawnFirst(c);
         VisitOnsetEnvelope(c);
         CreativeMode(c);
         HudHide(c);
@@ -342,7 +343,15 @@ public static class LoginSweepChecks
         string renderer = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodTerrainRenderer.cs"));
         c.True(renderer.Contains("LoginBakeOverlayActive"),
-            "terrain renderer skips draw while login overlay active");
+            "terrain renderer knows the login overlay is up");
+        c.True(!renderer.Contains("if (LoginBakeOverlayActive || LoginBakeBlocked) return"),
+            "overlay no longer skips the whole render frame (meshes must upload under the splash)");
+        c.True(renderer.Contains("if (LoginBakeBlocked && !LoginBakeOverlayActive) return"),
+            "character-wait still skips GL before the overlay arms");
+        int schedAt = renderer.IndexOf("ScheduleMeshJobs()", StringComparison.Ordinal);
+        int overlayHoldAt = renderer.IndexOf("if (LoginBakeOverlayActive) return", StringComparison.Ordinal);
+        c.True(schedAt >= 0 && overlayHoldAt > schedAt,
+            "overlay hold skips GPU draw only after mesh schedule/upload");
         c.True(renderer.Contains("LodPauseOnStartCompat.KeepUnpaused"),
             "renderer force-unpauses while overlay/blocked so Pause-on-Start cannot freeze bake");
         c.True(renderer.Contains("RemeshStaleLiveTintParent"),
@@ -835,6 +844,14 @@ public static class LoginSweepChecks
             "classify ceiling covers the ~12k L0 onset disk");
         c.Eq(24, LodLoginScoutFill.LocalVisitRevealChunks,
             "scouts stream a local neighbourhood around visit cells");
+        c.Eq(1024, LodLoginSweepBootstrap.SpawnPriorityRadiusBlocks,
+            "bootstrap visits a 1024-block spawn neighbourhood before the rim");
+        c.Eq(768.0, LodLoginBake.SpawnSolidRadiusBlocks,
+            "overlay waits for drawable meshes inside 768 blocks of spawn");
+        c.Eq(90.0, LodLoginBake.SpawnReadyTimeoutSec,
+            "spawn-solid wait is 90s, not a 3s frame-time timeout");
+        c.Eq(0.5f, LodLoginBake.FarReadyHorizonScale,
+            "far canvas is ready at half of Farseer-onset radius");
         c.Eq(180, LodLoginSweepTiming.MinVisitStops, "first-pass floor densifies the disk");
         c.Eq(520, LodLoginSweepTiming.MaxVisitStops, "first-pass ceiling for fast machines");
         c.Eq(36, LodLoginSweepTiming.MinRetryStops, "retry floor stays shorter than first pass");
@@ -877,7 +894,11 @@ public static class LoginSweepChecks
         c.True(bootstrap.Contains("BudgetVisitStops"),
             "bootstrap applies hard visit stop budget");
         c.True(bootstrap.Contains("BudgetBootstrapVisitStops"),
-            "bootstrap uses outer-weighted distance-band subsample");
+            "bootstrap spatially subsamples the onset disk");
+        c.True(bootstrap.Contains("SpawnPriorityRadiusBlocks"),
+            "bootstrap spends visit budget on spawn before the Farseer rim");
+        c.True(bootstrap.Contains("OrderVisitKeysFromCenter"),
+            "bootstrap queues visit keys near-to-far from spawn, not raw key order");
         c.True(bootstrap.Contains("SelectLandVisitCells"),
             "bootstrap full-visits land and coastline ocean");
         c.True(bootstrap.Contains("PickOceanSampleCells"),
@@ -897,6 +918,17 @@ public static class LoginSweepChecks
 
         string bake = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
+        c.True(bake.Contains("CountMissingSpawnDrawable"),
+            "login overlay waits until spawn-local L0 has drawable meshes");
+        c.True(bake.Contains("SpawnReadyTimeoutSec"),
+            "login overlay does not treat a 3s frame-time settle as complete");
+        c.True(!bake.Contains("StabilizeTimeoutSec = 3.0"),
+            "3s stabilize timeout is gone -- that was the early snapshot");
+        int drainAt = bake.IndexOf("void BeginDraining()", StringComparison.Ordinal);
+        int stabAt = bake.IndexOf("void BeginStabilizing()", drainAt, StringComparison.Ordinal);
+        c.True(drainAt >= 0 && stabAt > drainAt, "BeginDraining bounds");
+        c.True(!bake.Substring(drainAt, stabAt - drainAt).Contains("LoginBakeOverlayActive = false"),
+            "drain keeps the splash up while meshes upload");
         c.True(bake.Contains("PlanBootstrap"),
             "login bake plans first sweep with bootstrap spawn disk");
         c.True(bake.Contains("StampOpenOceanFromSamples"),
@@ -915,6 +947,48 @@ public static class LoginSweepChecks
             "login bake progress includes ETA suffix");
         c.True(bake.Contains("LodLoginSweepTimingStore.EnsureApplied"),
             "login bake seeds ETA from this PC before planning");
+    }
+
+    static void BootstrapSpawnFirst(Check c)
+    {
+        const int cx = 50;
+        const int cz = 50;
+        var keys = new List<long>();
+        for (int sz = 20; sz <= 80; sz += 2)
+        {
+            for (int sx = 20; sx <= 80; sx += 2)
+                keys.Add(LodWorld.SectionKey(0, sx, sz));
+        }
+
+        List<long> picked = LodLoginSweepBootstrap.BudgetBootstrapVisitStops(keys, cx, cz, 80);
+        c.Eq(80, picked.Count, "bootstrap still respects the visit-stop budget");
+        c.True(picked.Contains(LodWorld.SectionKey(0, cx, cz)),
+            "spawn L0 is in the visit list so coverage is centered on the player");
+
+        long first = picked[0];
+        long last = picked[picked.Count - 1];
+        long firstD = DistSq(first, cx, cz);
+        long lastD = DistSq(last, cx, cz);
+        c.True(firstD <= lastD,
+            "visit queue is near-to-far from spawn, not raw key order (that offset the disk)");
+
+        int innerCells = (int)Math.Ceiling(
+            LodLoginSweepBootstrap.SpawnPriorityRadiusBlocks / (double)LodSection.SectionBlocks);
+        long innerRsq = (long)innerCells * innerCells;
+        int innerPicked = 0;
+        foreach (long key in picked)
+        {
+            if (DistSq(key, cx, cz) <= innerRsq) innerPicked++;
+        }
+        c.True(innerPicked >= 20,
+            "a chunk of the visit budget stays in the spawn neighbourhood");
+    }
+
+    static long DistSq(long key, int centerSx, int centerSz)
+    {
+        int dx = LodWorld.KeySx(key) - centerSx;
+        int dz = LodWorld.KeySz(key) - centerSz;
+        return (long)dx * dx + (long)dz * dz;
     }
 
     static void VisitOnsetEnvelope(Check c)

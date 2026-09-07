@@ -76,12 +76,12 @@ void main()
     // Slate ColorTint as atmosphere, not terrain paint. Cap below stock 0.4 bleach.
     terraColor.rgb = mix(terraColor.rgb, colorTint.rgb, min(colorTint.a, 0.28));
     terraColor.rgb *= bias(clamp(sunColor * dayLight, 0.0, 1.0), lightLevelBias);
-    // Grayish smoke silhouette (1.0.25): more gray near/low rim, only a little
-    // black toward the far/top. Soft haze, not a hard ink wall.
+    // Grayish smoke silhouette (1.0.25): gray tent body, black tips. 1.0.30:
+    // less low-ground smoke so near terrain is not a white blob.
     vec3 smokeGray = mix(rgbaFog.rgb, vec3(0.62, 0.64, 0.67), 0.55);
     float height01 = clamp((yLevel - float(seaLevel)) / 90.0, 0.0, 1.0);
     float nearRim = 1.0 - smoothstep(0.35, 0.85, dist);
-    float smokeAmt = clamp(0.22 + nearRim * 0.38 + (1.0 - height01) * 0.20, 0.0, 0.72);
+    float smokeAmt = clamp(0.18 + nearRim * 0.28 + (1.0 - height01) * 0.06, 0.0, 0.55);
     // 1.0.28: extra ridge/far-tip ink so the skyline reads against sky.
     float inkAmt = clamp(
         smoothstep(0.62, 1.0, dist) * 0.16 * height01

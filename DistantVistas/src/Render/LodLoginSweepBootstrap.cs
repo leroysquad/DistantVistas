@@ -70,7 +70,7 @@ public static class LodLoginSweepBootstrap
 
     /// <summary>
     /// Hard cap on bootstrap visit stops at this PC's measured stop rate.
-    /// Spatial subsample uses <see cref="BudgetBootstrapVisitStops"/> (outer-weighted bands).
+    /// Spatial subsample uses <see cref="BudgetBootstrapVisitStops"/> (spawn first, then rim).
     /// </summary>
     public static int BootstrapMaxVisitStops =>
         LodLoginSweepTiming.BootstrapCellBudget(LodLoginSweepTiming.MachineSecPerStop);
@@ -81,6 +81,12 @@ public static class LodLoginSweepBootstrap
     /// </summary>
     public static int RevisitMaxVisitStops =>
         LodLoginSweepTiming.RevisitCellBudget(LodLoginSweepTiming.MachineSecPerStop);
+
+    /// <summary>
+    /// Spawn neighbourhood visited first so FlagBaked land is centered on the
+    /// player (1.0.28 playtest showed an offset rim with holes underfoot).
+    /// </summary>
+    public const int SpawnPriorityRadiusBlocks = 1024;
 
     /// <summary>Shorter miss-retry hop so the overlay does not run the first pass twice.</summary>
     public static int RetryMaxVisitStops =>
@@ -470,7 +476,7 @@ public static class LodLoginSweepBootstrap
 
         LogOceanPlan(capi, openOceanNeeding.Count, oceanSamples.Count, openOceanFill.Count, landBudgeted.Count);
         LogBudget(capi, plannedForLabel, landBudgeted.Count);
-        visitKeys.Sort();
+        OrderVisitKeysFromCenter(visitKeys, centerSx, centerSz);
 
         return new LodLoginSweepPlan(
             mode,
@@ -586,9 +592,9 @@ public static class LodLoginSweepBootstrap
     }
 
     /// <summary>
-    /// First-join bootstrap subsample across the Farseer-onset disk. Linear distance picks
-    /// (see <see cref="BudgetVisitStops"/>) left ~1 stop per long outer arc. Outer-weighted
-    /// distance bands put more visits on the horizon ring so FlagBaked land meets Farseer.
+    /// First-join bootstrap subsample across the Farseer-onset disk. Spawn
+    /// neighbourhood is filled first so land is centered on the player; remaining
+    /// stops go to outer bands so FlagBaked land still meets Farseer.
     /// </summary>
     internal static List<long> BudgetBootstrapVisitStops(
         List<long> keys,
@@ -596,18 +602,65 @@ public static class LodLoginSweepBootstrap
         int centerSz,
         int max)
     {
-        if (keys.Count <= max) return keys;
+        if (keys.Count <= max)
+            return OrderVisitKeysFromCenter(keys, centerSx, centerSz);
 
+        OrderVisitKeysFromCenter(keys, centerSx, centerSz);
+
+        int innerCells = Math.Max(1,
+            (int)Math.Ceiling(SpawnPriorityRadiusBlocks / (double)LodSection.SectionBlocks));
+        long innerRsq = (long)innerCells * innerCells;
+        var inner = new List<long>();
+        var outer = new List<long>();
+        for (int i = 0; i < keys.Count; i++)
+        {
+            long key = keys[i];
+            if (DistSq(key, centerSx, centerSz) <= innerRsq) inner.Add(key);
+            else outer.Add(key);
+        }
+
+        int innerTake = Math.Min(inner.Count, Math.Max(max / 3, 64));
+        innerTake = Math.Min(innerTake, max);
+        var result = new List<long>(max);
+        var used = new HashSet<long>();
+        for (int i = 0; i < innerTake; i++)
+        {
+            used.Add(inner[i]);
+            result.Add(inner[i]);
+        }
+
+        int remain = max - result.Count;
+        if (remain > 0 && outer.Count > 0)
+        {
+            List<long> rim = SampleDistanceBands(outer, remain, used);
+            result.AddRange(rim);
+        }
+
+        for (int i = innerTake; result.Count < max && i < inner.Count; i++)
+        {
+            if (used.Add(inner[i]))
+                result.Add(inner[i]);
+        }
+
+        return OrderVisitKeysFromCenter(result, centerSx, centerSz);
+    }
+
+    internal static List<long> OrderVisitKeysFromCenter(List<long> keys, int centerSx, int centerSz)
+    {
         keys.Sort((a, b) =>
         {
-            long da = DistSq(a, centerSx, centerSz);
-            long db = DistSq(b, centerSx, centerSz);
-            return da.CompareTo(db);
+            int cmp = DistSq(a, centerSx, centerSz).CompareTo(DistSq(b, centerSx, centerSz));
+            return cmp != 0 ? cmp : a.CompareTo(b);
         });
+        return keys;
+    }
+
+    static List<long> SampleDistanceBands(List<long> keys, int max, HashSet<long> used)
+    {
+        if (keys.Count == 0 || max <= 0) return new List<long>();
 
         int bands = Math.Clamp(max / 5, 10, 18);
         var result = new List<long>(max);
-        var used = new HashSet<long>();
         int weightSum = bands * (bands + 1) / 2;
 
         for (int b = 0; b < bands && result.Count < max; b++)
@@ -638,7 +691,7 @@ public static class LodLoginSweepBootstrap
         {
             int idx = max == 1
                 ? 0
-                : (int)((long)i * (keys.Count - 1) / (max - 1));
+                : (int)((long)i * (keys.Count - 1) / Math.Max(1, max - 1));
             if (used.Add(keys[idx]))
                 result.Add(keys[idx]);
         }

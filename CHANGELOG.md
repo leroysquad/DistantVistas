@@ -1,3 +1,11 @@
+## 1.0.30
+- **Login snapshot waits for a solid, centered world.** 1.0.28 playtest (up close): desert LOD with dark oval holes, land offset beside spawn, and a dense white/yellow smoke blob on the near ground — overlay had dropped before meshes finished.
+- Overlay splash stays up until spawn-local L0 (768 blocks) has drawable meshes and far meshes reach half of Farseer onset (~2038 of 4075). Mesh schedule/upload runs under the splash (previously the whole render frame was skipped). 3s frame-time timeout is gone; hold up to 90s after drain.
+- Visit queue is **spawn-first**, then the rim, ordered near-to-far. Raw key sort was painting a disk beside the player. Player still stays at spawn (scout workers). 1.0.29 +700 / 4075 disk goal kept.
+- **Less near-ground smoke.** Farseer gray tent + black tips stay; low-ground LOD mist and low Farseer smoke are thinner so they do not wash terrain up close.
+- Drop `distantvistas_1.0.30.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+- **Verify:** after overlay, no dark holes underfoot; land centered on spawn; Farseer gray/black silhouette visible in the distance; no thick white blob on near desert. Player not hopped.
+
 ## 1.0.29
 - **Coverage size only. Farseer look is still 1.0.28.** "Black" means the liked Farseer silhouette — gray tent/smoke body with **black mountain tips** — not a void, not a sky fill, not flattening land into empty black. `farseer-region.fsh` / `region.fsh` / `lodterrain.fsh` are unchanged from 1.0.28.
 - **Bigger FlagBaked disk, to that silhouette.** Login coverage was a thin ring: bootstrap planned a 288 km sparse subsample, and `SetChunkColumnVisible` was clamped to the 750-block graphics hold (~768 blocks). Spawn-centered stream now matches Farseer onset at the login hold: **4.5 × 750 + 700 = 4075 blocks**, so silhouettes sit farther behind FlagBaked land. Scouts stay local around visit cells (player stays at spawn); they do not grow a second disk past the skyline into empty sky.

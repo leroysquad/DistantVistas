@@ -2,11 +2,11 @@
     "type":  "code",
     "modid":  "distantvistas",
     "name":  "Distant Vistas",
-    "version":  "1.0.29",
+    "version":  "1.0.30",
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.29. FlagBaked disk to Farseer gray tent + black tips (onset + 700). 1.0.28 look kept. Vintage Horizons fork.",
+    "description":  "Official 1.0.30. Login holds until spawn is solid and centered; less near-ground smoke. Farseer gray tent + black tips. Vintage Horizons fork.",
     "authors":  [
                     "IllLeroySquad"
                 ],

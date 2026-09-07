@@ -178,8 +178,34 @@ public class LodTerrainRenderer : IRenderer
         }
     }
 
-    /// <summary>Login visit sweep overlay is up — skip LOD draws so teleports cannot flash sky/terrain through.</summary>
+    /// <summary>Login visit sweep overlay is up — skip GPU draw, still upload meshes.</summary>
     public bool LoginBakeOverlayActive { get; set; }
+
+    public double FarthestMeshedDistance => farthestMeshedDistance;
+    public double FarthestCapturedDistance => farthestCapturedDistance;
+
+    /// <summary>
+    /// L0 sections inside <paramref name="radiusBlocks"/> of origin that still
+    /// lack a drawable mesh (holes). <see cref="int.MaxValue"/> if none captured yet.
+    /// </summary>
+    public int CountMissingSpawnDrawable(double originX, double originZ, double radiusBlocks)
+    {
+        double rsq = radiusBlocks * radiusBlocks;
+        int resident = 0;
+        int missing = 0;
+        int fp = LodSection.SectionBlocks;
+        foreach (long key in world.HasDataSet)
+        {
+            if (LodWorld.KeyLevel(key) != 0) continue;
+            double dx = LodWorld.KeySx(key) * (double)fp + fp * 0.5 - originX;
+            double dz = LodWorld.KeySz(key) * (double)fp + fp * 0.5 - originZ;
+            if (dx * dx + dz * dz > rsq) continue;
+            resident++;
+            if (!HasDrawableMesh(key))
+                missing++;
+        }
+        return resident == 0 ? int.MaxValue : missing;
+    }
 
     /// <summary>
     /// Skip terrain GL until the join present is safe (atlas compose + character UI).
@@ -2713,7 +2739,7 @@ public class LodTerrainRenderer : IRenderer
         // by clearing pause on the render path (Esc cancel still owned by overlay).
         if ((LoginBakeOverlayActive || LoginBakeBlocked) && capi.IsGamePaused)
             LodPauseOnStartCompat.KeepUnpaused(capi);
-        if (LoginBakeOverlayActive || LoginBakeBlocked) return;
+        if (LoginBakeBlocked && !LoginBakeOverlayActive) return;
 
         playFrameCount++;
         if (!LodJoinQuiet.SuppressVaoDrain) postQuietFrames++;
@@ -2854,10 +2880,13 @@ public class LodTerrainRenderer : IRenderer
 
         UploadFinishedMeshes();
         // Pressure-only: idle turning with a fat cache must not punch mid-land holes.
-        if (MeshPressureActive)
+        // Do not evict under the login splash — that reopened spawn holes.
+        if (MeshPressureActive && !LoginBakeOverlayActive)
             EvictStaleMeshes();
         if (!LoginBakeComplete)
             RefreshSeasonalState();
+
+        if (LoginBakeOverlayActive) return;
 
         if (drawList.Count == 0)
         {
