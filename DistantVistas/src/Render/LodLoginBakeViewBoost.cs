@@ -6,9 +6,10 @@ using Vintagestory.API.MathTools;
 namespace DistantVistas;
 
 /// <summary>
-/// Holds vanilla graphics view at 750 for the login visit scan and bake, then
-/// writes back the slider the player had before Distant Vistas touched it.
-/// Never holds 1000. Never restores 750, leftover 1000, or a maxed ~1536/1500 as original.
+/// Overlay writes vanilla view to the spawn-solid stream disk (1024), then restores
+/// the player's slider. Visit / Farseer math stays on the 750 onset baseline so the
+/// FlagBaked disk remains 4075. Never holds 1000. Never restores 750, 1024, leftover
+/// 1000, or a maxed ~1536/1500 as original.
 /// </summary>
 public sealed class LodLoginBakeViewBoost
 {
@@ -19,11 +20,17 @@ public sealed class LodLoginBakeViewBoost
     public const int SweepMinViewDistanceBlocks = 256;
 
     /// <summary>
-    /// Login visit holds vanilla graphics view at this distance (blocks), then restores
-    /// the player's slider. Must write <c>ClientSettings.viewDistance</c> — DesiredViewDistance
-    /// alone is overwritten from the slider every RequestMode.
+    /// Farseer / visit-disk baseline (blocks). <c>4.5 × 750 + 700 = 4075</c>.
+    /// Not the vanilla stream radius — see <see cref="SweepStreamViewDistanceBlocks"/>.
     /// </summary>
     public const int SweepBoostViewDistanceBlocks = 750;
+
+    /// <summary>
+    /// Vanilla graphics / LastApproved view during overlay: spawn-solid radius so
+    /// map chunks at the 750–1024 cliff stay resident. Client culls ForceSend
+    /// columns outside this disk around the real player (still at pickup).
+    /// </summary>
+    public const int SweepStreamViewDistanceBlocks = 1024;
 
     /// <summary>Old overlay hold. Never write this. Never treat it as the player's slider.</summary>
     public const int LegacySweepHoldBlocks = 1000;
@@ -68,15 +75,15 @@ public sealed class LodLoginBakeViewBoost
 
     /// <summary>
     /// Vanilla SetChunkColumnVisible around the real player during overlay.
-    /// The 750-hold disk keeps spawn-local chunks solid. The FlagBaked 4075 disk
-    /// is scout visit coverage, not a 4 km tessellation storm.
+    /// Covers the spawn-solid 1024 disk so cliff L0s are not view-culled.
+    /// The FlagBaked 4075 disk is scout visit coverage, not a 4 km tessellation storm.
     /// </summary>
     public int SpawnStreamRadiusChunks
     {
         get
         {
             int cs = GlobalConstants.ChunkSize;
-            return Math.Max(4, (int)Math.Ceiling(SweepBoostViewDistanceBlocks / (double)cs) + 2);
+            return Math.Max(4, (int)Math.Ceiling(SweepStreamViewDistanceBlocks / (double)cs) + 2);
         }
     }
 
@@ -100,9 +107,11 @@ public sealed class LodLoginBakeViewBoost
         }
     }
 
-    /// <summary>750 (this hold) or 1000 (old hold). Not a value we may restore as original.</summary>
+    /// <summary>750 visit baseline, 1024 stream hold, or 1000 leftover. Never restore as original.</summary>
     public static bool IsSweepHoldValue(int blocks) =>
-        blocks == SweepBoostViewDistanceBlocks || blocks == LegacySweepHoldBlocks;
+        blocks == SweepBoostViewDistanceBlocks
+        || blocks == SweepStreamViewDistanceBlocks
+        || blocks == LegacySweepHoldBlocks;
 
     /// <summary>
     /// A graphics slider the player actually set. Scan hold (750), old hold (1000),
@@ -398,7 +407,9 @@ public sealed class LodLoginBakeViewBoost
 
     static void WriteClientViewDistance(ICoreClientAPI capi, int blocks)
     {
-        if (IsSweepHoldValue(blocks) && blocks != SweepBoostViewDistanceBlocks)
+        if (IsSweepHoldValue(blocks)
+            && blocks != SweepBoostViewDistanceBlocks
+            && blocks != SweepStreamViewDistanceBlocks)
             return;
         try
         {
@@ -421,7 +432,8 @@ public sealed class LodLoginBakeViewBoost
                 + ",\"desired\":" + desired
                 + ",\"approved\":" + approved
                 + ",\"armed\":" + (armed ? "true" : "false")
-                + ",\"hold\":" + SweepBoostViewDistanceBlocks
+                + ",\"hold\":" + SweepStreamViewDistanceBlocks
+                + ",\"visitHold\":" + SweepBoostViewDistanceBlocks
                 + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
         }
         catch { }
@@ -430,6 +442,6 @@ public sealed class LodLoginBakeViewBoost
     internal static int ResolveBoostViewDistance(IWorldPlayerData data)
     {
         _ = data;
-        return GameMath.Clamp(SweepBoostViewDistanceBlocks, SweepMinViewDistanceBlocks, MaxVanillaViewDistance);
+        return GameMath.Clamp(SweepStreamViewDistanceBlocks, SweepMinViewDistanceBlocks, MaxVanillaViewDistance);
     }
 }

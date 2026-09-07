@@ -538,6 +538,41 @@ Colors + full ~1680 / 4075 disk intent unchanged either branch.
 | `captureLive` | 0 | **>0** |
 | `finished` | 358 stall | **>358 climbing** |
 
+## 1.0.43 stream spawn-solid 1024 (1.0.42 playtest failed — hop RequestUp still loaded=0)
+
+**Playtest (runId 1041 / 1.0.42 mechanism):** Annulus hops reached visit XYZ; `loadedMapChunks` stayed **0**. 1.0.42 added scout-host `RequestUp` on a new pump key. That path cannot work as written:
+
+| Layer | What the code actually does | Why residency stays 0 |
+|-------|-----------------------------|------------------------|
+| Vanilla stream | Overlay writes view **750** around the **real IPlayer at pickup** | Client **culls** columns beyond 750; 750–1024 cliff L0s never stay in `GetMapChunk` |
+| Server player | Client hop writes Pos/ServerPos **locally only** | WorldManager still gens around pickup |
+| `LockPlayerCamera` | Every tick sets `CameraPos` back to **pickup** | Stream/render center never follows the hop |
+| Hold cap | `MaxConcurrentHolds=16` already filled by 16 scouts | Pump `RequestUp` is the **17th** hold → `capped/pending`, **never KeepLoaded** |
+| Telemetry | Server `LogHostUp(capped)` writes a Windows client path | Playtest log never shows the cap — looks like RequestUp “ran” |
+
+Hopping the player cannot clear this cliff. Scout KeepLoaded already ran on 16 keys; the client threw those columns away.
+
+### Shipped
+
+| Fix | Mechanism |
+|-----|-----------|
+| **Stream VD = 1024** | Overlay `ClientSettings.viewDistance` + Desired + LastApproved = **spawn-solid**. Visit/Farseer math stays **750 → 4075** |
+| **1024 is a hold value** | Never restore 1024 as the player's slider (same class as 750/1000) |
+| **Hold cap 18** | 16 scouts + residency pump + spare |
+| **Priority RequestUp** | If still at cap, evict farthest hold instead of queueing forever |
+| **Camera follows hop** | `CameraPos` at unlock XYZ; look yaw/pitch stay pickup; restore at overlay end |
+| **Cold-near WaitChunks = 4** | Annulus can actually load now; one streamer was starving Capture |
+| **Telemetry** | `streamViewBlocks`, `playerX/Z`, `cameraX/Z`, `priority` on host-up (runId **1043**) |
+
+**Expect after 1.0.43:**
+
+| Signal | 1041/1042 | Target |
+|--------|-----------|--------|
+| Overlay view | 750 | **1024** then restore |
+| `residencyLoaded` / scout Capture | 0 / `captureLive=0` | **≥1** / `captureLive>0` |
+| `finished` | 358 stall | **>358 climbing** (toward ~804 at 1024) |
+| `scout-host-up` `capped` | silent | rare; `priority:true` for pump |
+
 ## Plan B — soft-release threshold (geometry, not ~600)
 
 **User clarification:** a ~600 `finished` cutoff is **not hard**. Derive release timing from **warm-ring / residency geometry** (same model as the ~358 cliff), not a magic constant.

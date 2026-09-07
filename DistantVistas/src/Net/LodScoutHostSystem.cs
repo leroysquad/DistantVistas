@@ -29,7 +29,8 @@ public sealed class LodScoutHostSystem : ModSystem
     public static LodScoutHostSystem? ClientInstance { get; private set; }
 
     /// <summary>Client MaxConcurrent. Far KeepLoaded spam is refused past this.</summary>
-    public const int MaxConcurrentHolds = 16;
+    /// <summary>16 scouts + residency pump + spare so hop/unlock is not refused as the 17th hold.</summary>
+    public const int MaxConcurrentHolds = 18;
     /// <summary>KeepLoaded Chebyshev radius. Near scouts use this; far scouts send less.</summary>
     public const int MaxHoldRadiusChunks = 4;
     /// <summary>OnLoaded ForceSend budget so 16 scouts do not dump hundreds of columns in one tick.</summary>
@@ -88,7 +89,9 @@ public sealed class LodScoutHostSystem : ModSystem
 
     public bool ChannelConnected => clientChannel != null && clientChannel.Connected;
 
-    public void RequestUp(long key, int cx, int cz, int radius, int dimension, double x, double y, double z)
+    public void RequestUp(
+        long key, int cx, int cz, int radius, int dimension, double x, double y, double z,
+        bool priority = false)
     {
         if (clientChannel == null || !clientChannel.Connected) return;
         try
@@ -103,8 +106,9 @@ public sealed class LodScoutHostSystem : ModSystem
                 X = x,
                 Y = y,
                 Z = z,
+                Priority = priority,
             });
-            LodScoutSeqDiag.LogHostUp(key, cx, cz, radius, capped: false, pending: false);
+            LodScoutSeqDiag.LogHostUp(key, cx, cz, radius, capped: false, pending: false, priority: priority);
         }
         catch { }
     }
@@ -179,9 +183,14 @@ public sealed class LodScoutHostSystem : ModSystem
 
         if (holds.Count >= MaxConcurrentHolds && !holds.ContainsKey(msg.Key))
         {
-            EnqueuePendingUp(player.PlayerUID, msg);
-            LodScoutSeqDiag.LogHostUp(msg.Key, msg.Cx, msg.Cz, radius, capped: true, pending: true);
-            return;
+            if (msg.Priority)
+                TryEvictFarthestHold(player, holds);
+            if (holds.Count >= MaxConcurrentHolds && !holds.ContainsKey(msg.Key))
+            {
+                EnqueuePendingUp(player.PlayerUID, msg);
+                LodScoutSeqDiag.LogHostUp(msg.Key, msg.Cx, msg.Cz, radius, capped: true, pending: true, priority: msg.Priority);
+                return;
+            }
         }
 
         var hold = new ScoutHold { Key = msg.Key, Cx = msg.Cx, Cz = msg.Cz, Radius = radius, Dimension = dim };
@@ -228,6 +237,35 @@ public sealed class LodScoutHostSystem : ModSystem
                 });
             }
         }
+    }
+
+    void TryEvictFarthestHold(IServerPlayer player, Dictionary<long, ScoutHold> holds)
+    {
+        if (holds.Count == 0) return;
+        int pcx = 0;
+        int pcz = 0;
+        try
+        {
+            EntityPos pos = player.Entity.Pos;
+            pcx = (int)Math.Floor(pos.X / GlobalConstants.ChunkSize);
+            pcz = (int)Math.Floor(pos.Z / GlobalConstants.ChunkSize);
+        }
+        catch { return; }
+
+        long worstKey = 0;
+        int worstChebyshev = -1;
+        foreach (KeyValuePair<long, ScoutHold> kv in holds)
+        {
+            int chebyshev = Math.Max(Math.Abs(kv.Value.Cx - pcx), Math.Abs(kv.Value.Cz - pcz));
+            if (chebyshev > worstChebyshev)
+            {
+                worstChebyshev = chebyshev;
+                worstKey = kv.Key;
+            }
+        }
+
+        if (worstKey != 0)
+            DropAnchor(player, worstKey);
     }
 
     void DropAnchor(IServerPlayer player, long key)

@@ -222,7 +222,7 @@ public sealed class LodLoginHopUnlock
         int cx = (int)Math.Floor(X / GlobalConstants.ChunkSize);
         int cz = (int)Math.Floor(Z / GlobalConstants.ChunkSize);
         LodScoutHostSystem.ClientInstance?.RequestUp(
-            pumpAnchorKey, cx, cz, UnlockHoldRadiusChunks, dim, X, Y, Z);
+            pumpAnchorKey, cx, cz, UnlockHoldRadiusChunks, dim, X, Y, Z, priority: true);
 
         LastResidencyLoaded = ReadTargetLoaded(capi);
     }
@@ -235,10 +235,17 @@ public sealed class LodLoginHopUnlock
         int captureLive)
     {
         if (!Active || TargetKey == 0) return;
+        EntityPlayer? entity = capi.World.Player.Entity;
+        double playerX = entity?.Pos.X ?? 0;
+        double playerZ = entity?.Pos.Z ?? 0;
+        double cameraX = entity?.CameraPos.X ?? 0;
+        double cameraZ = entity?.CameraPos.Z ?? 0;
         LodScoutSeqDiag.MaybeHopResidencyProbe(
             Ring, TargetKey, pumpAnchorKey, TicksAtPoint, finished, paintStarveTicks,
             waitChunksLive, captureLive, LastResidencyLoaded, X, Y, Z,
-            LodScoutHostSystem.ClientInstance?.ChannelConnected ?? false);
+            LodScoutHostSystem.ClientInstance?.ChannelConnected ?? false,
+            playerX, playerZ, cameraX, cameraZ,
+            LodLoginBakeViewBoost.SweepStreamViewDistanceBlocks);
     }
 
     public void TickAtPoint()

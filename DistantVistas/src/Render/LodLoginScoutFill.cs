@@ -45,8 +45,8 @@ public sealed class LodLoginScoutFill
     public const int MapChunksPerL0 = 4;
     /// <summary>Max scouts on cold-near annulus keys while paint starves (half the fleet).</summary>
     public static int MaxColdNearLiveWhenStarving(int maxConcurrent) => maxConcurrent / 2;
-    /// <summary>While paint starves, only one cold-near scout may stream map chunks at a time.</summary>
-    public const int MaxColdNearWaitChunksWhenStarving = 1;
+    /// <summary>While paint starves, several cold-near scouts may stream now that spawn-solid is inside vanilla VD.</summary>
+    public const int MaxColdNearWaitChunksWhenStarving = 4;
     public const int ChunkVisibleRadius = 2;
     public const int SweepRadiusChunks = 2;
     public const int SweepRowsPerCall = 1;

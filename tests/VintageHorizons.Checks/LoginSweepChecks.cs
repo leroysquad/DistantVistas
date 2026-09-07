@@ -512,7 +512,7 @@ public static class LoginSweepChecks
         c.True(bake.Contains("GrowRevealAroundSpawn()"),
             "login bake grows a spawn-centered vanilla stream for spawn-solid land");
         c.True(bake.Contains("viewBoost.SpawnStreamRadiusChunks"),
-            "spawn vanilla stream stays at the 750-hold, not a 4 km tessellation disk");
+            "spawn vanilla stream is the spawn-solid disk, not a 4 km tessellation");
         c.True(bake.Contains("SweepColumnsAroundSpawn()"),
             "login bake captures loaded columns across the onset disk, not only the current stop");
         c.True(bake.Contains("SpawnSweepEveryTicks"),
@@ -763,8 +763,18 @@ public static class LoginSweepChecks
             "walltime plan documents 1.0.41 annulus fix");
         c.True(File.ReadAllText(Path.Combine(
                 GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
-                .Contains("1.0.42 force residency"),
-            "walltime plan documents 1.0.42 forced residency fix");
+                .Contains("1.0.43 stream spawn-solid"),
+            "walltime plan documents 1.0.43 stream-1024 residency fix");
+        c.Eq(1024, LodLoginBakeViewBoost.SweepStreamViewDistanceBlocks,
+            "overlay vanilla stream covers spawn-solid so cliff L0s stay resident");
+        c.True(LodLoginBakeViewBoost.IsSweepHoldValue(1024),
+            "1024 stream hold is never restored as the player slider");
+        c.True(bake.Contains("hopCameraPos"),
+            "hop CameraPos follows unlock so client stream is not pinned at pickup");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
+                .Contains("priority: true"),
+            "unlock RequestUp is priority so it is not the refused 17th hold");
         c.Eq(48, LodLoginHopUnlock.FailedKeyDwellTicks,
             "failed hop targets banned after dwell ticks");
         c.True(File.ReadAllText(Path.Combine(
@@ -781,14 +791,14 @@ public static class LoginSweepChecks
             "hop holds unlock up to 128 ticks while forcing residency");
         c.True(File.ReadAllText(Path.Combine(
                 GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
-                .Contains("hop-residency-probe"),
-            "hop residency probe telemetry for runId 1042 playtest");
+                .Contains("streamViewBlocks"),
+            "hop residency probe logs overlay stream VD vs player/camera");
         c.True(File.ReadAllText(Path.Combine(
                 GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
                 .Contains("hop-unlock"),
             "hop-unlock telemetry for runId 1039 playtest");
-        c.Eq(1, LodLoginScoutFill.MaxColdNearWaitChunksWhenStarving,
-            "one cold-near WaitChunks streamer while paint starves");
+        c.Eq(4, LodLoginScoutFill.MaxColdNearWaitChunksWhenStarving,
+            "several cold-near WaitChunks streamers now that spawn-solid is inside vanilla VD");
         c.True(scoutFill.Contains("PendingPickScore"),
             "pending pick scores chunk residency before cold rim keys");
         c.True(scoutFill.Contains("spawnCooldown"),
@@ -844,8 +854,8 @@ public static class LoginSweepChecks
             "far KeepLoaded is the L0 footprint, not an 8-chunk tessellation disk");
         c.Eq(LodLoginScoutFill.NearRevealChunks, LodScoutHostSystem.MaxHoldRadiusChunks,
             "server KeepLoaded radius matches the near scout neighbourhood");
-        c.Eq(16, LodScoutHostSystem.MaxConcurrentHolds,
-            "server hold cap matches 16 parallel client scouts");
+        c.Eq(18, LodScoutHostSystem.MaxConcurrentHolds,
+            "server hold cap is 16 scouts plus residency pump plus spare");
         c.Eq(48, LodScoutHostSystem.MaxForceSendPerTick,
             "ForceSend is budgeted so 16 KeepLoaded rings do not dump in one tick");
         c.Eq(32, LodScoutHostSystem.MaxPendingUps,
@@ -902,6 +912,8 @@ public static class LoginSweepChecks
             "server rejects KeepLoaded anchors beyond the onset disk");
         c.True(scoutHost.Contains("holds.Count >= MaxConcurrentHolds"),
             "server caps concurrent scout holds so a client cannot pin the world");
+        c.True(scoutHost.Contains("TryEvictFarthestHold"),
+            "priority RequestUp evicts a far hold instead of queueing forever at cap");
         c.True(scoutHost.Contains("EnqueuePendingUp"),
             "server queues extra Ups instead of dropping them at the hold cap");
         c.True(scoutHost.Contains("MaxForceSendPerTick"),
@@ -1272,7 +1284,9 @@ public static class LoginSweepChecks
         string view = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeViewBoost.cs"));
         c.True(view.Contains("SweepBoostViewDistanceBlocks = 750"),
-            "login visit holds graphics view at 750 blocks");
+            "login visit Farseer/visit baseline stays 750 blocks");
+        c.True(view.Contains("SweepStreamViewDistanceBlocks = 1024"),
+            "login overlay vanilla stream is spawn-solid 1024");
 
         string label = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepBootstrap.cs"));
@@ -1551,7 +1565,9 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeViewBoost.cs"));
         c.Eq(2048, LodLoginBakeViewBoost.MaxVanillaViewDistance, "engine view-distance ceiling");
         c.Eq(750, LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks,
-            "sweep holds vanilla view at 750 blocks then restores");
+            "visit/Farseer baseline stays 750 so the FlagBaked disk remains 4075");
+        c.Eq(1024, LodLoginBakeViewBoost.SweepStreamViewDistanceBlocks,
+            "overlay writes vanilla view to spawn-solid 1024 then restores");
         c.Eq(
             (int)Math.Ceiling(LodCoveragePolicy.HorizonDrawDistance(
                 LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks)),
@@ -1561,8 +1577,8 @@ public static class LoginSweepChecks
             "visit radius is wider than the thin graphics hold");
         c.True(viewBoost.Contains("SweepVisitRadiusBlocks"),
             "ChunkSweepRadiusChunks uses SweepVisitRadiusBlocks toward onset");
-        c.True(viewBoost.Contains("SpawnStreamRadiusChunks"),
-            "vanilla stream around the player is the 750-hold disk");
+        c.True(viewBoost.Contains("SweepStreamViewDistanceBlocks"),
+            "vanilla stream around the player is the spawn-solid 1024 disk");
         c.False(viewBoost.Contains("Math.Min(vd, SweepBoostViewDistanceBlocks)"),
             "visit/scout clamp is not a leftover 750 Math.Min");
         c.True(viewBoost.Contains("Stream to Farseer onset + 700"),
@@ -1571,7 +1587,8 @@ public static class LoginSweepChecks
             "reassert restores overlay overdraw, not only the slider");
         c.Eq(1000, LodLoginBakeViewBoost.LegacySweepHoldBlocks,
             "old 1000-block hold is leftover, never a restore target");
-        c.True(LodLoginBakeViewBoost.IsSweepHoldValue(750), "750 is the scan hold");
+        c.True(LodLoginBakeViewBoost.IsSweepHoldValue(750), "750 is the visit baseline hold");
+        c.True(LodLoginBakeViewBoost.IsSweepHoldValue(1024), "1024 is the overlay stream hold");
         c.True(LodLoginBakeViewBoost.IsSweepHoldValue(1000), "1000 is the old scan hold");
         c.False(LodLoginBakeViewBoost.IsSweepHoldValue(160), "160 is a player slider");
         c.False(LodLoginBakeViewBoost.IsSweepHoldValue(352), "352 is a player slider");
@@ -1607,8 +1624,8 @@ public static class LoginSweepChecks
             "boost writes ClientSettings.viewDistance — DesiredViewDistance alone is overwritten");
         c.True(viewBoost.Contains("ints.Set(ViewDistanceSettingKey, blocks, true)"),
             "boost triggers the graphics viewDistance watcher");
-        c.True(viewBoost.Contains("SweepBoostViewDistanceBlocks"),
-            "boost resolve uses the fixed 750-block bake view");
+        c.True(viewBoost.Contains("SweepStreamViewDistanceBlocks"),
+            "boost resolve uses spawn-solid 1024 for vanilla stream, 750 for visit disk");
         c.True(viewBoost.Contains("FarViewDistanceCap"),
             "view boost clears DV far cap during sweep");
         c.True(viewBoost.Contains("ApplyZFar"),

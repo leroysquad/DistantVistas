@@ -25,6 +25,8 @@ public class ScoutAnchorUp
     [ProtoMember(6)] public double X;
     [ProtoMember(7)] public double Y;
     [ProtoMember(8)] public double Z;
+    /// <summary>When the 16-scout cap is full, evict the farthest hold instead of queueing forever.</summary>
+    [ProtoMember(9)] public bool Priority;
 }
 
 [ProtoContract]

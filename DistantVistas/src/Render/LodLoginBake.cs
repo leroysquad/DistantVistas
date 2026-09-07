@@ -91,6 +91,7 @@ public sealed class LodLoginBake
     readonly List<double> windowMedians = new(8);
     readonly EntityPos restorePos = new();
     readonly Vec3d restoreCameraPos = new();
+    readonly Vec3d hopCameraPos = new();
     readonly Stopwatch stabilizeClock = new();
     double pickupX, pickupY, pickupZ;
     float pickupYaw, pickupPitch;
@@ -792,7 +793,7 @@ public sealed class LodLoginBake
         else
             paintStarveTicks = 0;
         scoutFill.SetPaintStarving(paintStarveTicks >= 8);
-        scoutFill.SetWarmHoldBlocks(LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks);
+        scoutFill.SetWarmHoldBlocks(LodLoginBakeViewBoost.SweepStreamViewDistanceBlocks);
         LodScoutSeqDiag.NotePaintStarve(paintStarveTicks);
 
         scoutFill.CountLivePhases(out int waitChunksLive, out int captureLive, out _, out _);
@@ -814,7 +815,10 @@ public sealed class LodLoginBake
                 spawnRevealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
         }
         if (hopUnlock.Active)
+        {
             hopUnlock.PumpUnlockResidency(capi, viewBoost);
+            PinPickupPose();
+        }
         hopUnlock.TickAtPoint();
         hopUnlock.MaybeResidencyProbe(
             capi, finished, paintStarveTicks, waitChunksLive, captureLive);
@@ -1962,15 +1966,19 @@ public sealed class LodLoginBake
                 capi, entity, hopUnlock.X, hopUnlock.Y, hopUnlock.Z,
                 pickupYaw, pickupPitch,
                 pumpStream, hopUnlock.StreamPumpRadiusChunks(viewBoost));
+            hopCameraPos.Set(
+                hopUnlock.X + (restoreCameraPos.X - pickupX),
+                hopUnlock.Y + (restoreCameraPos.Y - pickupY),
+                hopUnlock.Z + (restoreCameraPos.Z - pickupZ));
+            LockPlayerCamera(capi, player, restorePos, hopCameraPos);
         }
         else
         {
             LodLoginBakePlayerMove.ApplyExactPickup(
                 capi, entity, pickupX, pickupY, pickupZ, pickupYaw, pickupPitch, requestChunks: false);
             entity.Pos.SetFrom(restorePos);
+            LockPlayerCamera(capi, player, restorePos, restoreCameraPos);
         }
-
-        LockPlayerCamera(capi, player, restorePos, restoreCameraPos);
     }
 
     static void LockPlayerCamera(

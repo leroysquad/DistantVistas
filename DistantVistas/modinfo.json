@@ -2,11 +2,11 @@
     "type":  "code",
     "modid":  "distantvistas",
     "name":  "Distant Vistas",
-    "version":  "1.0.42",
+    "version":  "1.0.43",
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.42. Force map-chunk residency at hop-unlock via scout-host KeepLoaded; hold until loaded rises. Scouts primary. Full seasonal colors + 4075 disk.",
+    "description":  "Official 1.0.43. Overlay vanilla stream 1024 (spawn-solid) so cliff map chunks stay resident; visit disk still 4075. Scouts primary. Full seasonal colors.",
     "authors":  [
                     "IllLeroySquad"
                 ],

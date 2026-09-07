@@ -15,7 +15,7 @@ public static class LodScoutSeqDiag
 
     const string HypothesisId = "H-SCOUT-SEQ";
     const string SessionId = "40cccb";
-    const string RunId = "1042";
+    const string RunId = "1043";
 
     const int ThrashMaxTicks = 5;
     const long ThrashRespawnMs = 2000;
@@ -431,7 +431,12 @@ public static class LodScoutSeqDiag
         double x,
         double y,
         double z,
-        bool hostConnected)
+        bool hostConnected,
+        double playerX,
+        double playerZ,
+        double cameraX,
+        double cameraZ,
+        int streamViewBlocks)
     {
         if (!overlayActive) return;
         if (finished < 320 || finished > 420) return;
@@ -453,6 +458,11 @@ public static class LodScoutSeqDiag
             + ",\"x\":" + x.ToString("0.##", Inv)
             + ",\"y\":" + y.ToString("0.##", Inv)
             + ",\"z\":" + z.ToString("0.##", Inv)
+            + ",\"playerX\":" + playerX.ToString("0.##", Inv)
+            + ",\"playerZ\":" + playerZ.ToString("0.##", Inv)
+            + ",\"cameraX\":" + cameraX.ToString("0.##", Inv)
+            + ",\"cameraZ\":" + cameraZ.ToString("0.##", Inv)
+            + ",\"streamViewBlocks\":" + streamViewBlocks
             + ",\"finished\":" + finished
             + ",\"paintStarveTicks\":" + paintStarveTicks
             + ",\"waitChunksLive\":" + waitChunksLive
@@ -557,10 +567,11 @@ public static class LodScoutSeqDiag
             + "}");
     }
 
-    public static void LogHostUp(long key, int cx, int cz, int radius, bool capped, bool pending)
+    public static void LogHostUp(
+        long key, int cx, int cz, int radius, bool capped, bool pending, bool priority = false)
     {
         long now = NowMs();
-        if (!capped && !pending
+        if (!capped && !pending && !priority
             && lastHostUpMsByKey.TryGetValue(key, out long lastUp)
             && now - lastUp < 2000)
             return;
@@ -574,6 +585,7 @@ public static class LodScoutSeqDiag
             + ",\"radius\":" + radius
             + ",\"capped\":" + Bool(capped)
             + ",\"pending\":" + Bool(pending)
+            + ",\"priority\":" + Bool(priority)
             + "}");
     }
 
