@@ -1631,9 +1631,23 @@ public class DistantVistasModSystem : ModSystem
             }
             catch { }
             // #endregion
+            string skipDetail = sweepGate.Reason ?? "";
+            if (skipDetail.Contains("skip re-canvas", StringComparison.Ordinal))
+            {
+                List<LodLoginBakeAudit.Miss> deferredMisses = LodLoginBakeAudit.FindMisses(
+                    pipeline.World, pipeline, capi.World.Blocks,
+                    tints.PlantTintFallback, UntintedForRebake);
+                if (deferredMisses.Count > 0)
+                {
+                    skipDetail += string.Format(
+                        System.Globalization.CultureInfo.InvariantCulture,
+                        " ({0} region(s) still incomplete — post-login frontier drip will fill)",
+                        deferredMisses.Count);
+                }
+            }
             Mod.Logger.Notification(
                 "[DistantVistas] Login visit sweep skipped — {0}. Entering play ({1} sections in cache).",
-                sweepGate.Reason, pipeline.CachedSectionsLoaded);
+                skipDetail, pipeline.CachedSectionsLoaded);
             return;
         }
 

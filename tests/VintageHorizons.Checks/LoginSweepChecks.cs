@@ -892,8 +892,8 @@ public static class LoginSweepChecks
             "paint revision 2 does not force login teleport");
         c.True(LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 3) == null,
             "paint revision 3 does not force login teleport");
-        c.Eq(8, LodSurfaceMix.PaintRevision,
-            "paint revision 8: empty-mesh remesh, Leaves foliage, onset sweep radius");
+        c.Eq(9, LodSurfaceMix.PaintRevision,
+            "paint revision 9: canopy GetColor at crown Y, low-ground mist / scout-fill era");
         c.True(LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 5) == null,
             "paint revision 5 does not force login teleport");
         c.True(LodLoginSweepWindow.RecaptureReason("fall", "winter", 10, 0, 0) == null,
@@ -961,6 +961,8 @@ public static class LoginSweepChecks
             "level finalize consults sweep gate before overlay");
         c.True(mod.Contains("Login visit sweep skipped"),
             "skipped sweep logs and drops into play");
+        c.True(mod.Contains("post-login frontier drip will fill"),
+            "in-window skip names deferred incomplete regions instead of implying zero gaps");
         c.True(!mod.Contains("ClearHandoverDeferral"),
             "skipped sweep does not clear a handover deferral");
         c.False(mod.Contains("LodLoginSweepComplete.RecordSuccess"),

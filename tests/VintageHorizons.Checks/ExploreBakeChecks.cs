@@ -88,7 +88,7 @@ public static class ExploreBakeChecks
             "visit bake reads the loaded column top, not only the stored run");
         c.False(explore.Contains("if (!SectionHasLiveTint(section)) return;"),
             "explore bake queues FlagBaked L0 so live snow and canopy can overwrite");
-        c.True(explore.Contains("int remaining = pending.Count"),
+        c.True(explore.Contains("int guard = pending.Count"),
             "explore drain snapshots queue length so not-ready keys cannot livelock Tick");
         c.True(explore.Contains("readyAttempted"),
             "explore drain stops retrying a live-tint L0 that already baked with chunks loaded");

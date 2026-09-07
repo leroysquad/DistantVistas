@@ -3415,6 +3415,11 @@ public class LodTerrainRenderer : IRenderer
         keepClimate = LodClimateField.Identity;
         keepClimateValid = false;
         LoginBakeComplete = false;
+        MeshPressureActive = false;
+        pressureEnterAccumMs = 0;
+        pressureClearAccumMs = 0;
+        frameSampleFilled = 0;
+        frameSampleAt = 0;
         lastFogLogMonth = int.MinValue;
         lastFogLogDays = double.NaN;
     }
