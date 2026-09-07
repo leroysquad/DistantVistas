@@ -65,6 +65,8 @@ Login bake GC mixed GetColor object traffic + mesh uploads + `List` growth in th
 
 Production bake still does **not** quantize the 64×64 grid (that would checkerboard snow/dirt). `LodSurfaceMix.Quantize` and `LodRgbSimd.QuantizeSpan` are live APIs; overlay `BlurLand` always runs the SIMD kernel.
 
+Full loop inventory, intrinsic tiers, fallback, and reasoned cost: [`simd-after-getcolor.md`](simd-after-getcolor.md).
+
 - Microsoft Learn, [Use SIMD-accelerated types](https://learn.microsoft.com/en-us/dotnet/standard/simd)
 - Microsoft Learn, [Vector256\<T\>](https://learn.microsoft.com/en-us/dotnet/api/system.runtime.intrinsics.vector256-1) / [Vector128\<T\>](https://learn.microsoft.com/en-us/dotnet/api/system.runtime.intrinsics.vector128-1)
 - Microsoft Learn, [System.Numerics.Vector\<T\>](https://learn.microsoft.com/en-us/dotnet/api/system.numerics.vector-1)
