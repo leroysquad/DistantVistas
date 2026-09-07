@@ -14,11 +14,11 @@ public static class LodLoginSweep
 {
     public const int WorldReadyRadiusChunks = 2;
 
-    /// <summary>~1.0s max chunk wait at 50 ms pulse (2048 view overlap between stops).</summary>
-    public const int MaxChunkWaitTicks = 20;
+    /// <summary>~2.0s max chunk wait at 50 ms pulse (750-block bake view overlap).</summary>
+    public const int MaxChunkWaitTicks = 40;
 
     /// <summary>~0.7s max capture wait at 50 ms pulse.</summary>
-    public const int MaxCaptureWaitTicks = 14;
+    public const int MaxCaptureWaitTicks = 28;
 
     public const int MaxWorldReadyTicks = 2400;
 

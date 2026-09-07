@@ -49,6 +49,7 @@ public static class LoginSweepChecks
 
     static void BootstrapRevisitPlan(Check c)
     {
+        LodLoginSweepTiming.SetMachineSecPerStop(LodLoginSweepTiming.InitialSecPerStop);
         var world = new LodWorld();
         world.InstallStoredKey(0, 4, 7, applyToParent: true, provisional: false);
         world.InstallStoredKey(0, 8, 1, applyToParent: true, provisional: false);
@@ -73,94 +74,90 @@ public static class LoginSweepChecks
         c.Eq(1, targeted.Keys.Count, "incomplete plan dedupes keys");
         c.True(targeted.ModeLabel.Contains("incomplete"), "incomplete plan label");
 
-        c.Eq(30, LodLoginSweepBootstrap.RevisitMaxVisitStops,
-            "revisit cap targets ~1 min at 2s/stop");
-        c.Eq(30, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
-            "bootstrap land cap matches revisit (~1 min at 2s/stop)");
+        var manyMisses = new List<LodLoginBakeAudit.Miss>();
+        for (int i = 0; i < 120; i++)
+            manyMisses.Add(new(LodWorld.SectionKey(0, i, 0), LodLoginBakeAudit.MissReason.BakeIncomplete));
+        var budgeted = LodLoginSweepBootstrap.PlanIncomplete(manyMisses);
+        c.Eq(LodLoginSweepBootstrap.RevisitMaxVisitStops, budgeted.Keys.Count,
+            "incomplete plan stays inside the revisit stop budget");
+        c.True(budgeted.ModeLabel.Contains("of 120"), "incomplete plan names the leftover gaps");
+
+        c.Eq(80, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "revisit cap targets ~160s at fallback 2s/stop");
+        c.Eq(80, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "bootstrap land cap matches revisit (~160s at fallback 2s/stop)");
+        c.Eq(16, LodLoginSweepBootstrap.RetryMaxVisitStops,
+            "retry hop is shorter than the first pass");
         c.True(LodLoginSweepBootstrap.RevisitMaxVisitStops >= LodLoginSweepBootstrap.BootstrapMaxVisitStops,
             "revisit budget is at least bootstrap budget");
     }
 
     static void BackdropHook(Check c)
     {
-        string hold = File.ReadAllText(Path.Combine(
-            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeVanillaLoadingHold.cs"));
-        c.True(hold.Contains("GuiScreenLoadingGame"),
-            "login sweep knows about vanilla world loading screen");
-        c.True(hold.Contains("loadingText"),
-            "vanilla hold updates ScreenManager.loadingText");
-        c.True(hold.Contains("LoadScreenNoLoadCall"),
-            "vanilla hold switches to running-game screen via ScreenManager");
-        c.True(hold.Contains("FormatLoadingText"),
-            "vanilla hold appends DV status to loading lines");
-        c.True(hold.Contains("DV splash loading cover"),
-            "vanilla hold paints DV splash instead of blocking vanilla loader draw");
-        c.True(hold.Contains("async-sound"),
-            "vanilla hold documents async-sound bypass");
+        string renderDir = Path.Combine(GameAssemblies.RepoRoot, "DistantVistas", "src", "Render");
+        string[] gone =
+        {
+            "LodLoginBakeHarmony.cs",
+            "LodLoginBakeVanillaLoadingHold.cs",
+            "LodLoginBakeSweepGate.cs",
+            "LodLoginBakeScreenRenderer.cs",
+            "LodLoginBakeSplashOverlay.cs",
+            "LodLoginBakeHudHide.cs",
+            "LodLoginBakeWorldHide.cs",
+        };
+        foreach (string file in gone)
+        {
+            c.False(File.Exists(Path.Combine(renderDir, file)),
+                $"{file} is removed — present-path splash must not ship");
+        }
 
-        string gate = File.ReadAllText(Path.Combine(
-            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeSweepGate.cs"));
-        c.True(gate.Contains("SuppressRunningGameRender"),
-            "sweep gate suppresses running-game world render");
+        string overlay = File.ReadAllText(Path.Combine(renderDir, "LodLoginBakeOverlay.cs"));
+        c.True(overlay.Contains("LodLoginBakeInputGuard"),
+            "login overlay coordinates the HUD input guard");
+        c.True(!overlay.Contains("IRenderer"),
+            "login overlay coordinator is not a present-path IRenderer");
+        c.True(!overlay.Contains("OrthoMode"),
+            "login overlay coordinator never calls OrthoMode");
 
-        c.True(gate.Contains("AllowHandoverPassThrough"),
-            "sweep gate bypasses harmony while completing handover");
-        c.True(gate.Contains("ClearHandoverDeferral"),
-            "sweep gate clears deferral on every exit path");
-        c.True(gate.Contains("handover deferral cleared"),
-            "sweep gate logs handover clear reason");
-        c.True(gate.Contains("LoadScreenNoLoadCall"),
-            "sweep gate switches ScreenManager to running game");
+        string guard = File.ReadAllText(Path.Combine(renderDir, "LodLoginBakeInputGuard.cs"));
+        c.True(guard.Contains(": HudElement"),
+            "overlay is a HudElement, not a present-path renderer");
+        c.True(guard.Contains("EnumDialogType.HUD"),
+            "overlay stays HUD so CloseBlockingDialogs and pause do not stall the sweep");
+        c.True(guard.Contains("AddStatbar"),
+            "overlay composes a progress bar");
+        c.True(guard.Contains("CaptureAllInputs"),
+            "overlay captures input during the sweep");
+        c.True(guard.Contains("OnEscapePressed"),
+            "overlay Escape maps to cancel");
+        c.True(!guard.Contains("OrthoMode(") && !guard.Contains("OrthoMode "),
+            "HUD overlay never calls OrthoMode");
+        c.True(!guard.Contains("ClearFrameBuffer"),
+            "HUD overlay never clears the framebuffer");
+        c.True(!guard.Contains("RenderToDefaultFramebuffer"),
+            "HUD overlay never paints on framebuffer present");
+        c.True(!guard.Contains("Render2DTexture"),
+            "HUD overlay does not use the crashy Render2DTexture splash path");
+        c.True(guard.Contains("AddStaticCustomDraw"),
+            "HUD overlay paints splash art through Cairo custom draw");
+        c.True(guard.Contains("CoverFit"),
+            "HUD overlay cover-fits login-backdrop.png");
+        c.True(guard.Contains("login-backdrop"),
+            "HUD overlay binds the login backdrop asset");
 
-        string harmony = File.ReadAllText(Path.Combine(
-            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeHarmony.cs"));
-        c.True(harmony.Contains("AllowHandoverPassThrough"),
-            "harmony allows pass-through during completion invoke");
-        c.True(harmony.Contains("handOverRenderingToRunningGame"),
-            "harmony defers running-game handover during sweep");
-        c.True(harmony.Contains("!LodLoginBakeSweepGate.SweepActive) return true"),
-            "handover defer only while sweep is armed, not when config alone");
-        c.True(harmony.Contains("RenderToPrimary"),
-            "harmony skips running-game primary render during sweep");
-        c.True(harmony.Contains("OnNewFrame"),
-            "harmony pulses sweep before ScreenManager screen draw");
-        c.True(harmony.Contains("SplashGlAllowed"),
-            "harmony gates splash GL on atlas ready + sweep armed + no character UI");
-        c.True(harmony.Contains("CharacterUiBlocksSplash"),
-            "sweep gate blocks splash during character/class selection");
-        c.True(harmony.Contains("TextureAtlasesReady"),
-            "harmony gates splash GL until texture atlases finish GPU compose");
-        c.True(harmony.Contains("FinaliseTextureAtlas_StageC"),
-            "harmony marks atlas StageC complete for splash GL gate");
-        c.True(harmony.Contains("FinaliseTextureAtlas_StageB"),
-            "harmony resets atlas gate when a new compose wave starts");
-        c.True(harmony.Contains("SweepActive") && harmony.Contains("InvokePaintSplashCover"),
-            "harmony paints splash on present paths while sweep active");
-        c.True(harmony.Contains("loading-game-present"),
-            "harmony paints splash when loading-game framebuffer is skipped");
-        c.True(harmony.Contains("on-new-frame"),
-            "harmony paints splash from OnNewFrame Postfix safety path");
-        c.True(harmony.Contains("PaintSplashBeforeRunningFramebuffer"),
-            "harmony paints splash before running-game framebuffer present");
-        c.True(harmony.Contains("static void Postfix() => InvokePaintSplashCover(\"running-game-present\")"),
-            "running-game framebuffer paint is a Postfix after default-FB blit");
-        c.True(harmony.Contains("PaintSplashCover"),
-            "harmony exposes splash paint hook for framebuffer prefix");
-        c.True(!harmony.Contains("SkipRunningGameRenderToDefaultFramebuffer"),
-            "harmony no longer skips running-game framebuffer present during sweep");
-        c.True(harmony.Contains("GuiScreenLoadingGame"),
-            "harmony skips vanilla loading-screen draw during sweep");
+        string mod = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "DistantVistasModSystem.cs"));
+        c.True(!mod.Contains("distantvistas-login-vanilla"),
+            "mod does not register splash IRenderers on Ortho/AfterFinal/Done");
+        c.True(!mod.Contains("LodLoginBakeHarmony"),
+            "mod does not apply Harmony loginbake patches");
+        c.True(!mod.Contains("handOverRenderingToRunningGame"),
+            "mod does not defer running-game handover");
 
-        string screen = File.ReadAllText(Path.Combine(
-            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeScreenRenderer.cs"));
-        c.True(screen.Contains("stockOnly"),
-            "screen renderer supports stock-only dev fallback via stockOnly flag");
-        c.True(screen.Contains("SplashGlAllowed"),
-            "screen renderer defers splash GL until SplashGlAllowed");
-        c.True(!screen.Contains("ClearFrameBuffer"),
-            "splash opaque cover does not clear framebuffer (SwapBuffers safety)");
-        c.True(!screen.Contains("PrepareImmediate()") || screen.Contains("TextureAtlasesReady"),
-            "screen renderer does not preload GL from Active setter");
+        string csproj = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "DistantVistas.csproj"));
+        c.True(!csproj.Contains("0Harmony"),
+            "mod project no longer references Harmony");
     }
 
     static void AudioMuteKeys(Check c)
@@ -206,8 +203,8 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
         c.True(bake.Contains("ReleaseResources"),
             "login bake uses unified ReleaseResources teardown");
-        c.True(bake.Contains("CompleteHandoverAndRelease(capi, resolvedReason)"),
-            "login bake completes deferred handover with reason");
+        c.True(!bake.Contains("CompleteHandoverAndRelease"),
+            "login bake does not complete deferred handover on teardown");
         c.True(bake.Contains("LodLoginBakeProgressUi"),
             "login bake throttles loading-text updates");
         c.True(bake.Contains("if (released) return"),
@@ -237,6 +234,8 @@ public static class LoginSweepChecks
             "visit bake splits palette rows per column when colours differ");
         c.True(season.Contains("block.GetColor(capi, pos)"),
             "visit bake samples vanilla GetColor at column top");
+        c.True(season.Contains("FinishColumnPaint"),
+            "visit bake uses the shared season-ground mix for overlay and walk");
         c.True(bake.Contains("BakeSectionFromVisit"),
             "login bake calls visit-only exact bake");
         c.True(bake.Contains("DeferLegacyHeal = true"),
@@ -246,6 +245,14 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Lod", "LodPipeline.cs"));
         c.True(pipeline.Contains("DeferLegacyHeal"),
             "pipeline can defer approximate legacy heal");
+        c.True(pipeline.Contains("DiscoverOnly"),
+            "pipeline can restrict post-sweep capture to new and nearby land");
+        c.True(bake.Contains("DiscoverOnly = true"),
+            "successful sweep enables discover-only capture, not a total freeze");
+        c.True(bake.Contains("DeferLegacyHeal = false"),
+            "successful sweep re-enables explore bake for newly discovered land");
+        c.False(bake.Contains("FreezeCapture = true"),
+            "successful sweep must not lock all capture until relog");
     }
 
     static void AuditMisses(Check c)
@@ -320,67 +327,31 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeOverlay.cs"));
         c.True(!overlay.Contains(": GuiDialog"),
             "login overlay coordinator is not a fragile GuiDialog");
-        c.True(overlay.Contains("LodLoginBakeVanillaLoadingHold"),
-            "login overlay coordinates vanilla loading hold");
         c.True(overlay.Contains("LodLoginBakeInputGuard"),
             "login overlay uses deferred input guard");
-
-        string hold = File.ReadAllText(Path.Combine(
-            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeVanillaLoadingHold.cs"));
-        c.True(hold.Contains("GuiScreenLoadingGame"),
-            "vanilla hold documents deferred loader bypass");
-        c.True(hold.Contains("GuiScreenRunningGame"),
-            "vanilla hold switches to running-game screen during sweep");
-        c.True(hold.Contains("AfterFinalComposition"),
-            "vanilla hold paints ortho and after-final passes");
-
-        c.True(hold.Contains("EnumRenderStage.Done"),
-            "vanilla hold paints ortho, after-final, and done passes");
-
-        string splash = File.ReadAllText(Path.Combine(
-            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeSplashOverlay.cs"));
-        c.True(splash.Contains("stockOnly: false"),
-            "splash overlay uses full DV renderer, not bare stock cover");
-        c.True(splash.Contains("LodLoginBakeSplashOverlay"),
-            "splash overlay helper wraps full screen renderer");
-
-        string screen = File.ReadAllText(Path.Combine(
-            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeScreenRenderer.cs"));
-        c.True(screen.Contains("DrawStockLayout"),
-            "screen renderer retains stock Loading… layout for stockOnly mode");
-        c.True(screen.Contains("TryDrawWithInternalQuad"),
-            "splash renderer uses ortho internal quad tint path first");
-        c.True(screen.Contains("TryDrawWithExplicitQuad"),
-            "splash renderer uses explicit MeshRef on after-final pass");
-        c.True(screen.Contains("HasEverPaintedOpaque"),
-            "splash renderer tracks whether ortho ever painted");
-        c.True(screen.Contains("ClearFrameBuffer"),
-            "splash renderer hard-clears framebuffer before quad fallback");
-        c.True(screen.Contains("OrthoMode"),
-            "splash renderer sets ortho projection before 2D draws");
-        c.True(screen.Contains("PerspectiveMode"),
-            "splash renderer restores perspective after OrthoMode (no stack leak)");
-        c.True(screen.Contains("TryRestorePerspective"),
-            "splash renderer pairs OrthoMode enter/restore helpers");
-        c.True(screen.Contains("PaintPresentPath"),
-            "splash renderer exposes present-path paint entry");
-        c.True(screen.Contains("EnumRenderStage.Done"),
-            "splash renderer paints on render-stage-done");
-        c.True(screen.Contains("GLDisableDepthTest"),
-            "splash renderer disables depth test on present path");
-        c.True(screen.Contains("ResolvePaintFrameBuffer"),
-            "splash renderer resolves primary framebuffer when current is null");
-        c.True(screen.Contains("PaintSweepFrame"),
-            "splash renderer exposes guaranteed paint entry point");
-        c.True(screen.Contains("TryHardOpaqueCover"),
-            "splash renderer has hard opaque cover fallback");
+        c.True(!overlay.Contains("LodLoginBakeVanillaLoadingHold"),
+            "login overlay does not coordinate a loading-screen hold");
+        c.True(!overlay.Contains("OrthoMode") && !overlay.Contains("ClearFrameBuffer"),
+            "login overlay does not call OrthoMode or ClearFrameBuffer");
 
         string renderer = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodTerrainRenderer.cs"));
         c.True(renderer.Contains("LoginBakeOverlayActive"),
             "terrain renderer skips draw while login overlay active");
-        c.True(renderer.Contains("LoginBakeBlocked"),
-            "terrain renderer skips GL while character UI defers login sweep");
+        c.True(renderer.Contains("bool loginBakeBlocked = true"),
+            "terrain renderer starts with LoginBakeBlocked so load/char-create cannot ApplyZFar");
+        c.True(renderer.Contains("LodJoinQuiet.Sync(loginBakeBlocked, loginBakeComplete)"),
+            "terrain renderer keeps vsvaogc join-quiet in sync with bake flags");
+        c.True(renderer.Contains("if (LoginBakeBlocked) return"),
+            "ApplyZFar is a no-op while join GL is blocked");
+        c.True(renderer.Contains("void EnsureJoinRenderer()"),
+            "lodterrain compile and Opaque registration wait until after character UI");
+        int ctorAt = renderer.IndexOf("public LodTerrainRenderer(", StringComparison.Ordinal);
+        int afterCtor = renderer.IndexOf("bool joinRendererReady", ctorAt, StringComparison.Ordinal);
+        c.True(ctorAt >= 0 && afterCtor > ctorAt, "LodTerrainRenderer ctor bounds");
+        string ctor = renderer.Substring(ctorAt, afterCtor - ctorAt);
+        c.True(!ctor.Contains("LoadShader()") && !ctor.Contains("RegisterRenderer"),
+            "ctor does not compile lodterrain or join Opaque before character UI");
 
         string guard = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeInputGuard.cs"));
@@ -388,18 +359,21 @@ public static class LoginSweepChecks
             "input guard retries open when viewport is ready");
         c.True(guard.Contains("SafeBounds"),
             "input guard uses render/window bounds fallback");
-        c.True(!hold.Contains(".RenderToDefaultFramebuffer(")
-            && !hold.Contains("RenderToDefaultFramebuffer();"),
-            "vanilla hold does not call blocking vanilla loader draw");
+        c.True(guard.Contains("AddShadedDialogBG"),
+            "input guard composes an opaque Cairo backdrop");
+        c.True(guard.Contains("dv-progress"),
+            "input guard binds a progress statbar");
 
         string driver = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakePulse.cs"));
         c.True(driver.Contains("LodLoginBakePulse"),
-            "render pulse drives sweep while game ticks stall");
+            "game-tick pulse drives sweep while overlay is up");
         c.True(driver.Contains("PollCancelFromRender"),
-            "render pulse polls Esc each frame");
-        c.True(driver.Contains("BeginFrame"),
-            "render pulse coalesces OnNewFrame and overlay pulses");
+            "pulse polls Esc each tick");
+        c.True(!driver.Contains("BeginFrame"),
+            "pulse does not coalesce OnNewFrame present-path pulses");
+        c.True(!driver.Contains("while (accum"),
+            "pulse does not catch-up multiple Ticks after a hitch");
 
         string status = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepStatusWriter.cs"));
@@ -411,21 +385,26 @@ public static class LoginSweepChecks
         string mod = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "DistantVistasModSystem.cs"));
         c.True(mod.Contains("LodLoginBakePulse"),
-            "mod wires render pulse from vanilla hold");
-        c.True(mod.Contains("OnRenderPulse"),
-            "mod connects vanilla hold render pulse");
-        c.True(mod.Contains("EnumRenderStage.Done"),
-            "mod registers splash on render-stage-done");
-        c.True(mod.Contains("PaintSplashCover"),
-            "mod wires splash paint before running-game framebuffer");
-        c.True(mod.Contains("PaintSweepFrame"),
-            "mod exposes splash paint on vanilla hold");
-        c.True(mod.Contains("LodLoginBakeHarmony.RenderPulse"),
-            "mod wires ScreenManager.OnNewFrame pulse");
+            "mod wires login bake pulse");
+        c.True(mod.Contains("loginBakePulse?.Pulse(dt)"),
+            "mod pulses the sweep from OnGameTick");
+        c.True(!mod.Contains("OnRenderPulse"),
+            "mod does not connect a present-path render pulse");
+        c.True(!mod.Contains("PaintSplashCover"),
+            "mod does not wire splash paint on framebuffer present");
+        c.True(!mod.Contains("LodLoginBakeHarmony"),
+            "mod does not wire ScreenManager.OnNewFrame pulse");
         c.True(mod.Contains("LoginBakeBlocked"),
             "mod blocks terrain GL while login sweep waits on character UI");
         c.True(!mod.Contains("renderer.ApplyZFar();\n        pipeline.Open"),
             "level finalize does not call ApplyZFar before matrices/atlas are safe");
+
+        int tickAt = mod.IndexOf("void OnGameTick(float dt)", StringComparison.Ordinal);
+        int afterTick = mod.IndexOf("void PumpServerAssist()", tickAt, StringComparison.Ordinal);
+        c.True(tickAt >= 0 && afterTick > tickAt, "OnGameTick bounds");
+        string tick = mod.Substring(tickAt, afterTick - tickAt);
+        c.True(tick.Contains("if (renderer.LoginBakeBlocked) return"),
+            "OnGameTick does not Tick or upload while join GL is blocked");
     }
 
     static void QuietTeleports(Check c)
@@ -448,37 +427,62 @@ public static class LoginSweepChecks
             "login bake settles after each teleport");
         c.True(bake.Contains("BakeSettle"),
             "login bake settles after each bake");
-        c.True(bake.Contains("BatchBakeL0Radius = 8"),
-            "login bake batch-bakes wider neighbour disk at 2048 view");
-        c.True(bake.Contains("MaxBatchBakePerStop = 24"),
-            "login bake batch-bakes more neighbours per teleport");
+        c.True(bake.Contains("BatchBakeL0Radius = 12"),
+            "login bake batch-bakes neighbour disk inside the 750-block view");
+        c.True(bake.Contains("MaxBakePerTick = 8"),
+            "login bake spreads GetColor across overlay ticks");
+        c.True(bake.Contains("CollectExpireLeftovers"),
+            "expire leftovers are queued, not baked in one tick");
+        c.True(bake.Contains("RequestChunkColumnRing"),
+            "login bake grows the streamed ring instead of requesting the full disk at teleport");
+        c.True(bake.Contains("SweepRowsPerCall"),
+            "login bake sweeps loaded columns a few rows per tick");
+        c.True(bake.Contains("MaxBatchBakePerStop = 256"),
+            "login bake batch-bakes streamed neighbours per teleport");
         c.True(bake.Contains("BakeBatchAtStop"),
-            "login bake batch-bakes capture-idle neighbours per stop");
+            "login bake batch-bakes streamed neighbours per stop");
+        c.True(bake.Contains("stopBakeSkipIdle++") && bake.Contains("idleQueued"),
+            "batch bake counts queued neighbours but still paints them");
+        c.True(!bake.Contains("stopBakeSkipIdle++;\n                continue")
+            && !bake.Contains("stopBakeSkipIdle++;\r\n                continue"),
+            "batch bake does not continue past a queued neighbour");
         c.True(bake.Contains("OverlayWarmup"),
             "login bake warms overlay before teleports");
         c.True(bake.Contains("warmup complete — entering visit teleports"),
             "login bake logs loudly when warmup ends");
         c.True(bake.Contains("PollCancelFromRender"),
             "login bake polls Esc from render loop");
-        c.True(bake.Contains("KeyboardKeyState"),
-            "login bake reads Escape from keyboard state");
+        c.True(bake.Contains("KeyboardKeyStateRaw"),
+            "login bake reads Escape from raw keyboard state");
+        c.True(bake.Contains("LodLoginBakeLeaveMenu.Request"),
+            "Esc cancel leaves to the main menu");
+        c.True(bake.Contains("allowOverwrite"),
+            "login bake may recapture spawn during overlay warmup");
         c.True(bake.Contains("NoteLoadingCoverUnpainted"),
             "login bake never aborts solely on unpainted cover");
         c.True(!bake.Contains("cover never painted"),
             "login bake does not abort on cover paint timeout");
-        c.True(bake.Contains("worldHideApplied"),
-            "login bake delays world hide until splash has painted");
-        c.True(bake.Contains("LodLoginBakeWorldHide"),
-            "login bake hides vanilla chunks during sweep");
+        c.True(bake.Contains("overlay.HasRendered"),
+            "login bake waits for the HUD overlay before teleports");
+        c.True(!bake.Contains("LodLoginBakeWorldHide"),
+            "login bake does not hide vanilla chunk meshes during sweep");
+        c.True(!bake.Contains("worldHideApplied"),
+            "login bake does not delay a world-hide until splash paint");
         c.True(bake.Contains("ChunkSweepRadiusChunks"),
             "login bake scales column sweep to boosted view distance");
         c.True(bake.Contains("LodLoginBakePlayerMove.ApplyQuietFrom"),
             "login bake restores pose with quiet client moves");
+        c.True(bake.Contains("SpawnRestoreRadius"),
+            "login bake re-requests spawn columns at real view radius");
 
         string inputLock = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeInputLock.cs"));
         c.True(inputLock.Contains("StopAllMovement"),
             "input lock calls StopAllMovement");
+        c.True(inputLock.Contains("public static void Release"),
+            "input lock has a full unlock, not just speed");
+        c.True(bake.Contains("LodLoginBakeInputLock.Release"),
+            "login bake unlocks NoClip/flying on release");
         c.True(!inputLock.Contains("for (int i = 0"),
             "input lock does not iterate raw enum ints");
     }
@@ -522,7 +526,7 @@ public static class LoginSweepChecks
     static void SweepResume(Check c)
     {
         c.Eq(30.0, LodLoginSweepResume.MaxResumeDayGap, "resume within 30 in-game days");
-        c.Eq("ModData/distantvistas/login-sweep-resume.json", LodLoginSweepResume.RelPath,
+        c.Eq("ModData/distantvistas/login-sweep-resume-<worldId>.json", LodLoginSweepResume.RelPath,
             "resume file under ModData/distantvistas");
 
         string bake = File.ReadAllText(Path.Combine(
@@ -546,19 +550,95 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeInputGuard.cs"));
         c.True(guard.Contains("OnCancelRequested"),
             "escape routes to cancel/resume handler");
+        c.True(guard.Contains("Esc to pause and return to the menu"),
+            "overlay hint says Esc returns to the menu");
+
+        string leave = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeLeaveMenu.cs"));
+        c.True(leave.Contains("DestroyGameSession"),
+            "Esc leave uses the vanilla leave-world path");
+        c.True(leave.Contains("SendLeave(0)"),
+            "Esc leave notifies the server before destroying the session");
+        c.True(leave.Contains("EnumExitMode.SoftExit"),
+            "Esc leave uses SoftExit like the vanilla pause menu");
     }
 
     static void SweepSkipGate(Check c)
     {
-        c.Eq("ModData/distantvistas/login-sweep-complete.json", LodLoginSweepComplete.RelPath,
+        c.Eq("ModData/distantvistas/login-sweep-complete-<worldId>.json", LodLoginSweepComplete.RelPath,
             "completion record under ModData/distantvistas");
+        string completeSrc = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepComplete.cs"));
+        c.True(completeSrc.Contains("WindowStartedUtcMs"),
+            "completion marker stamps the wall-clock start of the 30-day window");
+        c.True(completeSrc.Contains("LodLoginSweepWindow.NowUtcMs()"),
+            "successful sweep writes the current UTC stamp");
         c.Eq(30.0, LodLoginSweepWindow.MaxDayGap, "skip window matches resume day gap");
+        c.Eq(30L * 24 * 60 * 60 * 1000, LodLoginSweepWindow.MaxWallMs,
+            "wall-clock window is 30 real days");
+        c.True(LodLoginSweepWindow.IsWithin("spring", "spring", 10, 0),
+            "same season inside 30 days stays in window");
+        c.True(LodLoginSweepWindow.IsWithin("spring", "winter", 10, 0),
+            "season slug mismatch no longer expires when the day gap is small");
+        c.False(LodLoginSweepWindow.IsWithin("spring", "spring", 31, 0),
+            "day gap over 30 expires even when the season matches");
+        c.True(LodLoginSweepWindow.IsWithin("", "winter", 10, 0),
+            "empty saved season falls back to the day gap");
+        c.True(LodLoginSweepWindow.IsWallGapWithin(1000, 0),
+            "legacy markers with no wall stamp stay on the day gap");
+        c.True(LodLoginSweepWindow.IsWithin(10, 0, 1000, 1000),
+            "fresh wall stamp stays in window");
+        c.False(LodLoginSweepWindow.IsWithin(10, 0, LodLoginSweepWindow.MaxWallMs + 2, 1),
+            "30 real days expire even when in-game days are small");
+        c.Eq(LodLoginSweepWindow.OutsideDayWindowReason,
+            LodLoginSweepWindow.ExpireReason("spring", "spring", 40, 0),
+            "day-gap expire reason is outside 30-day window");
+        c.Eq(LodLoginSweepWindow.OutsideWallWindowReason,
+            LodLoginSweepWindow.ExpireReason(10, 0, LodLoginSweepWindow.MaxWallMs + 2, 1),
+            "wall-clock expire reason is outside 30-day wall-clock window");
+        c.True(LodLoginSweepWindow.ExpireReason("spring", "winter", 10, 0) == null,
+            "season change alone has no expire reason");
+        c.True(LodLoginSweepWindow.ExpireReason("spring", "spring", 10, 0) == null,
+            "in-window same season has no expire reason");
+        c.Eq(LodLoginSweepWindow.StalePaintRevisionReason,
+            LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 0),
+            "stale paint revision recaptures even inside the 30-day window");
+        c.Eq(LodLoginSweepWindow.StalePaintRevisionReason,
+            LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 1),
+            "0.8.70 markers recapture so the streamed ring is persisted");
+        c.True(LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, LodSurfaceMix.PaintRevision) == null,
+            "current paint revision stays skipped when the window holds");
+        c.Eq(LodLoginSweepWindow.StalePaintRevisionReason,
+            LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 2),
+            "paint revision 2 recaptures so 0.8.85 season ground runs once");
+        c.Eq(LodLoginSweepWindow.StalePaintRevisionReason,
+            LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 3),
+            "paint revision 3 recaptures so frosted canopy and frost ground run once");
+        c.Eq(4, LodSurfaceMix.PaintRevision,
+            "paint revision 4 forces one overlay for frosted canopy and frost ground");
+        c.Eq(LodLoginSweepWindow.StalePaintRevisionReason,
+            LodLoginSweepWindow.RecaptureReason("fall", "winter", 10, 0, 0),
+            "stale paint revision still recaptures after a season change");
+
         string window = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepWindow.cs"));
-        c.True(window.Contains("TotalDays - savedTotalDays <= MaxDayGap"),
-            "skip window is in-game day gap only");
-        c.False(window.Contains("return true"),
-            "skip window has no same-season early return");
+        c.True(window.Contains("nowTotalDays - savedTotalDays <= MaxDayGap"),
+            "skip window still measures the in-game day gap");
+        c.True(window.Contains("WindowStartedUtcMs") || window.Contains("savedUtcMs"),
+            "skip window also measures real time since the stamped first day");
+        c.True(window.Contains("MaxWallMs"),
+            "skip window has a 30-day wall-clock bound");
+        c.False(window.Contains("SeasonChangedReason"),
+            "season slug is not an expire trigger");
+        c.True(window.Contains("MonthChangedReason"),
+            "calendar month change recaptures even inside the 30-day window");
+        c.True(LodLoginSweepWindow.TryReadSavedMonth("Y1M5D120H8.5_spring", out int savedMonth)
+            && savedMonth == 5,
+            "calendar token month is the M field");
+        c.True(LodLoginSweepWindow.MonthChanged("Y1M5D1H0_spring", 12),
+            "May stamp expires in December");
+        c.False(LodLoginSweepWindow.MonthChanged("Y1M12D1H0_winter", 12),
+            "same-month stamp stays skipped");
 
         string gate = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepGate.cs"));
@@ -573,15 +653,24 @@ public static class LoginSweepChecks
         c.True(gate.Contains("no successful sweep recorded yet"),
             "gate runs when completion marker is missing");
         int idxNoComplete = gate.IndexOf("no successful sweep recorded yet for this world", StringComparison.Ordinal);
-        int idxMiss = gate.IndexOf("still incomplete", StringComparison.Ordinal);
+        int idxExpire = gate.IndexOf("LodLoginSweepWindow.RecaptureReason", StringComparison.Ordinal);
+        int idxMiss = gate.IndexOf("visited region(s) still incomplete", StringComparison.Ordinal);
         c.True(idxNoComplete >= 0 && idxMiss >= 0 && idxNoComplete < idxMiss,
             "gate prefers no-complete bootstrap over miss-repair on first sweep");
-        c.True(gate.Contains("outside 30-day window"),
+        c.True(idxExpire >= 0 && idxExpire < idxMiss,
+            "gate prefers 30-day expire over leftover miss-repair");
+        c.True(window.Contains("outside 30-day window"),
             "gate runs when completion window expired");
+        c.True(window.Contains("outside 30-day wall-clock window"),
+            "gate runs when 30 real days have passed since the stamped first day");
         c.True(gate.Contains("VisitedKeyCount >= visited"),
             "in-window skip requires canvas not grown");
         c.True(gate.Contains("visited canvas complete within 30-day window"),
             "gate skips when canvas is complete and in window");
+        c.True(gate.Contains("LodLoginSweepWindow.RecaptureReason"),
+            "gate expires on day gap, wall-clock gap, stale paint revision, or calendar month");
+        c.True(gate.Contains("WindowStartedUtcMs <= 0"),
+            "in-window skip adopts a wall-clock stamp on legacy markers");
 
         string mod = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "DistantVistasModSystem.cs"));
@@ -589,12 +678,14 @@ public static class LoginSweepChecks
             "level finalize consults sweep gate before overlay");
         c.True(mod.Contains("Login visit sweep skipped"),
             "skipped sweep logs and drops into play");
-        c.True(mod.Contains("ClearHandoverDeferral(capi, \"skip\""),
-            "skipped sweep clears handover deferral before play");
+        c.True(!mod.Contains("ClearHandoverDeferral"),
+            "skipped sweep does not clear a handover deferral");
         c.False(mod.Contains("LodLoginSweepComplete.RecordSuccess"),
             "skip path must not stamp completion marker");
         c.True(mod.Contains("LoginVisitSweepEnabled"),
             "sweep gated by config flag");
+        c.True(mod.Contains("LodLoginBakeViewBoost.RecoverPlayerViewIfNeeded"),
+            "join restores a leftover 750/1000 slider before play or overlay");
         c.True(new DistantVistasConfig().LoginVisitSweepEnabled,
             "login visit sweep enabled by default");
 
@@ -602,24 +693,99 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
         c.True(bake.Contains("LodLoginSweepComplete.RecordSuccess"),
             "successful sweep records completion for future skips");
+        c.True(bake.Contains("LodLoginSweepWindow.RecaptureReason"),
+            "planner uses the same recapture helper as the gate");
+        c.True(bake.Contains("PlanSeasonExpired"),
+            "expired window plans a season revisit, not leftover hops only");
+        c.True(bake.Contains("forceRecapture: true"),
+            "season hops recapture streamed columns");
+        c.True(bake.Contains("visitBakeChanged"),
+            "visit bake treats FlagBaked RGB deltas as a completed stop");
+
+        string season = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSeasonBake.cs"));
+        c.True(season.Contains("entry.Color = baked"),
+            "visit bake overwrites FlagBaked palette RGB in place");
+        c.True(season.Contains("block.GetColor(capi, pos)"),
+            "visit bake samples vanilla GetColor at the column top");
+        c.True(season.Contains("CanVisitBake"),
+            "visit bake does not drop snow or climate-untinted tops");
+        c.True(season.Contains("TryResolveLiveSurface"),
+            "visit bake walks the loaded chunk for snow and extra canopy");
+
+        string worker = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Lod", "LodWorker.cs"));
+        c.True(worker.Contains("HighestSolidY"),
+            "capture starts above the rain map so snow on canopy enters the mesh");
+
+        c.True(mod.Contains("pipeline.QueueColumn(chunkCoord.X, chunkCoord.Z)"),
+            "ChunkDirty uses NeedsCapture so FlagBaked walk-back snow stays");
+        c.False(mod.Contains("pipeline.QueueColumnForce(chunkCoord.X, chunkCoord.Z)"),
+            "walk-time ChunkDirty does not force recapture");
+
+        string view = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeViewBoost.cs"));
+        c.True(view.Contains("SweepBoostViewDistanceBlocks = 750"),
+            "login visit holds graphics view at 750 blocks");
+
+        string label = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepBootstrap.cs"));
+        int idxSeason = label.IndexOf("if (seasonRefresh && gapCount > 0)", StringComparison.Ordinal);
+        int idxGaps = label.IndexOf("Filling gaps", StringComparison.Ordinal);
+        c.True(idxSeason >= 0 && idxGaps >= 0 && idxSeason < idxGaps,
+            "season-refresh overlay text wins over Filling gaps");
+        c.True(label.Contains("BudgetVisitStops"),
+            "30-day expire spatially samples the stored disk");
+        c.True(label.Contains("maxVisitStops = RevisitMaxVisitStops"),
+            "expire hops stay inside the timed visit budget, never the whole disk");
+        c.True(label.Contains("fullDiskRecapture") && label.Contains(":false"),
+            "expire planner logs that it did not queue every stored cell");
+        c.True(label.Contains("InteriorGapsBetweenStops"),
+            "after the 64-stop sample, expire fills holes between those stops");
+        c.True(label.Contains("RetryMaxVisitStops"),
+            "interior gap-fill stays on the short retry budget");
     }
 
     static void SweepTiming(Check c)
     {
-        c.Eq(45.0, LodLoginSweepTiming.TargetMinSec, "sweep target min seconds");
-        c.Eq(60.0, LodLoginSweepTiming.TargetMaxSec, "sweep target max seconds");
-        c.Eq(60.0, LodLoginSweepTiming.BootstrapTargetMaxSec, "bootstrap target max seconds");
-        c.Eq(2.0, LodLoginSweepTiming.InitialSecPerStop, "initial per-stop estimate for 1-min budget");
-        c.Eq(6000, LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks,
-            "empty-canvas bootstrap probe radius default");
-        c.Eq(94, LodLoginSweepBootstrap.BootstrapCellRadius(),
-            "6000 blocks is ~94 L0 cells radius at 64-block footprint");
-        c.Eq(30, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
-            "bootstrap visit cap targets ~1 min at 2s/stop");
-        c.Eq(30, LodLoginSweepBootstrap.RevisitMaxVisitStops,
-            "revisit visit cap targets ~1 min at 2s/stop");
-        c.Eq(20, LodLoginSweep.MaxChunkWaitTicks, "chunk wait capped ~1.0s at 50ms pulse");
-        c.Eq(14, LodLoginSweep.MaxCaptureWaitTicks, "capture wait capped ~0.7s at 50ms pulse");
+        LodLoginSweepTiming.SetMachineSecPerStop(LodLoginSweepTiming.InitialSecPerStop);
+        c.Eq(30.0, LodLoginSweepTiming.TargetMinSec, "sweep target min seconds");
+        c.Eq(160.0, LodLoginSweepTiming.TargetMaxSec, "sweep target max seconds");
+        c.Eq(160.0, LodLoginSweepTiming.BootstrapTargetMaxSec, "bootstrap target max seconds");
+        c.Eq(32.0, LodLoginSweepTiming.RetryTargetSec, "retry pass wall seconds");
+        c.Eq(2.0, LodLoginSweepTiming.InitialSecPerStop, "fallback per-stop when this PC has no samples");
+        c.Eq(36000, LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks,
+            "empty-canvas bootstrap probe radius default (~36 km, 2x diameter)");
+        c.Eq(563, LodLoginSweepBootstrap.BootstrapCellRadius(),
+            "36000 blocks is 563 L0 cells radius at 64-block footprint");
+        c.Eq(64, LodLoginSweepTiming.MinVisitStops, "first-pass floor is 4x the 16-stop shrink");
+        c.Eq(96, LodLoginSweepTiming.MaxVisitStops, "first-pass ceiling leaves headroom above 64");
+        c.Eq(16, LodLoginSweepTiming.MinRetryStops, "retry floor is 2x the 8-stop shrink");
+        c.Eq(32, LodLoginSweepTiming.MaxRetryStops, "retry ceiling stays shorter than first pass");
+        c.Eq(80, LodLoginSweepTiming.VisitStopBudget(2.0, LodLoginSweepTiming.TargetMaxSec),
+            "fallback 2s/stop plans 80 first-pass stops");
+        c.Eq(64, LodLoginSweepTiming.VisitStopBudget(3.6, LodLoginSweepTiming.TargetMaxSec),
+            "3.6s/stop clamps to MinVisitStops 64, not 44 from 160/3.6");
+        c.Eq(16, LodLoginSweepTiming.RetryStopBudget(3.6),
+            "3.6s/stop retry clamps to MinRetryStops 16");
+        c.Eq(80, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "bootstrap visit cap targets ~160s at fallback 2s/stop");
+        c.Eq(80, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "revisit visit cap targets ~160s at fallback 2s/stop");
+        c.Eq(16, LodLoginSweepBootstrap.RetryMaxVisitStops,
+            "retry visit cap is the short second hop");
+
+        var harvest = LodLoginSweepTimingStore.HarvestSecPerStop(new[]
+        {
+            "6.9.2026 02:03:40 [Notification] [DistantVistas] Login visit sweep: quiet teleports begin — 30 L0 regions.",
+            "6.9.2026 02:04:23 [Notification] [DistantVistas] Login visit sweep: retrying 94 missed regions (pass 1).",
+            "6.9.2026 02:34:22 [Notification] [DistantVistas] Login visit sweep: quiet teleports begin — 313 L0 regions.",
+            "6.9.2026 02:50:19 [Notification] [DistantVistas] Login visit sweep: retrying 491 missed regions (pass 1).",
+        });
+        c.Eq(1, harvest.Count, "log harvest keeps budgeted passes and drops 300+ hole hops");
+        c.True(Math.Abs(harvest[0] - (43.0 / 30.0)) < 0.01, "harvested rate is 43s / 30 stops");
+        c.Eq(40, LodLoginSweep.MaxChunkWaitTicks, "chunk wait capped ~2.0s at 50ms pulse for 750 view");
+        c.Eq(28, LodLoginSweep.MaxCaptureWaitTicks, "capture wait capped ~1.4s at 50ms pulse for recapture");
         c.Eq(3, LodLoginSweepBootstrap.OpenOceanMaxSamples,
             "open-ocean full-bake samples capped for 1-min sweep");
 
@@ -628,7 +794,7 @@ public static class LoginSweepChecks
         c.True(bootstrap.Contains("BudgetVisitStops"),
             "bootstrap applies hard visit stop budget");
         c.True(bootstrap.Contains("BudgetBootstrapVisitStops"),
-            "bootstrap uses inner-weighted distance-band subsample");
+            "bootstrap uses outer-weighted distance-band subsample");
         c.True(bootstrap.Contains("SelectLandVisitCells"),
             "bootstrap full-visits land and coastline ocean");
         c.True(bootstrap.Contains("PickOceanSampleCells"),
@@ -637,7 +803,7 @@ public static class LoginSweepChecks
             "bootstrap skips cells already baked in cache");
         c.True(bootstrap.Contains("OpenOceanMaxSamples"),
             "bootstrap caps ocean sample visits");
-        c.True(bootstrap.Contains("open-ocean L0 cells"),
+        c.True(bootstrap.Contains("open-water L0 cells"),
             "bootstrap logs ocean sample/stamp plan");
         c.True(bootstrap.Contains("PlanRevisitKeys"),
             "revisit applies spatial subsample budget");
@@ -664,6 +830,8 @@ public static class LoginSweepChecks
             "login bake progress distinguishes bootstrap vs revisit");
         c.True(bake.Contains("StatusWithEta"),
             "login bake progress includes ETA suffix");
+        c.True(bake.Contains("LodLoginSweepTimingStore.EnsureApplied"),
+            "login bake seeds ETA from this PC before planning");
     }
 
     static void CreativeMode(Check c)
@@ -680,35 +848,72 @@ public static class LoginSweepChecks
             "login bake restores view distance after sweep");
         c.True(bake.Contains("viewBoost.EnsureBoosted"),
             "login bake keeps view boost active during sweep");
+        c.True(bake.Contains("viewBoost.ReassertPlayerView"),
+            "login bake writes the player's slider again after pose restore");
 
         string viewBoost = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeViewBoost.cs"));
-        c.Eq(2048, LodLoginBakeViewBoost.MaxVanillaViewDistance, "sweep view boost ceiling");
-        c.Eq(2000, LodLoginBakeViewBoost.SweepMinViewDistanceBlocks,
-            "sweep view boost floor during entire visit");
+        c.Eq(2048, LodLoginBakeViewBoost.MaxVanillaViewDistance, "engine view-distance ceiling");
+        c.Eq(750, LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks,
+            "sweep holds vanilla view at 750 blocks then restores");
+        c.Eq(1000, LodLoginBakeViewBoost.LegacySweepHoldBlocks,
+            "old 1000-block hold is leftover, never a restore target");
+        c.True(LodLoginBakeViewBoost.IsSweepHoldValue(750), "750 is the scan hold");
+        c.True(LodLoginBakeViewBoost.IsSweepHoldValue(1000), "1000 is the old scan hold");
+        c.False(LodLoginBakeViewBoost.IsSweepHoldValue(160), "160 is a player slider");
+        c.False(LodLoginBakeViewBoost.IsSweepHoldValue(352), "352 is a player slider");
+        c.True(LodLoginBakeViewBoost.TryPickPlayerView(750, 160, out int picked) && picked == 160,
+            "restore prefers stored player slider over a live 750 hold");
+        c.True(LodLoginBakeViewBoost.TryPickPlayerView(1000, 160, out picked) && picked == 160,
+            "restore prefers stored player slider over a leftover 1000");
+        c.True(LodLoginBakeViewBoost.TryPickPlayerView(352, 0, out picked) && picked == 352,
+            "first hold snapshots a live player slider");
+        c.True(LodLoginBakeViewBoost.TryPickPlayerView(1536, 320, out picked) && picked == 320,
+            "restore refuses a maxed leftover and keeps the player's slider");
+        c.False(LodLoginBakeViewBoost.TryPickPlayerView(1536, 0, out _),
+            "1536/1500 is the graphics max leftover, not a player slider");
+        c.False(LodLoginBakeViewBoost.IsPlayerViewDistance(1536),
+            "maxed 1536 is never original");
+        c.False(LodLoginBakeViewBoost.IsPlayerViewDistance(750),
+            "scan hold is never original");
+        c.True(LodLoginBakeViewBoost.IsPlayerViewDistance(320),
+            "320 is a player slider");
+        c.False(LodLoginBakeViewBoost.TryPickPlayerView(750, 1000, out _),
+            "750 and 1000 are not player sliders");
+        c.False(viewBoost.Contains("SweepBoostViewDistanceBlocks = 1000"),
+            "scan hold is never 1000");
+        c.True(viewBoost.Contains("LodLoginBakeViewHoldStore"),
+            "player slider is persisted before the 750 write");
+        string holdStore = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeViewHoldStore.cs"));
+        c.True(holdStore.Contains("login-view-hold.json"),
+            "hold snapshot file is login-view-hold.json");
+        c.True(viewBoost.Contains("RecoverPlayerViewIfNeeded"),
+            "crash leftover 750/1000 restores from the persisted slider");
+        c.True(viewBoost.Contains("ViewDistanceSettingKey"),
+            "boost writes ClientSettings.viewDistance — DesiredViewDistance alone is overwritten");
+        c.True(viewBoost.Contains("ints.Set(ViewDistanceSettingKey, blocks, true)"),
+            "boost triggers the graphics viewDistance watcher");
+        c.True(viewBoost.Contains("SweepBoostViewDistanceBlocks"),
+            "boost resolve uses the fixed 750-block bake view");
         c.True(viewBoost.Contains("FarViewDistanceCap"),
             "view boost clears DV far cap during sweep");
         c.True(viewBoost.Contains("ApplyZFar"),
             "view boost refreshes camera z-far after far-cap change");
-
-        string hud = File.ReadAllText(Path.Combine(
-            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeHudHide.cs"));
-        c.True(hud.Contains("savedHidden"),
-            "HUD hide saves prior HideGuis state");
-        c.True(hud.Contains("TrySetHideGuisDirect"),
-            "HUD hide sets hideGuis directly on ClientMain when possible");
-        c.True(hud.Contains("TriggerChatMessage(\".gui\")"),
-            "HUD hide falls back to .gui toggle when direct set unavailable");
     }
 
     static void HudHide(Check c)
     {
         string bake = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
-        c.True(bake.Contains("hudHide.EnsureHidden()"),
-            "login bake hides HUD during sweep");
+        c.True(!bake.Contains("hudHide.EnsureHidden()"),
+            "login bake does not hide vanilla HUD (HideGuis would hide the overlay)");
         c.True(bake.Contains("playerHide.EnsureHidden()"),
             "login bake hides local player during sweep");
+        c.True(bake.Contains("overlay.Show()"),
+            "login bake opens the HUD overlay before teleports");
+        c.True(bake.Contains("overlay.Hide()"),
+            "login bake closes the HUD overlay on teardown");
 
         string playerHide = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakePlayerHide.cs"));
@@ -736,19 +941,71 @@ public static class LoginSweepChecks
         string mod = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "DistantVistasModSystem.cs"));
         c.True(mod.Contains("DeferLoginVisitSweep"),
-            "level finalize defers sweep during character creation");
+            "level finalize defers sweep until after the first present");
         c.True(mod.Contains("LodLoginBakeCharacterWait.IsPending"),
             "deferred sweep polls character wait helper");
-        c.True(mod.Contains("AllowHandoverWhileCharacterPending"),
-            "character deferral immediately allows handover so Loading is not stuck");
-        c.True(mod.Contains("!LodLoginBakeCharacterWait.IsPending"),
-            "level finalize prefers Decide/skip before character deferral");
+        c.True(!mod.Contains("AllowHandoverWhileCharacterPending"),
+            "character deferral does not hijack running-game handover");
+        c.True(mod.Contains("EnsureJoinAtlasColors"),
+            "atlas colours resolve on the post-finalize tick");
+        c.True(mod.Contains("EnsureJoinPipelineOpen"),
+            "join opens the LOD cache through an idempotent helper");
+        c.True(mod.Contains("OnLoginSweepDeferTick") && mod.Contains("StartLoginVisitSweepIfNeeded"),
+            "sweep start runs from the post-finalize tick");
+
+        int deferAt = mod.IndexOf("void OnLoginSweepDeferTick", StringComparison.Ordinal);
+        int afterDefer = mod.IndexOf("void StopLoginSweepDeferListener", deferAt, StringComparison.Ordinal);
+        c.True(deferAt >= 0 && afterDefer > deferAt, "OnLoginSweepDeferTick bounds");
+        string defer = mod.Substring(deferAt, afterDefer - deferAt);
+        int pendingAt = defer.IndexOf("LodLoginBakeCharacterWait.IsPending", StringComparison.Ordinal);
+        int rendererAt = defer.IndexOf("EnsureJoinRenderer", StringComparison.Ordinal);
+        int openAt = defer.IndexOf("EnsureJoinPipelineOpen", StringComparison.Ordinal);
+        c.True(pendingAt >= 0 && rendererAt > pendingAt,
+            "join renderer arms after the character-wait check");
+        c.True(openAt > rendererAt,
+            "LOD cache Open runs after join renderer arm");
+
+        int finalizeAt = mod.IndexOf("void OnLevelFinalize()", StringComparison.Ordinal);
+        int afterFinalize = mod.IndexOf("static readonly int ExploreHopBlocks", finalizeAt, StringComparison.Ordinal);
+        c.True(finalizeAt >= 0 && afterFinalize > finalizeAt, "OnLevelFinalize bounds");
+        string finalize = mod.Substring(finalizeAt, afterFinalize - finalizeAt);
+        c.True(!finalize.Contains("GetAverageColor"),
+            "OnLevelFinalize does not sample the block atlas");
+        c.True(!finalize.Contains("UnknownTexturePosition"),
+            "OnLevelFinalize does not read UnknownTexturePosition");
+        c.True(!finalize.Contains("StartLoginVisitSweepIfNeeded"),
+            "OnLevelFinalize does not start the sweep or Decide");
+        c.True(!finalize.Contains("pipeline.Open"),
+            "OnLevelFinalize does not open the LOD cache");
+        c.True(!finalize.Contains("LodLocalOfferSource"),
+            "OnLevelFinalize does not open local offers");
+        c.True(finalize.Contains("DeferLoginVisitSweep()"),
+            "OnLevelFinalize always defers sweep start off the first present");
+        c.True(finalize.Contains("RestorePresentFramebuffer()"),
+            "OnLevelFinalize unbinds leftover FBOs before the first SwapBuffers");
+        c.True(mod.Contains("CurrentFrameBuffer = null"),
+            "present restore binds the default window framebuffer, not Primary");
+        c.True(!mod.Contains("OrthoMode") && !mod.Contains("ClearFrameBuffer"),
+            "present restore does not call OrthoMode or ClearFrameBuffer");
 
         string bake = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
-        c.True(bake.Contains("EnsureRunningGameRenderPath"),
-            "login bake completes running-game handover without ending sweep");
+        c.True(!bake.Contains("EnsureRunningGameRenderPath"),
+            "login bake does not switch ScreenManager present path during sweep");
         c.True(bake.Contains("LodLoginBakeCharacterWait.IsProtectedDialog"),
             "close-blocking-dialogs skips character/class selection");
+        c.True(bake.Contains("renderer.LoginBakeBlocked = false"),
+            "sweep Begin unblocks LOD GL after the overlay is shown");
+
+        string quiet = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodJoinQuiet.cs"));
+        c.True(quiet.Contains("public static bool SuppressVaoDrain"),
+            "join quiet exposes SuppressVaoDrain for vsvaogc (no project reference)");
+        c.True(quiet.Contains("loginBakeBlocked || !loginBakeComplete"),
+            "join quiet stays on while terrain is blocked or the sweep is unfinished");
+        c.True(!quiet.Contains("Harmony"),
+            "join quiet does not Harmony-patch vsvaogc");
+        c.True(!mod.Contains("HarmonyLib") && !mod.Contains("PatchAll("),
+            "Distant Vistas does not Harmony-patch vsvaogc or the present path");
     }
 }

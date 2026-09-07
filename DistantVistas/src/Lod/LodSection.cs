@@ -26,7 +26,14 @@ public struct LodPaletteEntry
     public byte TintSlot;
 
     public const byte FlagWater = 1;
-    // Bits 2 and 4 are free: they held tint classes, now superseded by TintSlot.
+
+    /// <summary>
+    /// Visit-baked canopy whose stored RGB is the frosted side colour. The mesher
+    /// extra-mixes UP faces toward frost white; walls keep <see cref="Color"/>.
+    /// Bit 2 is free of tint-class history (TintSlot superseded those).
+    /// </summary>
+    public const byte FlagFrost = 2;
+    // Bit 4 is free: it held a tint class, now superseded by TintSlot.
 
     /// <summary>
     /// Not terrain at all (fire, meta markers): dropped at capture so it never becomes
@@ -46,6 +53,9 @@ public struct LodPaletteEntry
     /// Tint slot 0; shader must not multiply live tints again.
     /// </summary>
     public const byte FlagBaked = 32;
+
+    /// <summary>Visit paint bits Reclassify must keep; live policy flags are OR'd on.</summary>
+    public const byte VisitKeepMask = FlagBaked | FlagFrost;
 }
 
 /// <summary>

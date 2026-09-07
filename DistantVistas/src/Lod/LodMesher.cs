@@ -37,6 +37,17 @@ public static class LodMesher
     const byte ThinBase = LodTintRegistry.MaxSlots * 2;
     const byte BakedBase = LodTintRegistry.MaxSlots * 3;
 
+    /// <summary>
+    /// Stored colour is the frosted side. Horizontal UP faces extra-mix toward
+    /// frost white. Walls and bottoms keep the stored RGB.
+    /// </summary>
+    public static int FrostFaceColor(int stored, byte flags, bool upFace)
+    {
+        if (stored == 0 || !upFace) return stored;
+        if ((flags & LodPaletteEntry.FlagFrost) == 0) return stored;
+        return LodSeasonBake.MixTowardWhite(stored, LodSeasonBake.TopFrostExtra);
+    }
+
     static byte AlphaFor(byte paletteFlags, byte tintSlot, int color)
     {
         bool water = (paletteFlags & LodPaletteEntry.FlagWater) != 0;
@@ -128,6 +139,7 @@ public static class LodMesher
                     int yTop = LodSection.RunYTop(run);
                     int yBottom = LodSection.RunYBottom(run);
                     int pid = LodSection.RunPaletteId(run);
+                    if ((self.PaletteFlags[pid] & LodPaletteEntry.FlagSkip) != 0) continue;
                     bool isTranslucent = IsTranslucent(self.PaletteFlags[pid]);
 
                     // Sealed underwater hull: drop opaque cave geometry below the
@@ -173,6 +185,7 @@ public static class LodMesher
                     bool topCovered = r > 0
                         && LodSection.RunYBottom(runs[r - 1]) == yTop
                         && !IsThinRun(self, runs[r - 1])
+                        && !IsSkipRun(self, runs[r - 1])
                         && IsTranslucentRun(self, runs[r - 1]) == isTranslucent;
                     // YBottom is carried for thin cover only, which is the one face that
                     // reads it (it sits a quarter block above its own base). A surface
@@ -184,6 +197,7 @@ public static class LodMesher
                     bool bottomCovered = r < runs.Length - 1
                         && LodSection.RunYTop(runs[r + 1]) == yBottom
                         && !IsThinRun(self, runs[r + 1])
+                        && !IsSkipRun(self, runs[r + 1])
                         && IsTranslucentRun(self, runs[r + 1]) == isTranslucent;
                     if (!bottomCovered && yBottom > 1 && !isTranslucent)
                     {
@@ -293,7 +307,8 @@ public static class LodMesher
             }
 
             Buffers buf = first.Water ? water : opaque;
-            int color = self.PaletteColors[first.Pid];
+            int color = FrostFaceColor(
+                self.PaletteColors[first.Pid], self.PaletteFlags[first.Pid], upFace: !first.Bottom);
             if (first.Water) color = LodPaletteRepair.WaterDrawColor(color);
             byte alpha = AlphaFor(self.PaletteFlags[first.Pid], self.PaletteTintSlots[first.Pid], color);
 
@@ -476,7 +491,7 @@ public static class LodMesher
 
             if (IsWaterRun(self, run)) break;
 
-            if (IsThinRun(self, run))
+            if (IsThinRun(self, run) || IsSkipRun(self, run))
             {
                 // Thin mats occupy the column but are not seabed; skip through them
                 // without breaking contiguity so a plant on the sea floor still seals.
@@ -505,6 +520,9 @@ public static class LodMesher
     /// </summary>
     static bool IsThinRun(SectionSnapshot s, ulong run) =>
         (s.PaletteFlags[LodSection.RunPaletteId(run)] & LodPaletteEntry.FlagThin) != 0;
+
+    static bool IsSkipRun(SectionSnapshot s, ulong run) =>
+        (s.PaletteFlags[LodSection.RunPaletteId(run)] & LodPaletteEntry.FlagSkip) != 0;
 
     static (SectionSnapshot? snap, int col) NeighborColumn(MeshJob job, int cx, int cz)
     {
@@ -544,7 +562,7 @@ public static class LodMesher
         {
             // A mat never covers anything; beyond that, solid faces are only culled by
             // solid neighbours so terrain stays visible through water.
-            if (IsThinRun(nb, neighborRuns[i])) continue;
+            if (IsThinRun(nb, neighborRuns[i]) || IsSkipRun(nb, neighborRuns[i])) continue;
             if (solidCoverOnly && IsTranslucentRun(nb, neighborRuns[i])) continue;
 
             int nTop = LodSection.RunYTop(neighborRuns[i]);

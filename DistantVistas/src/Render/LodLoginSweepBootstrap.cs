@@ -1,3 +1,4 @@
+using System.Globalization;
 using Vintagestory.API.Client;
 using Vintagestory.API.Common;
 using Vintagestory.API.Common.Entities;
@@ -51,28 +52,35 @@ public readonly struct LodLoginSweepPlan
 
 /// <summary>
 /// Plans which L0 cells the login visit sweep should touch. With no per-world complete
-/// marker, always bootstraps a coast-guard ocean sweep or ~6 km radius around spawn
+/// marker, always bootstraps a coast-guard ocean sweep or ~36 km radius around the player
 /// (even if some land was already walked). After a successful complete, existing visited
 /// canvases are spatially subsampled to a wall-clock revisit budget.
 /// </summary>
 public static class LodLoginSweepBootstrap
 {
-    /// <summary>Default bootstrap probe radius for empty canvas (ocean/land classification).</summary>
-    public const int EmptyCanvasBootstrapRadiusBlocks = 6000;
+    /// <summary>
+    /// Season-expired / first-join disk around the player. 36000 = 2× the old 18 km
+    /// radius (2× diameter). Canvas outside this disk is kept, never wiped.
+    /// </summary>
+    public const int EmptyCanvasBootstrapRadiusBlocks = 36000;
 
     /// <summary>
-    /// Hard cap on bootstrap visit stops (~1 min at <see cref="LodLoginSweepTiming.InitialSecPerStop"/>).
-    /// Spatial subsample uses <see cref="BudgetBootstrapVisitStops"/> (inner-weighted bands).
+    /// Hard cap on bootstrap visit stops at this PC's measured stop rate.
+    /// Spatial subsample uses <see cref="BudgetBootstrapVisitStops"/> (outer-weighted bands).
     /// </summary>
     public static int BootstrapMaxVisitStops =>
-        LodLoginSweepTiming.BootstrapCellBudget(LodLoginSweepTiming.InitialSecPerStop);
+        LodLoginSweepTiming.BootstrapCellBudget(LodLoginSweepTiming.MachineSecPerStop);
 
     /// <summary>
-    /// Hard cap on season-revisit stops (~1 min at <see cref="LodLoginSweepTiming.InitialSecPerStop"/>).
+    /// Hard cap on season-revisit stops at this PC's measured stop rate.
     /// Large visited canvases are spatially subsampled — never every L0 key.
     /// </summary>
     public static int RevisitMaxVisitStops =>
-        LodLoginSweepTiming.RevisitCellBudget(LodLoginSweepTiming.InitialSecPerStop);
+        LodLoginSweepTiming.RevisitCellBudget(LodLoginSweepTiming.MachineSecPerStop);
+
+    /// <summary>Shorter miss-retry hop so the overlay does not run the first pass twice.</summary>
+    public static int RetryMaxVisitStops =>
+        LodLoginSweepTiming.RetryStopBudget(LodLoginSweepTiming.MachineSecPerStop);
 
     /// <summary>Ocean cells must span at least this many blocks to trigger coast-guard mode.</summary>
     public const int LargeOceanMinSpanBlocks = 1500;
@@ -113,7 +121,7 @@ public static class LodLoginSweepBootstrap
         Plan(world, clientWorld, pipeline, blocks, plantTintFallback, untintedOf, capi, RevisitMaxVisitStops);
 
     /// <summary>
-    /// First-sweep / empty-canvas plan: coast-guard or ~6 km spawn-radius disk, spatially
+    /// First-sweep / empty-canvas plan: coast-guard or ~36 km player-radius disk, spatially
     /// subsampled to <see cref="BootstrapMaxVisitStops"/>. Skips L0 cells already fully
     /// baked in the per-world cache; ocean sample/stamp rules unchanged.
     /// </summary>
@@ -204,6 +212,93 @@ public static class LodLoginSweepBootstrap
         }
 
         string label = LabelForBudgetedRevisit(visitedTotal, planned.Count, gapCount, seasonRefresh);
+        // #region agent log
+        try
+        {
+            System.IO.File.AppendAllText(
+                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                "{\"sessionId\":\"40cccb\",\"runId\":\"season-1\",\"hypothesisId\":\"H-S-plan\",\"location\":\"LodLoginSweepBootstrap.PlanRevisitKeys\",\"message\":\"revisit-plan\",\"data\":{\"visited\":"
+                + visitedTotal + ",\"needsVisit\":" + needsVisit.Count + ",\"complete\":" + complete.Count
+                + ",\"planned\":" + planned.Count + ",\"maxStops\":" + maxVisitStops
+                + ",\"seasonRefresh\":" + (seasonRefresh ? "true" : "false")
+                + ",\"gapCount\":" + gapCount
+                + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+        }
+        catch { }
+        // #endregion
+        return new LodLoginSweepPlan(LodLoginSweepPlanMode.RevisitVisited, planned, label);
+    }
+
+    /// <summary>
+    /// Outside the 30-day window: hop a spatial sample of stored L0 in the player
+    /// disk, capped at <see cref="RevisitMaxVisitStops"/>, then a short interior
+    /// gap-fill between those stops. A full-disk hop is ~1 hour and is never the
+    /// expire path. Outer-edge scraps stay. Gap audit is ignored for who to hop.
+    /// </summary>
+    public static LodLoginSweepPlan PlanSeasonExpired(
+        LodWorld world,
+        IClientWorldAccessor clientWorld,
+        LodPipeline pipeline,
+        IList<Block> blocks,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
+        ICoreClientAPI? capi = null)
+    {
+        List<long> visited = LodLoginSweep.VisitedL0Keys(world).ToList();
+        visited.Sort();
+        int visitedTotal = visited.Count;
+        EntityPos pos = clientWorld.Player.Entity.Pos;
+        int footprint = LodSection.SectionBlocks;
+        int centerSx = (int)Math.Floor(pos.X / footprint);
+        int centerSz = (int)Math.Floor(pos.Z / footprint);
+        double radiusSq = EmptyCanvasBootstrapRadiusBlocks * (double)EmptyCanvasBootstrapRadiusBlocks;
+        visited = visited.Where(key =>
+        {
+            double cx = LodWorld.KeySx(key) * footprint + footprint * 0.5;
+            double cz = LodWorld.KeySz(key) * footprint + footprint * 0.5;
+            double dx = cx - pos.X;
+            double dz = cz - pos.Z;
+            return dx * dx + dz * dz <= radiusSq;
+        }).ToList();
+        if (visited.Count == 0)
+            visited = LodLoginSweep.VisitedL0Keys(world).ToList();
+
+        int diskCount = visited.Count;
+        int maxVisitStops = RevisitMaxVisitStops;
+        List<long> planned = BudgetVisitStops(visited, centerSx, centerSz, maxVisitStops);
+        int interiorBudget = RetryMaxVisitStops;
+        List<long> interior = InteriorGapsBetweenStops(visited, planned, interiorBudget);
+        if (interior.Count > 0)
+            planned.AddRange(interior);
+        bool seasonRefresh = planned.Count > 0;
+        if (planned.Count < diskCount)
+            LogBudget(capi, diskCount, planned.Count, "Revisit");
+
+        LodLoginBakeAudit.PartitionVisitKeys(
+            visited, world, pipeline, blocks, plantTintFallback, untintedOf,
+            out List<long> needsVisit, out List<long> complete);
+
+        string label = LabelForBudgetedRevisit(diskCount, planned.Count, 0, seasonRefresh);
+        // #region agent log
+        try
+        {
+            System.IO.File.AppendAllText(
+                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                "{\"sessionId\":\"40cccb\",\"runId\":\"post-fix-expire\",\"hypothesisId\":\"H-S-plan\",\"location\":\"LodLoginSweepBootstrap.PlanSeasonExpired\",\"message\":\"revisit-plan\",\"data\":{\"visited\":"
+                + visitedTotal + ",\"diskCount\":" + diskCount
+                + ",\"needsVisit\":" + needsVisit.Count + ",\"complete\":" + complete.Count
+                + ",\"planned\":" + planned.Count + ",\"maxStops\":" + maxVisitStops
+                + ",\"interiorFill\":" + interior.Count
+                + ",\"interiorBudget\":" + interiorBudget
+                + ",\"seasonRefresh\":" + (seasonRefresh ? "true" : "false")
+                + ",\"gapCount\":" + needsVisit.Count
+                + ",\"seasonExpired\":true"
+                + ",\"fullDiskRecapture\":false"
+                + ",\"etaSec\":" + (LodLoginSweepTiming.MachineSecPerStop * planned.Count).ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+        }
+        catch { }
+        // #endregion
         return new LodLoginSweepPlan(LodLoginSweepPlanMode.RevisitVisited, planned, label);
     }
 
@@ -211,7 +306,10 @@ public static class LodLoginSweepBootstrap
     /// Target only keys that still need capture/bake — never the full visited canvas when
     /// a handful of regions are incomplete.
     /// </summary>
-    public static LodLoginSweepPlan PlanIncomplete(IReadOnlyList<LodLoginBakeAudit.Miss> misses)
+    public static LodLoginSweepPlan PlanIncomplete(
+        IReadOnlyList<LodLoginBakeAudit.Miss> misses,
+        IClientWorldAccessor? clientWorld = null,
+        int? maxStops = null)
     {
         var keys = new List<long>(misses.Count);
         var seen = new HashSet<long>();
@@ -221,9 +319,25 @@ public static class LodLoginSweepBootstrap
             keys.Add(miss.Key);
         }
         keys.Sort();
-        string label = keys.Count == 1
+        int gapCount = keys.Count;
+        int maxVisitStops = maxStops ?? RevisitMaxVisitStops;
+        if (keys.Count > maxVisitStops)
+        {
+            int centerSx = 0;
+            int centerSz = 0;
+            if (clientWorld?.Player?.Entity != null)
+            {
+                int footprint = LodSection.SectionBlocks;
+                centerSx = (int)Math.Floor(clientWorld.Player.Entity.Pos.X / footprint);
+                centerSz = (int)Math.Floor(clientWorld.Player.Entity.Pos.Z / footprint);
+            }
+            keys = BudgetVisitStops(keys, centerSx, centerSz, maxVisitStops);
+        }
+        string label = gapCount == 1
             ? "Repairing 1 incomplete region"
-            : $"Repairing {keys.Count} incomplete regions";
+            : keys.Count < gapCount
+                ? $"Repairing {keys.Count} of {gapCount} incomplete regions"
+                : $"Repairing {keys.Count} incomplete regions";
         return new LodLoginSweepPlan(LodLoginSweepPlanMode.RevisitIncomplete, keys, label);
     }
 
@@ -393,10 +507,58 @@ public static class LodLoginSweepBootstrap
     }
 
     /// <summary>
-    /// First-join bootstrap subsample across the ~6 km probe disk. Linear distance picks
-    /// (see <see cref="BudgetVisitStops"/>) left ~1 stop per long outer arc — 38 stops
-    /// across 27k cells felt like a sparse sprinkle. Inner-weighted distance bands put more
-    /// teleports near spawn and along each ring while still visiting the disk edge.
+    /// After the 64-stop sample, hop leftovers that sit strictly inside the
+    /// planned hull. Outer-edge scraps and disconnected rim bits stay.
+    /// </summary>
+    internal static List<long> InteriorGapsBetweenStops(
+        List<long> visited,
+        List<long> planned,
+        int max)
+    {
+        if (max <= 0 || planned.Count < 3 || visited.Count == 0)
+            return new List<long>();
+
+        int minSx = int.MaxValue, maxSx = int.MinValue;
+        int minSz = int.MaxValue, maxSz = int.MinValue;
+        var plannedSet = new HashSet<long>(planned);
+        foreach (long k in planned)
+        {
+            int sx = LodWorld.KeySx(k);
+            int sz = LodWorld.KeySz(k);
+            if (sx < minSx) minSx = sx;
+            if (sx > maxSx) maxSx = sx;
+            if (sz < minSz) minSz = sz;
+            if (sz > maxSz) maxSz = sz;
+        }
+
+        minSx++;
+        maxSx--;
+        minSz++;
+        maxSz--;
+        if (maxSx < minSx || maxSz < minSz)
+            return new List<long>();
+
+        var interior = new List<long>();
+        foreach (long k in visited)
+        {
+            if (plannedSet.Contains(k)) continue;
+            int sx = LodWorld.KeySx(k);
+            int sz = LodWorld.KeySz(k);
+            if (sx < minSx || sx > maxSx || sz < minSz || sz > maxSz) continue;
+            interior.Add(k);
+        }
+        if (interior.Count == 0)
+            return interior;
+
+        int cx = (minSx + maxSx) / 2;
+        int cz = (minSz + maxSz) / 2;
+        return BudgetVisitStops(interior, cx, cz, max);
+    }
+
+    /// <summary>
+    /// First-join bootstrap subsample across the ~36 km probe disk. Linear distance picks
+    /// (see <see cref="BudgetVisitStops"/>) left ~1 stop per long outer arc. Outer-weighted
+    /// distance bands put more teleports on the horizon ring so the far LOD looks filled.
     /// </summary>
     internal static List<long> BudgetBootstrapVisitStops(
         List<long> keys,
@@ -426,7 +588,7 @@ public static class LodLoginSweepBootstrap
             int span = end - start;
             if (span <= 0) continue;
 
-            int weight = bands - b;
+            int weight = b + 1;
             int picks = Math.Max(1, (int)Math.Round(max * weight / (double)weightSum));
             picks = Math.Min(picks, max - result.Count);
             picks = Math.Min(picks, span);
@@ -468,15 +630,21 @@ public static class LodLoginSweepBootstrap
 
     static string LabelForBudgetedRevisit(int visitedTotal, int planned, int gapCount, bool seasonRefresh)
     {
+        if (seasonRefresh && gapCount > 0)
+            return $"Gaps + season refresh ({planned} stops)";
+        if (seasonRefresh)
+        {
+            string baseLabel = "Refreshing visited land (season)";
+            if (planned >= visitedTotal) return baseLabel;
+            return $"{baseLabel} ({planned} of {visitedTotal})";
+        }
         if (gapCount > 0 && planned <= gapCount)
             return gapCount == 1
                 ? "Filling 1 incomplete region"
                 : $"Filling gaps ({planned} of {gapCount} incomplete)";
-        if (seasonRefresh && gapCount > 0)
-            return $"Gaps + season refresh ({planned} stops)";
-        string baseLabel = "Refreshing visited land (season)";
-        if (planned >= visitedTotal) return baseLabel;
-        return $"{baseLabel} ({planned} of {visitedTotal})";
+        string fallback = "Refreshing visited land (season)";
+        if (planned >= visitedTotal) return fallback;
+        return $"{fallback} ({planned} of {visitedTotal})";
     }
 
     static void LogSkipComplete(ICoreClientAPI? capi, int skipped, int total, string kind)

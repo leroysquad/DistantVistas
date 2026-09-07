@@ -25,12 +25,14 @@ public sealed class LodLoginSweepResume
     public string Season { get; set; } = "";
     public string CalendarToken { get; set; } = "";
     public double SavedTotalDays { get; set; }
+    public long WindowStartedUtcMs { get; set; }
     public LodLoginSweepPlanMode SweepMode { get; set; }
     public string SweepModeLabel { get; set; } = "";
     public int PlannedTotal { get; set; }
     public int Finished { get; set; }
     public int ResweepRound { get; set; }
     public bool RetryingMisses { get; set; }
+    public bool ExpireRecapture { get; set; }
     public List<long> Pending { get; set; } = new();
     public List<long> Completed { get; set; } = new();
     public double RestoreX { get; set; }
@@ -130,7 +132,7 @@ public sealed class LodLoginSweepResume
         if (string.IsNullOrEmpty(WorldId)
             || !string.Equals(WorldId, current, StringComparison.Ordinal))
             return false;
-        return LodLoginSweepWindow.IsWithin(world, Season, SavedTotalDays);
+        return LodLoginSweepWindow.IsWithin(world, SavedTotalDays, WindowStartedUtcMs);
     }
 
     /// <summary>
@@ -162,6 +164,7 @@ public sealed class LodLoginSweepResume
             Season = seasonSlug,
             CalendarToken = token,
             SavedTotalDays = cal.TotalDays,
+            WindowStartedUtcMs = LodLoginSweepWindow.NowUtcMs(),
         };
     }
 

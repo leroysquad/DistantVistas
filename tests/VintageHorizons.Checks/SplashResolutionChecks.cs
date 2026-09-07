@@ -29,14 +29,18 @@ public static class SplashResolutionChecks
 
     static void SourceHooks(Check c)
     {
-        string screen = File.ReadAllText(Path.Combine(
-            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeScreenRenderer.cs"));
-        c.True(screen.Contains("LodLoginSplashLayout.CoverFit"),
-            "splash draws backdrop with cover-fit layout");
-        c.True(screen.Contains("TryDrawSolidQuad"),
-            "splash tiles large opaque quads for ultrawide frames");
-        c.True(screen.Contains("OpaqueTileSize"),
-            "splash uses configurable opaque tile size");
+        c.False(File.Exists(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeScreenRenderer.cs")),
+            "present-path splash renderer is removed");
+
+        string overlay = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeInputGuard.cs"));
+        c.True(overlay.Contains("AddShadedDialogBG"),
+            "overlay paints a Cairo backdrop instead of OrthoMode splash");
+        c.True(!overlay.Contains("OrthoMode("),
+            "overlay sources do not call OrthoMode");
+        c.True(!overlay.Contains("ClearFrameBuffer"),
+            "overlay sources do not clear the framebuffer");
 
         string layout = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSplashLayout.cs"));

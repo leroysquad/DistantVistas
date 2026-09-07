@@ -164,14 +164,36 @@ public class LodTerrainRenderer : IRenderer
     /// <summary>Dev/testing: keep the game unpaused even without window focus.</summary>
     public bool AutoUnpause;
 
+    bool loginBakeComplete;
+    bool loginBakeBlocked = true;
+
     /// <summary>Login bake finished: visited land keeps baked colours until relog.</summary>
-    public bool LoginBakeComplete { get; set; }
+    public bool LoginBakeComplete
+    {
+        get => loginBakeComplete;
+        set
+        {
+            loginBakeComplete = value;
+            LodJoinQuiet.Sync(loginBakeBlocked, loginBakeComplete);
+        }
+    }
 
     /// <summary>Login visit sweep overlay is up — skip LOD draws so teleports cannot flash sky/terrain through.</summary>
     public bool LoginBakeOverlayActive { get; set; }
 
-    /// <summary>Login sweep deferred for character UI — skip terrain GL until sweep arms.</summary>
-    public bool LoginBakeBlocked { get; set; }
+    /// <summary>
+    /// Skip terrain GL until the join present is safe (atlas compose + character UI).
+    /// Starts true; cleared only when the sweep arms or the player enters play.
+    /// </summary>
+    public bool LoginBakeBlocked
+    {
+        get => loginBakeBlocked;
+        set
+        {
+            loginBakeBlocked = value;
+            LodJoinQuiet.Sync(loginBakeBlocked, loginBakeComplete);
+        }
+    }
 
     // Climate tints: sampled on a lattice one slot per frame so the field mean
     // is not one hashed row. Season is NOT in this table - that is a live
@@ -294,6 +316,7 @@ public class LodTerrainRenderer : IRenderer
 
     readonly long[] unfilledSample = new long[4];
     int unfilledSampleCount;
+    int gapNdjsonCount;
     long lastUnfilledLogFrame = long.MinValue / 2;
     const int UnfilledLogIntervalFrames = 600;
     Action<string>? holeLog;
@@ -431,10 +454,31 @@ public class LodTerrainRenderer : IRenderer
         this.tints = tints;
         maxWorkerMeshBacklog = worker.MeshThreads * MeshBacklogPerThread;
 
+        LodJoinQuiet.Sync(loginBakeBlocked, loginBakeComplete);
+    }
+
+    bool joinRendererReady;
+
+    public bool JoinRendererReady => joinRendererReady;
+
+    /// <summary>
+    /// Compile lodterrain and join the Opaque list only after character UI.
+    /// High Clouds reloads cloudmap during LevelFinalize; an Opaque renderer
+    /// registered before that first present is extra GL on the crash frame.
+    /// </summary>
+    public void EnsureJoinRenderer()
+    {
+        if (joinRendererReady) return;
+
         capi.Event.ReloadShader += LoadShader;
         LoadShader();
-
         capi.Event.RegisterRenderer(this, EnumRenderStage.Opaque, "distantvistas-lod");
+        joinRendererReady = true;
+        // #region agent log
+        FogAgentLog("H-FOG-5", "LodTerrainRenderer.EnsureJoinRenderer", "renderer-register",
+            "\"shaderOk\":" + (shaderOk ? "true" : "false")
+            + ",\"loadError\":" + (prog != null && prog.LoadError ? "true" : "false"));
+        // #endregion
     }
 
     public bool LoadShader()
@@ -458,11 +502,19 @@ public class LodTerrainRenderer : IRenderer
         uploadedTintVersion = -1; // fresh program object: uniform state is gone
         shaderOk = prog.Compile();
         if (!shaderOk) capi.Logger.Error("[DistantVistas] lodterrain shader failed to compile; LOD rendering disabled");
+        // #region agent log
+        FogAgentLog("H-FOG-2", "LodTerrainRenderer.LoadShader", "shader-compile",
+            "\"ok\":" + (shaderOk ? "true" : "false")
+            + ",\"loadError\":" + (prog.LoadError ? "true" : "false")
+            + ",\"joinReady\":" + (joinRendererReady ? "true" : "false"));
+        // #endregion
         return shaderOk;
     }
 
     public void ApplyZFar()
     {
+        if (LoginBakeBlocked) return;
+
         float needed = GameMath.Max(28000, EffectiveFarDistance + 2048);
         var clientMain = (ClientMain)capi.World;
 
@@ -1290,6 +1342,16 @@ public class LodTerrainRenderer : IRenderer
                         return false;
                     }
                     Submit(key);
+                    // #region agent log
+                    if (++slabSubmitLog <= 20)
+                    {
+                        FogAgentLog("H-S3", "LodTerrainRenderer.CollectDrawNodes", "submit-incomplete-l0",
+                            "\"runId\":\"slab-1\",\"sx\":" + LodWorld.KeySx(key)
+                            + ",\"sz\":" + LodWorld.KeySz(key)
+                            + ",\"cols\":" + (world.Sections.TryGetValue(key, out LodSection? incSec) ? incSec.CapturedColumns : -1)
+                            + ",\"n\":" + slabSubmitLog);
+                    }
+                    // #endregion
                     return true;
                 }
                 lastSelectedFrame[key] = frameCounter;
@@ -1460,6 +1522,18 @@ public class LodTerrainRenderer : IRenderer
             {
                 gapDraws.Add(new GapDraw(key, 0, 0, footprint, footprint));
                 drew = true;
+                // #region agent log
+                if (++slabSubmitLog <= 20)
+                {
+                    FogAgentLog("H-S3", "LodTerrainRenderer.FillGaps", "whole-footprint-plate",
+                        "\"runId\":\"slab-1\",\"lvl\":" + fillerLevel
+                        + ",\"sx\":" + LodWorld.KeySx(key)
+                        + ",\"sz\":" + LodWorld.KeySz(key)
+                        + ",\"fp\":" + footprint
+                        + ",\"land\":" + (fillerLandLike ? "true" : "false")
+                        + ",\"n\":" + slabSubmitLog);
+                }
+                // #endregion
             }
         }
         else
@@ -1594,6 +1668,29 @@ public class LodTerrainRenderer : IRenderer
             }
         }
         holeLog(sb.ToString());
+        // #region agent log
+        if (gapNdjsonCount < 8)
+        {
+            gapNdjsonCount++;
+            try
+            {
+                System.IO.File.AppendAllText(
+                    @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                    "{\"sessionId\":\"40cccb\",\"runId\":\"glitch-1\",\"hypothesisId\":\"H-G-GAPS\",\"location\":\"LodTerrainRenderer.ReportUnfilledGaps\",\"message\":\"unfilled-gaps\",\"data\":{\"n\":"
+                    + gapNdjsonCount
+                    + ",\"gaps\":" + gaps.Count
+                    + ",\"dirty\":" + world.RenderDirty.Count
+                    + ",\"meshJobs\":" + meshJobInFlight.Count
+                    + ",\"mipDirty\":" + world.MipDirty.Count
+                    + ",\"complete\":" + (loginBakeComplete ? "true" : "false")
+                    + ",\"overlay\":" + (LoginBakeOverlayActive ? "true" : "false")
+                    + ",\"lookDown\":" + lookDown01.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)
+                    + ",\"meshes\":" + sectionMeshes.Count
+                    + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+            }
+            catch { }
+        }
+        // #endregion
     }
 
     string DescribeKeyState(long key)
@@ -2244,7 +2341,8 @@ public class LodTerrainRenderer : IRenderer
             // Idle: already-meshed land waits for a tile of travel, except peek
             // cubes that have to remesh when the real chunk lands at spawn.
             if (!LodCoveragePolicy.ShouldRemeshWhileIdle(
-                    windowMovedThisFrame, HasAnyMesh(key), IsProvisionalKey(key)))
+                    windowMovedThisFrame, HasAnyMesh(key), IsProvisionalKey(key),
+                    world.ForceRemesh.Contains(key)))
                 continue;
 
             double distSq = NearestDistanceSqTo(key);
@@ -2387,7 +2485,8 @@ public class LodTerrainRenderer : IRenderer
         // for land that is already on screen. Capture-dirty keys stay in RenderDirty
         // until the origin actually moves.
         if (!LodCoveragePolicy.ShouldRemeshWhileIdle(
-                windowMovedThisFrame, HasAnyMesh(best), IsProvisionalKey(best)))
+                windowMovedThisFrame, HasAnyMesh(best), IsProvisionalKey(best),
+                world.ForceRemesh.Contains(best)))
             return false;
 
         // It was dirty and not in flight a moment ago, and nothing below touches any
@@ -2425,6 +2524,7 @@ public class LodTerrainRenderer : IRenderer
 
         meshBudget--;
         meshJobInFlight.Add(best);
+        world.ForceRemesh.Remove(best);
         job.Key = best;
         job.Self = SectionSnapshot.Of(section);
         worker.EnqueueMesh(job);
@@ -2452,6 +2552,21 @@ public class LodTerrainRenderer : IRenderer
                     result.VertexCount, result.IndexCount);
                 if (!meshBornFrame.ContainsKey(result.Key))
                     meshBornFrame[result.Key] = frameCounter;
+                // #region agent log
+                if (++slabUploadLog <= 24)
+                {
+                    world.Sections.TryGetValue(result.Key, out LodSection? upSec);
+                    FogAgentLog("H-S4", "LodTerrainRenderer.UploadFinishedMeshes", "remesh-upload",
+                        "\"runId\":\"slab-1\",\"lvl\":" + LodWorld.KeyLevel(result.Key)
+                        + ",\"sx\":" + LodWorld.KeySx(result.Key)
+                        + ",\"sz\":" + LodWorld.KeySz(result.Key)
+                        + ",\"verts\":" + result.VertexCount
+                        + ",\"idx\":" + result.IndexCount
+                        + ",\"cols\":" + (upSec?.CapturedColumns ?? -1)
+                        + ",\"rel\":" + (upSec != null ? upSec.SurfaceRelief.ToString("0.0") : "-1")
+                        + ",\"n\":" + slabUploadLog);
+                }
+                // #endregion
             }
 
             if (result.WaterIndexCount > 0 && result.WaterXyz != null)
@@ -2489,9 +2604,31 @@ public class LodTerrainRenderer : IRenderer
 
     // ---- Frame ----
 
+    int playFrameCount;
+    int postQuietFrames;
+    int minimizeLogs;
+
     public void OnRenderFrame(float deltaTime, EnumRenderStage stage)
     {
+        LodJoinQuiet.Sync(loginBakeBlocked, loginBakeComplete);
         if (LoginBakeOverlayActive || LoginBakeBlocked) return;
+
+        playFrameCount++;
+        if (!LodJoinQuiet.SuppressVaoDrain) postQuietFrames++;
+        long playFrameEnter = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        bool logPlayFrame = playFrameCount <= 5 || (postQuietFrames > 0 && postQuietFrames <= 5);
+        // #region agent log
+        if (logPlayFrame)
+        {
+            try
+            {
+                System.IO.File.AppendAllText(
+                    @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                    "{\"sessionId\":\"40cccb\",\"hypothesisId\":\"H4\",\"location\":\"LodTerrainRenderer.OnRenderFrame\",\"message\":\"play-frame-enter\",\"data\":{\"n\":" + playFrameCount + ",\"complete\":" + (loginBakeComplete ? "true" : "false") + ",\"suppressDrain\":" + (LodJoinQuiet.SuppressVaoDrain ? "true" : "false") + ",\"stage\":\"" + stage + "\"},\"timestamp\":" + playFrameEnter + "}\n");
+            }
+            catch { }
+        }
+        // #endregion
 
         if (frameCounter == 0)
         {
@@ -2501,10 +2638,27 @@ public class LodTerrainRenderer : IRenderer
 
         if (AutoUnpause && capi.IsGamePaused) capi.PauseGame(false);
 
-        if (prog == null || !shaderOk || prog.LoadError) return;
+        if (prog == null || !shaderOk || prog.LoadError)
+        {
+            // #region agent log
+            if (logPlayFrame) LogPlayFrameExit("shader");
+            MaybeLogCalendarFog("shader");
+            // #endregion
+            return;
+        }
 
         var rapi = capi.Render;
-        if (rapi.FrameWidth == 0) return;
+        if (rapi.FrameWidth == 0)
+        {
+            // #region agent log
+            if (logPlayFrame || minimizeLogs < 3)
+            {
+                minimizeLogs++;
+                LogPlayFrameExit("zero-width");
+            }
+            // #endregion
+            return;
+        }
 
         camPos = capi.World.Player.Entity.CameraPos;
         Vec3f look = capi.World.Player.Entity.Pos.GetViewVector();
@@ -2582,7 +2736,14 @@ public class LodTerrainRenderer : IRenderer
         if (!LoginBakeComplete)
             RefreshSeasonalState();
 
-        if (drawList.Count == 0) return;
+        if (drawList.Count == 0)
+        {
+            // #region agent log
+            if (logPlayFrame) LogPlayFrameExit("empty");
+            MaybeLogCalendarFog("empty");
+            // #endregion
+            return;
+        }
 
         prog.Use();
         rapi.GlDisableCullFace();
@@ -2621,6 +2782,38 @@ public class LodTerrainRenderer : IRenderer
         if (!keepClimateValid)
             CaptureKeepClimate(climatePos.X, climatePos.Z);
         prog.Uniform("seasonRel", seasonRel);
+        // #region agent log
+        if (LoginBakeComplete && dbgSeasonUpload < 3)
+        {
+            dbgSeasonUpload++;
+            float liveRel = 0.5f;
+            int month = -1;
+            int dayOfYear = 0;
+            try
+            {
+                liveRel = capi.World.Calendar.GetSeasonRel(climatePos);
+                month = capi.World.Calendar.Month;
+                dayOfYear = capi.World.Calendar.DayOfYear;
+            }
+            catch { }
+            float[] st = tints.SeasonTints;
+            FogAgentLog("H-MAY9", "LodTerrainRenderer.OnRenderFrame", "season-upload",
+                "\"uploadedRel\":" + seasonRel.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"liveRel\":" + liveRel.ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"complete\":true"
+                + ",\"month\":" + month
+                + ",\"dayOfYear\":" + dayOfYear
+                + ",\"s0r\":" + st[0].ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"s0g\":" + st[1].ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"s0b\":" + st[2].ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"s1r\":" + st[4].ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"s1g\":" + st[5].ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"s1b\":" + st[6].ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"s2r\":" + st[8].ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"s2g\":" + st[9].ToString(System.Globalization.CultureInfo.InvariantCulture)
+                + ",\"s2b\":" + st[10].ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+        // #endregion
         prog.Uniform("keepClimateLow",
             keepClimate.LowR, keepClimate.LowG, keepClimate.LowB, keepClimate.LowTemp / 255f);
         prog.Uniform("keepClimateHigh",
@@ -2641,6 +2834,9 @@ public class LodTerrainRenderer : IRenderer
         prog.Uniform("skyFadeStart", SkyFadeStart);
         prog.Uniform("pastViewHaze", DisableLodFog ? 0f : PastViewHaze);
         prog.Uniform("disableLodFog", DisableLodFog ? 1f : 0f);
+        // #region agent log
+        MaybeLogCalendarFog("drawn");
+        // #endregion
 
         // Uniforms persist in the program between Use() calls, so re-upload only when
         // the table actually changed (every ~240 frames) rather than every frame.
@@ -2698,7 +2894,99 @@ public class LodTerrainRenderer : IRenderer
 
         rapi.GlEnableCullFace();
         prog.Stop();
+        // #region agent log
+        if (logPlayFrame) LogPlayFrameExit("drawn");
+        // #endregion
     }
+
+    // #region agent log
+    int lastFogLogMonth = int.MinValue;
+    double lastFogLogDays = double.NaN;
+    int slabInvLog;
+    int slabSubmitLog;
+    int slabUploadLog;
+    int dbgSeasonUpload;
+
+    static void FogAgentLog(string hypothesisId, string location, string message, string dataJson)
+    {
+        try
+        {
+            System.IO.File.AppendAllText(
+                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                "{\"sessionId\":\"40cccb\",\"hypothesisId\":\"" + hypothesisId
+                + "\",\"location\":\"" + location
+                + "\",\"message\":\"" + message
+                + "\",\"data\":{" + dataJson + "},\"timestamp\":"
+                + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+        }
+        catch { }
+    }
+
+    void MaybeLogCalendarFog(string why)
+    {
+        int month = -1;
+        double days = 0;
+        float seasonRelNow = -1f;
+        try
+        {
+            IGameCalendar cal = capi.World.Calendar;
+            month = cal.Month;
+            days = cal.TotalDays;
+            climatePos.Set((int)lastKeepOriginX, capi.World.SeaLevel, (int)lastKeepOriginZ);
+            seasonRelNow = cal.GetSeasonRel(climatePos);
+        }
+        catch
+        {
+            return;
+        }
+
+        bool baseline = lastFogLogMonth == int.MinValue;
+        bool jumped = !baseline && (month != lastFogLogMonth || Math.Abs(days - lastFogLogDays) >= 5.0);
+        if (!baseline && !jumped) return;
+        lastFogLogMonth = month;
+        lastFogLogDays = days;
+
+        float fogD = 0f, fogMin = 0f;
+        try
+        {
+            fogD = capi.Ambient.BlendedFogDensity;
+            fogMin = capi.Ambient.BlendedFogMin;
+        }
+        catch { }
+
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        FogAgentLog("H-FOG-1", "LodTerrainRenderer.MaybeLogCalendarFog", "calendar-fog",
+            "\"why\":\"" + why + "\""
+            + ",\"month\":" + month
+            + ",\"days\":" + days.ToString("0.###", inv)
+            + ",\"seasonRel\":" + seasonRelNow.ToString("0.###", inv)
+            + ",\"complete\":" + (loginBakeComplete ? "true" : "false")
+            + ",\"blocked\":" + (loginBakeBlocked ? "true" : "false")
+            + ",\"shaderOk\":" + (shaderOk ? "true" : "false")
+            + ",\"loadError\":" + (prog != null && prog.LoadError ? "true" : "false")
+            + ",\"fogD\":" + fogD.ToString("0.######", inv)
+            + ",\"fogMin\":" + fogMin.ToString("0.###", inv)
+            + ",\"disableLodFog\":" + (DisableLodFog ? "true" : "false")
+            + ",\"haze\":" + (DisableLodFog ? 0f : PastViewHaze).ToString("0.###", inv)
+            + ",\"liveVd\":" + liveViewDistance.ToString("0.#", inv)
+            + ",\"overdraw\":" + OverdrawStart.ToString("0.###", inv)
+            + ",\"far\":" + EffectiveFarDistance.ToString("0.#", inv)
+            + ",\"drawn\":" + LastDrawCount
+            + ",\"meshes\":" + sectionMeshes.Count
+            + ",\"joinReady\":" + (joinRendererReady ? "true" : "false"));
+    }
+
+    void LogPlayFrameExit(string why)
+    {
+        try
+        {
+            System.IO.File.AppendAllText(
+                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                "{\"sessionId\":\"40cccb\",\"hypothesisId\":\"H4\",\"location\":\"LodTerrainRenderer.OnRenderFrame\",\"message\":\"play-frame-exit\",\"data\":{\"n\":" + playFrameCount + ",\"why\":\"" + why + "\"},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+        }
+        catch { }
+    }
+    // #endregion
 
     /// <summary>
     /// The gap-fill pass for one mesh table (opaque or water): each entry is the
@@ -2902,12 +3190,24 @@ public class LodTerrainRenderer : IRenderer
 
     public void InvalidateGpuMesh(long key)
     {
+        bool hadMesh = sectionMeshes.ContainsKey(key) || waterMeshes.ContainsKey(key);
         if (sectionMeshes.Remove(key, out MeshRef? mesh)) mesh.Dispose();
         if (waterMeshes.Remove(key, out MeshRef? water)) water.Dispose();
         emptyMeshKeys.Remove(key);
         meshJobInFlight.Remove(key);
         lastSelectedFrame.Remove(key);
         meshBornFrame.Remove(key);
+        // #region agent log
+        if (hadMesh && ++slabInvLog <= 32)
+        {
+            FogAgentLog("H-S1", "LodTerrainRenderer.InvalidateGpuMesh", "drop-resident-mesh",
+                "\"runId\":\"slab-1\",\"lvl\":" + LodWorld.KeyLevel(key)
+                + ",\"sx\":" + LodWorld.KeySx(key)
+                + ",\"sz\":" + LodWorld.KeySz(key)
+                + ",\"dirty\":" + world.RenderDirty.Count
+                + ",\"n\":" + slabInvLog);
+        }
+        // #endregion
     }
 
     public void ClearMeshes()
@@ -2928,6 +3228,8 @@ public class LodTerrainRenderer : IRenderer
         keepClimate = LodClimateField.Identity;
         keepClimateValid = false;
         LoginBakeComplete = false;
+        lastFogLogMonth = int.MinValue;
+        lastFogLogDays = double.NaN;
     }
 
     public void Dispose()
@@ -2935,8 +3237,17 @@ public class LodTerrainRenderer : IRenderer
         // Our own resources first. UnregisterRenderer refuses to run off the main thread,
         // and the game's shutdown crash path disposes mods from another one, so putting
         // the engine call first meant a crashing client freed none of its GPU meshes.
+        bool wasReady = joinRendererReady;
         ClearMeshes();
+        if (!joinRendererReady) return;
+
+        capi.Event.ReloadShader -= LoadShader;
         capi.Event.UnregisterRenderer(this, EnumRenderStage.Opaque);
+        joinRendererReady = false;
+        // #region agent log
+        FogAgentLog("H-FOG-5", "LodTerrainRenderer.Dispose", "renderer-unregister",
+            "\"wasReady\":" + (wasReady ? "true" : "false"));
+        // #endregion
     }
 }
 

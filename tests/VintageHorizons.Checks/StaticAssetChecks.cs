@@ -284,8 +284,11 @@ public static class StaticAssetChecks
     {
         string gui = Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "assets", "distantvistas", "textures", "gui");
-        c.True(File.Exists(Path.Combine(gui, "login-backdrop.png")),
+        string backdrop = Path.Combine(gui, "login-backdrop.png");
+        c.True(File.Exists(backdrop),
             "login backdrop is packaged at assets/distantvistas/textures/gui/login-backdrop.png");
+        c.True(new FileInfo(backdrop).Length > 50000,
+            "login backdrop is a real splash photo, not an 8 KB placeholder");
         c.True(File.Exists(Path.Combine(gui, "login-title-rainbow.png")),
             "login title is packaged at assets/distantvistas/textures/gui/login-title-rainbow.png");
     }

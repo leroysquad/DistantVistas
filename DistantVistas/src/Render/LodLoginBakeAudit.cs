@@ -151,7 +151,7 @@ public static class LodLoginBakeAudit
             if (entry.BlockId <= 0 || entry.BlockId >= blocks.Count) continue;
             Block block = blocks[entry.BlockId];
             (int untinted, _) = untintedOf(block);
-            if (!LodSeasonBake.CanBake(block, untinted, plantTintFallback)) continue;
+            if (!LodSeasonBake.CanVisitBake(block, untinted, plantTintFallback)) continue;
             if ((entry.Flags & LodPaletteEntry.FlagBaked) == 0)
                 return true;
         }

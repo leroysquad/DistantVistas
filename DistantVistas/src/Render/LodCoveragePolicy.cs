@@ -297,8 +297,8 @@ public static class LodCoveragePolicy
     /// real chunk recaptures, and spawn never walks a tile.
     /// </summary>
     public static bool ShouldRemeshWhileIdle(
-        bool windowMoved, bool hasMesh, bool provisional) =>
-        windowMoved || !hasMesh || provisional;
+        bool windowMoved, bool hasMesh, bool provisional, bool forceSwap = false) =>
+        forceSwap || windowMoved || !hasMesh || provisional;
 
     /// <summary>
     /// Whether an L0 that has captured only some of its columns draws its own

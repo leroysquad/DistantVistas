@@ -1,6 +1,6 @@
 # Distant Vistas
 
-Far terrain past vanilla view distance for [Vintage Story](https://www.vintagestory.at/).
+Official 1.0. Far terrain past vanilla view distance for [Vintage Story](https://www.vintagestory.at/).
 
 I was using [Vintage Horizons](https://github.com/AliasFactory/Vintage-Horizons) and kept
 running into problems in my own worlds. Fog seams, colours looking wrong (especially in
@@ -26,9 +26,13 @@ Story can download it for joining players.
 - **Real 3D terrain**, not a heightmap. Mountains, overhangs, cave mouths, forests, and
   anything you build all appear at distance, at 1-block resolution near the player.
 - **Translucent water**, drawn over the lake and sea floors beneath it.
-- **Live seasonal colour**. Grass and foliage follow the game's own climate and season
-  maps. The mod derives a snow line from the local temperature lapse rate. So the far
-  terrain changes with the seasons. It does not keep the colours it had at capture time.
+- **Live seasonal colour**. Overlay and walking share one bake from the live month.
+  Summer is bright green. Winter without snow is mottled brown, tan, and olive. Real
+  snow stays snow. Leaves keep month colour plus frost (green or orange sides,
+  frost-white tops). Changing the month with `/time` retints on the next join, not
+  mid-session.
+- **Join overlay**. Four-season splash. A hop-scan paints far land so hills exist
+  when you spawn. Graphics view is held at 750, then your real slider comes back.
 - **Visited land stays drawn.** Backing away does not punch sky rectangles through hills
   you already walked, and new ground you generate is still there when you leave.
 - **Persistent per-world cache** that grows as you play. Join time and memory use do not
@@ -36,25 +40,25 @@ Story can download it for joining players.
 
 ## What it cannot do
 
-A client-side mod knows only the terrain that the server sent it. Land that you never
-came near never reached your client. It is not in the cache, so the mod cannot draw it.
-A new world therefore shows nothing past the vanilla view distance until you travel.
+A client-side mod knows only the terrain that the server sent it. The join overlay hops
+a disk so far hills exist when you spawn. Land beyond that disk still waits until you
+travel.
 
 Server-side generators (Farseer, ChunkLOD) ask the world generator directly and do not
 have this limit. In exchange, those mods must be on the server.
 
 In this mod, the edge of the explored area fades into the horizon. It does not end in a
-cliff. The picture fills in the more you play. If you run the server, `/vhgen` builds it
+cliff. The picture fills in the more you play. If you run the server, `/dvgen` builds it
 in advance.
 
 ## In-game commands
 
 | Command | Purpose |
 | --- | --- |
-| `.vhinfo` | Status: cached/resident sections, meshes, current far edge, settings |
-| `.vhdetail [blocks]` | Distance before detail starts to halve (default 512). A higher value gives sharper far terrain and costs more VRAM and CPU. Try 1024. Without an argument, the command reports the current value. |
-| `.vhfar <blocks>` | Cap the LOD render distance. `0` means unlimited, which is the default. |
-| `.vhdefer [on\|off]` | Stay idle when another LOD mod draws (on by default). A change applies at the next start, not at once. |
+| `.dvistas` | Status: cached/resident sections, meshes, current far edge, settings |
+| `.dvdetail [blocks]` | Distance before detail starts to halve (default 512). A higher value gives sharper far terrain and costs more VRAM and CPU. Try 1024. Without an argument, the command reports the current value. |
+| `.dvfar <blocks>` | Cap the LOD render distance. `0` means unlimited, which is the default. |
+| `.dvdefer [on\|off]` | Stay idle when another LOD mod draws (on by default). A change applies at the next start, not at once. |
 
 ### If you also run Farseer, ChunkLOD or TopoHorizon
 
@@ -81,8 +85,8 @@ privilege, which every singleplayer host has:
 
 | Command | Purpose |
 | --- | --- |
-| `/vhserver` | Server assist status: settings in force, cache size, transfer counters |
-| `/vhgen start [radius] [x z]` | Build the LOD cache around you (or around `x z`). It generates terrain that nobody visited yet. Also `stop` and `status`. See below. |
+| `/dvserver` | Server assist status: settings in force, cache size, transfer counters |
+| `/dvgen start [radius] [x z]` | Build the LOD cache around you (or around `x z`). It generates terrain that nobody visited yet. Also `stop` and `status`. See below. |
 
 Both settings persist in `VintagestoryData/ModConfig/distantvistas.json`.
 The per-world cache lives in `VintagestoryData/ModData/distantvistas/<savegame-id>.db`.
@@ -91,9 +95,8 @@ cache can therefore never degrade a newer version.
 
 ## Building
 
-Requires the .NET 10 SDK and a Vintage Story 1.22.5 or 1.22.6 install. Those are the two
-versions the check suite runs on. The mod declares 1.22.5 as its minimum, so it will not
-load on anything older.
+Requires the .NET 10 SDK and a Vintage Story 1.22.5, 1.22.6, or 1.22.7 install. The mod
+declares 1.22.5 as its minimum, so it will not load on anything older.
 
 ```sh
 export VINTAGE_STORY="$HOME/Games/vintagestory1.22.5"   # your game path
@@ -125,11 +128,11 @@ load there makes the engine generate the missing neighbours.
 
 `PregenRadiusChunks` takes the opposite trade. It creates terrain that nobody visited yet, so
 it stays off unless an admin asks for it. That setting now uses the same transient
-generation `/vhgen` uses, so it too writes nothing to the savegame.
+generation `/dvgen` uses, so it too writes nothing to the savegame.
 
-### Generating the horizon (/vhgen)
+### Generating the horizon (/dvgen)
 
-Sweeping and capture cover only terrain that exists. `/vhgen start [radius] [x z]` covers
+Sweeping and capture cover only terrain that exists. `/dvgen start [radius] [x z]` covers
 the rest. It builds the LOD picture around you, or around coordinates you give, for land
 that nobody visited yet. It writes **nothing** to the savegame.
 
@@ -150,7 +153,7 @@ trees in a forested column.
 
 What a peek produces is never wrong. Nothing appears in a peek that a real generation
 does not also make. So generated terrain reads as a correct but plain version of itself,
-and real capture fills in the rest the first time a player visits. `/vhgen diff` prints
+and real capture fills in the rest the first time a player visits. `/dvgen diff` prints
 the measurement for your own world.
 
 It stops there because the pass that adds trees crashes vanilla worldgen when it runs

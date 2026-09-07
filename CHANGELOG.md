@@ -1,3 +1,149 @@
+## 1.0.0
+Official 1.0.
+
+- **Far 3D land that stays.** Land you already walked stays on the horizon. No view-distance sky circle. No spawn plates. Mountains do not chop into caves.
+- **Join overlay.** Four-season Distant Vistas splash. Hop-scan paints far land so hills exist when you spawn. Graphics view is held at 750, then your real slider comes back (never leaves 750, 1000, or a maxed leftover stuck). Overlay does not freeze Windows. Mouse look and world audio restore. Esc leaves to the menu.
+- **Seasons and frost.** Overlay and walk share one bake from the live month. Summer is bright green. Winter without snow is mottled brown, tan, and olive, not manila plates and not a white sheet. Real snow stays snow. Leaves keep month colour plus frost: green or orange sides, frost-white tops. Frosted grass keeps live colour. `/time` while in-world does not retint; change month then rejoin. A 30-day window; a later calendar month recaptures.
+- **Farseer** can sit behind. ChunkLOD and TopoHorizon still make us sit out unless `.dvdefer off`.
+- Drop `distantvistas_1.0.0.zip` in Mods. Do not extract. Fully quit Vintage Story, then start it again.
+
+## 0.8.88
+- **December trees pick up frost.** Far canopy stayed dark green because frost only ran on Plant blocks, and pine/oak leaves are Leaves. Overlay, walk, and bake now frost those trees: sides stay green or orange, tops go frost-white. Frosted grass keeps live colour instead of the manila winter texture plate.
+- **Join restores your real view slider.** 750, 1000, and a maxed leftover (~1536) are never treated as the slider you had before Distant Vistas wrote anything.
+- Fully quit Vintage Story, then start it again.
+
+## 0.8.87
+- **Login visit holds graphics view at 750, then puts your slider back.** Scan and bake both run at 750, never 1000. Your previous view is saved before that write, restored when the overlay ends, and restored on the next join if a crash left 750 or 1000 stuck.
+- **December trees recapture.** Coming back in a later calendar month runs the overlay again so leaves and ground match that month, even inside the 30-day window. Fully quit Vintage Story, then start it again.
+
+## 0.8.86
+- **Join overlay no longer freezes Windows.** The visit was dumping the whole 750-block disk, hundreds of colour samples, and leftover recapture onto one frame. This build holds graphics view at 750 blocks for the hops (then restores your slider), grows the streamed ring a few chunks at a time, paints a small batch each tick, and keeps the overlay moving. Close Vintage Story completely before this zip, then start it again.
+
+## 0.8.85
+- **A new zip only loads after a full game quit.** Leaving to the menu and rejoining keeps the old Distant Vistas assembly in memory, so the next join can fail to load and you get vanilla fog with no overlay. Close Vintage Story completely, then start it again. This build also runs the login overlay once more so far land picks up the season ground paint, then drops you back at the spot you started the circle from.
+
+## 0.8.84
+- **Far winter ground is one mottled camouflage, not pale plates or square colour chunks.** Overlay after 30 days and walking share one bake. Summer is bright green. Winter without a snow sheet is brown, tan, and olive with texture specks (not a white plate). Spring and autumn follow the same calendar mix. Real snow stays snow. Tree leaves keep the colours already on them, plus frost. No mid-session /time retint.
+
+## 0.8.83
+- **Looking around after the login overlay no longer yanks the view.** The overlay was still storing mouse look while it covered the screen, then dumping that leftover movement when it hid. Visits no longer keep snapping your look after they finish.
+- **World audio comes back when the overlay ends**, including a join that skips the overlay. Mute was dropping OpenAL gain and sometimes never restoring it, so sliders could look fine while everything stayed silent.
+- **Far ground uses the live month's colour.** Overlay after 30 days and walking onto that land share one bake. Summer ground is bright green. Winter without a snow sheet is mottled brown-green (texture specks, not a white plate). Spring and autumn take whatever GetColor shows that month. Tree leaves keep the colours already on them, plus frost. No mid-session /time retint.
+
+## 0.8.82
+- **Looking around after the overlay no longer yanks, and sound comes back.** The visit splash was still eating mouse look and leaving volume sliders at zero. After it closes, a slow look stays slow, and world audio plays again.
+- **Far ground uses the live month's colour.** Overlay after 30 days and walking onto that land share one bake. Summer ground is bright green. Winter without a snow sheet is mottled brown-green (texture specks, not a white plate). Spring and autumn take whatever GetColor shows that month. Tree leaves keep the colours already on them, plus frost. No mid-session /time retint.
+
+## 0.8.81
+- **Some far tree tops pick up mottled gray frost in the cold.** Autumn and other month colours stay on the rest of the leaves. Overlay after a 30-day come-back and walking onto that land use the same bake, so the painted horizon already matches what you see up close.
+
+## 0.8.80
+- **A 30-day come-back now overwrites leftover painted land.** Visit stops stay at the usual count. After those hops, every loaded cell that was not hopped is recaptured from the live month so the horizon, walked land, and trees match. Same look as before; only the leftover May patches go away.
+
+## 0.8.79
+- **Debug build.** Records walk-back paint (kind, snow flags, luma before/after) when you discover already-LOD land. No visual change.
+
+## 0.8.78
+- **Debug build.** Records vanilla May grass, pine, and leaf colours from GetColor against the live month. No visual change.
+
+## 0.8.77
+- **Far leaves keep the live month colour, then add frost from the loaded chunk.** Overlay and walk visits still sample GetColor for that month so spring, summer, autumn, and winter stay different. Frost is a second strength from the temperature on that leaf while you are there. Snow sampling is unchanged.
+
+## 0.8.76
+- **Walking no longer flashes holes in far land.** The old mesh stays on screen until the new one is ready. The same patch of land is not remeshed two to four times while you walk, and snow you already baked stays when you come back.
+- **A 30-day come-back still uses the usual visit stops**, then a short extra pass fills holes between those stops. Outer-edge scraps stay. The overlay does not walk every stored cell.
+
+## 0.8.75
+- **A 30-day come-back no longer walks every stored cell.** That was about an hour on this machine. Rejoin still recaptures snow, leaves, and ground, but only on a spread of visit stops that stays inside the usual overlay budget. Changing the month while you are still in the world still waits until you leave and come back.
+
+## 0.8.74
+- **Coming back after 30 days recaptures the painted land.** Thirty in-game days in the world, or thirty real days away, then a rejoin walks the stored disk again and rebakes snow, leaves, and ground. Leftover holes no longer steal that pass. Changing the month while you are still in the world waits until you leave and come back.
+
+## 0.8.72
+- **The 30-day refresh starts on the first visit day.** A successful login sweep stamps that first in-game day and the real clock. The overlay runs again after 30 in-game days or 30 real days, in the world or logged out. First login still sweeps. Changing season no longer recaptures by itself.
+
+## 0.8.71
+- **Visit hops now paint the streamed ring, not one cell.** The last overlay recaptured, but each stop only locked the square underfoot because neighbours were still in the capture queue. This join rewrites every loaded L0 in the 1000-block view at that hop (white snow spots, live grass and leaves) and then skips later same-season joins inside the 30-day window.
+
+## 0.8.70
+- **Far land recaptures the live visual top once.** Cream mixed plates were the old bury mix still sitting on disk because the overlay skipped. This join rewrites those cells from the snow, grass, and leaves the chunk actually shows (white-spotted green, orange-frosted trees). Later same-season joins inside the 30-day window still skip.
+
+## 0.8.69
+- **Far land is a camouflage mix, not a checkerboard.** Visit bake samples the live ground, bushes, and snow in a column and its neighbours, then stores one custom colour that already looks like that patch from far away. Adjacent cells share the mix so one chunk is not a white tile and the next a brown tile.
+
+## 0.8.68
+- **LOD now records what the loaded chunk actually shows.** Capture looks above the rain map for snow layers and extra canopy, visit bake paints those tops (including snow), and a streamed chunk recaptures so the mesh is not stuck on last season's leaves.
+
+## 0.8.67
+- **Login visit rebakes when 30 in-game days pass or the season changes.** Changing months (or `/time` far enough) then fully quitting and rejoining runs the overlay again and recaptures live tree and snow colour at the visit stops. Same-world join inside that window still skips. `/time` while you are already in the world does not retint until the next join.
+- **Expired visits refresh painted land first**, not leftover holes, and the overlay says it is refreshing seasons instead of filling gaps.
+
+## 0.8.66
+- **Login visit now actually sets graphics view to 1000 blocks.** Vanilla kept overwriting `DesiredViewDistance` from the slider, so hops still streamed your old view while requesting a 2048-block ring. Sweep writes `viewDistance` to 1000, streams that ring, then restores your slider.
+- **First pass covers 4x more regions.** Visit budget is ~64-80 stops (~160s wall) instead of the 16-20 stop shrink. Retry stays a shorter second hop so a miss pass does not double the overlay.
+
+## 0.8.65
+- **Changing months brought the vanilla fog wall back.** This build keeps Distant Vistas running and logs the calendar jump, shader compile, fog density, and whether the distant renderer is still registered. Needed because the last session also swapped zips without a full client quit, which unloads Distant Vistas entirely.
+
+## 0.8.64
+- **Overlay time left is this PC's real rate, not a guessed 2 seconds.** The first estimate is harvested from the latest Vintage Story client log (this machine's last budgeted 30-stop pass with the streamed ring held was ~3.6s each), then saved to `ModData/distantvistas/login-sweep-timing.json` after every finished sweep. First pass targets ~40s. The miss retry is a shorter second hop so the overlay does not run twice as long.
+- **Esc pauses the visit and returns to the main menu.** The overlay was swallowing the filtered Escape key, so Esc did nothing and cancel dumped you into play. Esc now reads the raw key, saves the remaining queue, puts you back at the join pose, and leaves the world.
+- **Visit hops no longer overwrite the join pose.** Spawn is recaptured while the overlay warms up, then frozen at the first teleport. Relog after Esc resumes from that original pose, not the last L0 cell.
+
+## 0.8.63
+- **Login visit was hopping 300+ holes and painting almost none of them.** Each stop queued a 2048-block ring, then dropped those columns before they streamed, waited on every capture in the world, and locked one stale L0 with no live colour. Repair now visits a 30-stop spread, holds the streamed ring until the four columns underfoot finish, and locks vanilla `GetColor` on every loaded neighbour at that stop.
+
+## 0.8.62
+- **Season paint comes from the login visit scan, not minimap climate maps.** Outside the 30-day window the sweep no longer retints the disk from `ApplyColorMapOnRgba`. It recaptures streamed columns at each stop and locks vanilla `GetColor` (including pale/gray winter leaves and snow that is actually there). View distance is held at 2048 for that scan so the visible horizon matches.
+
+## 0.8.54
+- **Same land-after-visit as 0.8.53.** Debug session logging is gone.
+
+## 0.8.53
+- **World loaded for a second, then froze (loading circle).** 0.8.52 proved leftover mesh cleanup was not the hang. Two other things fire the moment you land: the clock jumps to catch up the visit-sweep freeze (about an hour of game time at once), and spawn asks the loader for a huge disk of columns. This build lets the clock keep server time during the visit, then jumps it instead of simulating the gap. Spawn only asks for a small disk once, at the end.
+
+## 0.8.52
+- **World loaded, then mouse stuck on the loading circle.** Overlay and visit sweep finished. The hang is the first seconds of play: leftover mesh cleanup was turned back on the same frame the cover hid. That cleanup now waits a few seconds after you land, same for a finished sweep and a same-world skip.
+
+## 0.8.51
+- **Login splash was the wrong picture and too dark.** New four-season landscape (spring, summer, autumn, December) with Distant Vistas across the sky. The overlay no longer lays a dark inset over the painting.
+
+## 0.8.50
+- **Same-world join after a finished canvas skips the overlay (expected) and then froze.** 0.8.49 loaded; sweep correctly skipped (`visited canvas complete`, 94 sections). Freeze is after enter-play, not the missing menu. This build only adds join-quiet / first-play-frame timing so the hang can be pinned.
+
+## 0.8.49
+- **Login overlay still never opened (0.8.48).** Compose threw `ArgumentException: x2 must be larger than x1` on both the splash-art path and the black-panel fallback. Cause: a second shaded plate on unparented bounds (zero width), retried every frame until the client froze. Overlay is the 0.8.46 full-screen cover again. Splash art is optional on that same full-screen surface.
+
+## 0.8.48
+- **Login overlay failed to open after the splash-art change (0.8.47).** Compose died on the Cairo blit, so the visit sweep teleported with no cover (sky flicker, no menu). Overlay now loads the backdrop the same way vanilla GUI does, fills black first, and falls back to the 0.8.46 black panel if art compose still throws.
+
+## 0.8.47
+- **Login overlay shows the Distant Vistas splash instead of a black panel.** Full-screen cover-fit of the circular mountain-sun badge and gold Distant Vistas wordmark. Progress bar sits on a small dark plate so the art stays readable. Same Cairo HUD path as 0.8.46: no OrthoMode, no Render2DTexture.
+
+## 0.8.46
+- **Login sweep no longer boosts vanilla view to 2048.** 0.8.45 unlocked walk, but the visit pass still forced 2048 view and a 66-chunk stream, then dumped you home with empty land in front. Sweep now keeps your saved view distance and re-requests a full spawn column disk on restore. Unlock from 0.8.45 is unchanged.
+
+## 0.8.45
+- **Login overlay end left the player fly-locked.** Sweep lock set NoClip and flying every tick. Teardown only restored walk speed, so after the overlay the world was visible but you could not walk (survival still treated you as fly/noclip). Unlock now clears NoClip, flying, and both control sets.
+
+## 0.8.44
+- **CRITICAL: silent kill during TrueScale HD atlas compose (0.8.43 playtest).** No CrashReporter. Windows Event Log: `coreclr 0xc0000005` at `GL.BindTexture` inside `BuildMipMaps` / `ComposeTextureAtlasses_StageB`. Distant Vistas and vsvaogc client start never ran. Cause: `clientsettings` atlas cap 16384x16384 (TrueScale 128) plus three giant atlases; mipmap of a 16k atlas AVs on this GPU. Fix: before vanilla `CreateNewAtlas`, clamp live block/item/entity atlas Size and the setting to 8192. Overlay, FBO restore, and delayed renderer from 0.8.43 retained.
+
+## 0.8.43
+- **CRITICAL: GL_INVALID_OPERATION at SwapBuffers on new-world character create (0.8.42 playtest).** Overlay never opened. 0.8.42 proved vsvaogc hitch Drain was skipped (`join quiet` at 19:17:50). Remaining sequence: High Clouds/vanilla reloads `cloudmap` on LevelFinalize, then the first RunningGame present (character UI, no 3D rebind) hits glfwSwapBuffers with that FBO still bound — NVIDIA reports **The required buffer is missing** (GL_BACK does not exist on an FBO). Fix: bind the default framebuffer at the end of `OnLevelFinalize` (`CurrentFrameBuffer = null`; not OrthoMode / ClearFrameBuffer). Compile lodterrain and register the Opaque renderer only after character UI (`EnsureJoinRenderer`). Ship with vsvaogc 1.1.7. HUD overlay and delayed Open from 0.8.41 retained.
+
+## 0.8.42
+- **CRITICAL: GL_INVALID_OPERATION at SwapBuffers on new-world character create (0.8.41 playtest).** Overlay never opened. 0.8.41 proved Distant Vistas Open/Tick were off that first RunningGame present (no `LOD cache:` line; last DV line was the defer wait). Remaining work on that frame was vsvaogc hitch Drain disposing MeshRef VAOs while High Clouds had just reloaded shaders. Distant Vistas now exposes `LodJoinQuiet.SuppressVaoDrain` (`blocked || !complete`) for vsvaogc to read by type name. Ship with vsvaogc 1.1.6. HUD overlay and delayed Open from 0.8.41 retained.
+
+## 0.8.41
+- **CRITICAL: GL_INVALID_OPERATION at SwapBuffers on new-world character create (0.8.40 playtest).** Overlay never opened. Atlas sampling was already off LevelFinalize; the remaining Distant Vistas work on that first RunningGame present was `pipeline.Open` (sets Active) plus `OnGameTick` Tick/explore-bake/column sweep. Fix: open the LOD cache and local-offer sibling only on the post-character-wait tick; `OnGameTick` returns while `LoginBakeBlocked`. HUD overlay from 0.8.39 retained.
+
+## 0.8.40
+- **CRITICAL: GL_INVALID_OPERATION at SwapBuffers on new-world character create (0.8.39 playtest).** Overlay never opened — crash was `GetAverageColor` / `UnknownTexturePosition.AvgColor` in `OnLevelFinalize` plus LOD `ApplyZFar` before the first RunningGame present, while TrueScale HD was still composing atlases. Fix: `LoginBakeBlocked` starts true; `ApplyZFar` is a no-op while blocked; atlas sampling and sweep `Decide`/`Begin` run on a later tick after character UI (if any). HUD overlay from 0.8.39 retained.
+
+## 0.8.39
+- **Login overlay no longer hijacks the present path.** Keep the teleport visit bake; cover it with one vanilla `HudElement` (opaque Cairo panel, progress bar, Esc to pause/save). Removed Harmony `distantvistas.loginbake` patches, OrthoMode/splash `IRenderer`s, loading-screen hold, HUD-hide, and world-hide. Sweep ticks from `OnGameTick`. Character-create wait stays dialog-only. This is the 0.8.37 `GL_INVALID_OPERATION` at `SwapBuffers` / matrix-overflow fix.
+
 ## 0.8.38
 - **CRITICAL: GL_INVALID_OPERATION at SwapBuffers during character creation (0.8.37 playtest).** After TrueScale atlas compose succeeded, join crashed with `The required buffer is missing` while sweep was deferred for char/class UI. Root cause: terrain renderer still ran `ApplyZFar`/mesh GL during deferral, and splash `ClearFrameBuffer` on Primary could leave draw buffers invalid before present. Fix: `LoginBakeBlocked` skips terrain GL until sweep arms; `SplashGlAllowed` gates splash on `!CharacterUiBlocksSplash`; removed framebuffer clear from opaque cover (full-screen quads only). TextureAtlasesReady gate retained.
 

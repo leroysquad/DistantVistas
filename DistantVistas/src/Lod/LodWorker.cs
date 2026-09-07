@@ -125,6 +125,7 @@ public class LodWorker : IDisposable
     readonly ConcurrentBag<MeshJob> meshJobPool = new();
     public readonly ConcurrentQueue<CaptureResult> CaptureResults = new();
     public readonly ConcurrentQueue<MeshResult> MeshResults = new();
+    public readonly ConcurrentQueue<long> DiscardedColumnKeys = new();
 
     /// <summary>Wakes the capture thread. One job, one thread, so auto-reset is right.</summary>
     readonly AutoResetEvent captureSignal = new(false);
@@ -237,10 +238,12 @@ public class LodWorker : IDisposable
                 {
                     CaptureResult? result = Capture(job);
                     if (result != null) CaptureResults.Enqueue(result);
+                    else DiscardedColumnKeys.Enqueue(((long)job.Cz << 32) | (uint)job.Cx);
                 }
                 catch (Exception e)
                 {
                     // Chunk disposed mid-read or similar; the column re-enqueues on its next ChunkDirty.
+                    DiscardedColumnKeys.Enqueue(((long)job.Cz << 32) | (uint)job.Cx);
                     Interlocked.Increment(ref CaptureErrors);
                     Interlocked.CompareExchange(ref FirstCaptureError, e.ToString(), null);
                 }
@@ -303,7 +306,8 @@ public class LodWorker : IDisposable
             {
                 int lx = cx * step;
                 int lz = cz * step;
-                int startY = Math.Min(job.RainMap[lz * ChunkSize + lx], maxY);
+                int rainY = Math.Min(job.RainMap[lz * ChunkSize + lx], maxY);
+                int startY = HighestSolidY(job.Chunks, lx, lz, rainY, maxY);
                 if (startY <= 0) continue;
 
                 runs.Clear();
@@ -350,6 +354,27 @@ public class LodWorker : IDisposable
             RunsByColumn = batch,
             Provisional = job.Provisional,
         };
+    }
+
+    /// <summary>
+    /// Rain height is often the terrain/leaf top. Snow layers and extra canopy sit
+    /// above that. Walk up from the rain map so those blocks enter the mesh.
+    /// </summary>
+    static int HighestSolidY(IWorldChunk?[] chunks, int lx, int lz, int rainY, int maxY)
+    {
+        int startY = Math.Max(0, rainY);
+        int ceiling = Math.Min(maxY, rainY + 48);
+        for (int y = ceiling; y > rainY; y--)
+        {
+            IWorldChunk? chunk = chunks[y / ChunkSize];
+            if (chunk == null || chunk.Disposed) continue;
+            int blockId = chunk.UnpackAndReadBlock(
+                ((y % ChunkSize) * ChunkSize + lz) * ChunkSize + lx,
+                BlockLayersAccess.FluidOrSolid);
+            if (blockId != 0)
+                return y;
+        }
+        return startY;
     }
 
     public void Dispose()

@@ -2,11 +2,11 @@
     "type": "code",
     "modid": "distantvistas",
     "name": "Distant Vistas",
-    "version": "0.8.38",
+    "version": "1.0.0",
     "side": "Universal",
     "requiredOnClient": true,
     "requiredOnServer": false,
-    "description": "Far terrain for Vintage Story. Land you walked stays. Seasons and winter colour match the ground. I forked Vintage Horizons to fix problems in my own worlds. Not taking credit for anyone else's work. What works for me might not work for you.",
+    "description": "Official 1.0. Far terrain that stays. Seasons and winter frost match the ground. Join overlay paints the horizon. Vintage Horizons fork. What works for me might not work for you.",
     "authors": [
         "IllLeroySquad"
     ],

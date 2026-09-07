@@ -1,13 +1,9 @@
-using Vintagestory.API.Client;
-
 namespace DistantVistas;
 
 /// <summary>
-/// Advances login visit sweep logic on the render thread. Pulses from
-/// <see cref="LodLoginBakeHarmony.RenderPulse"/> (ScreenManager.OnNewFrame prefix, before
-/// any screen draw) and from the splash overlay renderer. Vanilla
-/// <see cref="GuiScreenLoadingGame.RenderToDefaultFramebuffer"/> can stall waiting for
-/// async sound and prevent later render-stage callbacks from firing.
+/// Advances login visit sweep logic on the game tick while the HUD overlay is up.
+/// Vanilla game ticks run once the world is in RunningGame; this does not hook
+/// ScreenManager present paths.
 /// </summary>
 public sealed class LodLoginBakePulse
 {
@@ -16,14 +12,12 @@ public sealed class LodLoginBakePulse
     LodLoginBake? bake;
     Action? pump;
     double accum;
-    bool pulsedThisFrame;
 
     public void Bind(LodLoginBake? bake, Action pump)
     {
         this.bake = bake;
         this.pump = pump;
         accum = 0;
-        pulsedThisFrame = false;
     }
 
     public void Pulse(float deltaTime)
@@ -34,19 +28,12 @@ public sealed class LodLoginBakePulse
 
         if (deltaTime <= 0f) deltaTime = 1f / 60f;
 
-        // OnNewFrame and the overlay renderer both call Pulse; coalesce to one tick batch.
-        if (pulsedThisFrame) return;
-        pulsedThisFrame = true;
-
         accum += deltaTime;
-        while (accum >= TickStepSec)
-        {
-            accum -= TickStepSec;
-            bake.Tick((float)TickStepSec);
-            pump?.Invoke();
-        }
+        // One Tick max. Catch-up after a hitch used to dump tens of hops onto
+        // one frame and Windows marked the client not responding.
+        if (accum < TickStepSec) return;
+        accum = 0;
+        bake.Tick((float)TickStepSec);
+        pump?.Invoke();
     }
-
-    /// <summary>Called from <see cref="LodLoginBakeHarmony.RenderPulse"/> at frame start.</summary>
-    public void BeginFrame() => pulsedThisFrame = false;
 }

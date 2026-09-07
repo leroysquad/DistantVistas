@@ -4,35 +4,64 @@ namespace DistantVistas;
 
 /// <summary>
 /// Measures per-stop timing during the login visit sweep and formats ETA strings.
-/// Target window: ~1 minute wall-clock for season revisit and first-join bootstrap
-/// at ~2048-block view distance with batch neighbour bakes per stop.
+/// First ETA and stop budget use this machine's measured rate (persisted / harvested
+/// from client logs), not a guessed constant.
 /// </summary>
 public sealed class LodLoginSweepTiming
 {
-    /// <summary>Lower bound of the sweep target window (~45 seconds).</summary>
-    public const double TargetMinSec = 45.0;
+    /// <summary>Lower bound of the first-pass wall target.</summary>
+    public const double TargetMinSec = 30.0;
 
-    /// <summary>Hard upper bound of the sweep target window (~1 minute).</summary>
-    public const double TargetMaxSec = 60.0;
+    /// <summary>First-pass wall-clock cap. 4x the 0.8.64/65 shrink (40s → 160s).</summary>
+    public const double TargetMaxSec = 160.0;
 
-    /// <summary>First-join bootstrap uses the same ~1 minute wall-clock cap as revisit.</summary>
+    /// <summary>First-join bootstrap uses the same first-pass wall cap.</summary>
     public const double BootstrapTargetMaxSec = TargetMaxSec;
 
+    /// <summary>Retry pass wall cap — 2x the shrink, still shorter than first pass.</summary>
+    public const double RetryTargetSec = 32.0;
+
     /// <summary>
-    /// Typical per-stop estimate before measured samples (~2s with 2048 view, batch bake,
-    /// and tightened chunk/capture waits).
+    /// Fallback per-stop seconds only when this machine has no measured samples yet.
     /// </summary>
     public const double InitialSecPerStop = 2.0;
 
-    public const int MinVisitStops = 20;
-    /// <summary>Revisit ceiling — yields ~30 stops at <see cref="InitialSecPerStop"/> / 60s.</summary>
-    public const int MaxVisitStops = 50;
+    public const int MinVisitStops = 64;
+    public const int MaxVisitStops = 96;
+    public const int MinRetryStops = 16;
+    public const int MaxRetryStops = 32;
+
+    /// <summary>This PC's measured (or fallback) seconds per visit stop.</summary>
+    public static double MachineSecPerStop { get; private set; } = InitialSecPerStop;
 
     readonly Stopwatch clock = new();
+    readonly Stopwatch wall = new();
     readonly List<double> stopDurations = new();
+    double? seeded;
     int lastFinished;
 
-    public void Begin() => clock.Restart();
+    public static void SetMachineSecPerStop(double secPerStop) =>
+        MachineSecPerStop = Math.Clamp(secPerStop, 0.75, 6.0);
+
+    public void Seed(double secPerStop) =>
+        seeded = Math.Clamp(secPerStop, 0.75, 6.0);
+
+    public void BeginSession(double seededSec)
+    {
+        Seed(seededSec);
+        stopDurations.Clear();
+        lastFinished = 0;
+        clock.Restart();
+        wall.Restart();
+    }
+
+    public void Begin(bool resetSamples = false)
+    {
+        clock.Restart();
+        lastFinished = 0;
+        if (resetSamples) stopDurations.Clear();
+        if (!wall.IsRunning) wall.Start();
+    }
 
     public void NoteFinished(int finished)
     {
@@ -42,11 +71,15 @@ public sealed class LodLoginSweepTiming
         clock.Restart();
     }
 
+    public int SampleCount => stopDurations.Count;
+
+    public double WallSec => wall.Elapsed.TotalSeconds;
+
     public double SecondsPerStop
     {
         get
         {
-            if (stopDurations.Count == 0) return InitialSecPerStop;
+            if (stopDurations.Count == 0) return seeded ?? MachineSecPerStop;
             double sum = 0;
             foreach (double d in stopDurations) sum += d;
             return sum / stopDurations.Count;
@@ -70,13 +103,18 @@ public sealed class LodLoginSweepTiming
 
     /// <summary>
     /// Max visit stops for a sweep given a wall-clock budget and measured/estimated stop rate.
-    /// At <see cref="InitialSecPerStop"/> and <see cref="TargetMaxSec"/>, yields 30 stops (~1 min).
     /// </summary>
     public static int VisitStopBudget(double secPerStop, double targetMaxSec) =>
         (int)Math.Clamp(
             Math.Round(targetMaxSec / Math.Max(0.75, secPerStop)),
             MinVisitStops,
             MaxVisitStops);
+
+    public static int RetryStopBudget(double secPerStop) =>
+        (int)Math.Clamp(
+            Math.Round(RetryTargetSec / Math.Max(0.75, secPerStop)),
+            MinRetryStops,
+            MaxRetryStops);
 
     public static int BootstrapCellBudget(double secPerStop) =>
         VisitStopBudget(secPerStop, BootstrapTargetMaxSec);

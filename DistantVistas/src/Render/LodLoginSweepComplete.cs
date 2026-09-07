@@ -9,7 +9,7 @@ namespace DistantVistas;
 
 /// <summary>
 /// Records the last successful login visit sweep so a later join can skip the overlay
-/// when the visited canvas is still complete within the season / day window.
+/// when the visited canvas is still complete within the 30-day window.
 /// Scoped per world via <see cref="WorldId"/> / filename (same key as the LOD .db).
 /// </summary>
 public sealed class LodLoginSweepComplete
@@ -24,7 +24,9 @@ public sealed class LodLoginSweepComplete
     public string Season { get; set; } = "";
     public string CalendarToken { get; set; } = "";
     public double SavedTotalDays { get; set; }
+    public long WindowStartedUtcMs { get; set; }
     public int VisitedKeyCount { get; set; }
+    public int PaintRevision { get; set; }
 
     static readonly JsonSerializerOptions JsonOptions = new()
     {
@@ -112,12 +114,30 @@ public sealed class LodLoginSweepComplete
             Season = seasonSlug,
             CalendarToken = token,
             SavedTotalDays = cal.TotalDays,
+            WindowStartedUtcMs = LodLoginSweepWindow.NowUtcMs(),
             VisitedKeyCount = LodLoginSweep.VisitedL0Keys(world).Count(),
+            PaintRevision = LodSurfaceMix.PaintRevision,
         };
     }
 
     public static void RecordSuccess(ICoreClientAPI capi, LodWorld world)
     {
-        CaptureCalendar(capi, world).Save(capi);
+        LodLoginSweepComplete stamp = CaptureCalendar(capi, world);
+        stamp.Save(capi);
+        // #region agent log
+        try
+        {
+            System.IO.File.AppendAllText(
+                @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                "{\"sessionId\":\"40cccb\",\"runId\":\"post-fix\",\"hypothesisId\":\"H-W-CLOCK\",\"location\":\"LodLoginSweepComplete.RecordSuccess\",\"message\":\"window-stamp\",\"data\":{\"savedDays\":"
+                + stamp.SavedTotalDays.ToString("0.###", CultureInfo.InvariantCulture)
+                + ",\"utcMs\":" + stamp.WindowStartedUtcMs
+                + ",\"season\":\"" + stamp.Season
+                + "\",\"visited\":" + stamp.VisitedKeyCount
+                + ",\"paintRev\":" + stamp.PaintRevision
+                + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+        }
+        catch { }
+        // #endregion
     }
 }

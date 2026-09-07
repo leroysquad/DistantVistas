@@ -30,14 +30,16 @@ public static class ExploreBakeChecks
             "pipeline exposes provisional flag for palette registration");
         c.True(pipeline.Contains("FinalizeL0DiscoverBake"),
             "capture apply finalizes L0 live visit bake before first mesh upload");
-        c.True(pipeline.Contains("BakeSectionFromVisit"),
-            "discover finalize uses same visit bake as login sweep");
+        c.True(pipeline.Contains("explore drain visit-bakes"),
+            "discover finalize defers visit bake to explore drain");
         c.False(ContainsBetween(pipeline, "void FinalizeL0DiscoverBake", "int RegisterPaletteEntry", "UpgradeLegacyEntries"),
             "discover finalize does not substitute shader-repro for live GetColor");
         c.True(pipeline.Contains("InvalidateMipAncestors"),
-            "visit bake drops stale coarse parent GPU meshes for map view");
-        c.True(pipeline.Contains("ProcessPropagation(propagationBudget, InvalidateGpuMesh)"),
-            "pipeline invalidates parent mesh when mip absorbs visit bake");
+            "visit bake still walks parent keys after L0 bake");
+        c.True(pipeline.Contains("ProcessPropagation(propagationBudget, World.RequestGpuSwap)"),
+            "play remip keeps the old GPU mesh until the new one uploads");
+        c.True(pipeline.Contains("World.RequestGpuSwap"),
+            "walk-time bake swaps GPU meshes instead of disposing first");
 
         string world = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Lod", "LodWorld.cs"));
@@ -50,8 +52,46 @@ public static class ExploreBakeChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSeasonBake.cs"));
         c.True(explore.Contains("BakeSectionFromVisit"),
             "explore bake uses exact GetColor visit bake");
+        c.True(explore.Contains("DebugVisitKind = \"walk\""),
+            "walk visit bake tags the shared GetColor path");
+        string login = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
+        c.True(login.Contains("BakeSectionFromVisit"),
+            "overlay visit bake uses the same GetColor path as walk");
+        c.True(login.Contains("DebugVisitKind = \"overlay\""),
+            "overlay visit bake tags the shared GetColor path");
+        c.True(season.Contains("FinishColumnPaint"),
+            "overlay and walk share FinishColumnPaint season-ground mix");
+        c.True(season.Contains("SampleTextureMean"),
+            "visit bake samples texture mean for winter camouflage specks");
+        c.True(season.Contains("MixVisitBlock"),
+            "expire leftover uses the same season-ground mix as overlay and walk");
+        string mix = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSurfaceMix.cs"));
+        c.True(mix.Contains("MixSeasonGround"),
+            "overlay and walk share MixSeasonGround from calendar winter amount");
+        c.True(mix.Contains("MixVisitBlock"),
+            "one-block expire path shares MixSeasonGround");
+        c.True(mix.Contains("ProbeWinter"),
+            "column stack stores winter amount for the shared mix");
+        c.True(season.Contains("KeepVisitSnowColor"),
+            "pale grass RGB is not kept as snow");
         c.True(explore.Contains("SectionHasLiveTint"),
-            "explore bake skips already-baked sections");
+            "explore bake still exposes live-tint helper for capture skip");
+        c.True(season.Contains("CanVisitBake"),
+            "visit bake accepts snow and climate-untinted tops");
+        c.True(season.Contains("TryResolveLiveSurface"),
+            "visit bake reads the loaded column top, not only the stored run");
+        c.False(explore.Contains("if (!SectionHasLiveTint(section)) return;"),
+            "explore bake queues FlagBaked L0 so live snow and canopy can overwrite");
+        c.True(explore.Contains("int remaining = pending.Count"),
+            "explore drain snapshots queue length so not-ready keys cannot livelock Tick");
+        c.True(explore.Contains("readyAttempted"),
+            "explore drain stops retrying a live-tint L0 that already baked with chunks loaded");
+        c.False(pipeline.Contains("ExploreBake.ResetAttempt"),
+            "capture apply does not reset the L0 bake latch every quadrant");
+        c.True(explore.Contains("public void ResetAttempt"),
+            "ResetAttempt stays available for a genuine new-land retry");
         c.True(season.Contains("IsColumnMapLoaded"),
             "visit bake is per-column when map chunk is resident");
         c.False(ContainsBetween(pipeline, "void FinalizeL0DiscoverBake", "int RegisterPaletteEntry", "CanBakeSectionNow"),

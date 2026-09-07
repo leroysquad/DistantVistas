@@ -8,7 +8,7 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <AssemblyName>DistantVistas</AssemblyName>
     <RootNamespace>DistantVistas</RootNamespace>
-    <Version>0.8.38</Version>
+    <Version>1.0.0</Version>
   </PropertyGroup>
 
   <!-- No debug info in Release: the zip never ships the .pdb, and generating one
@@ -38,10 +38,6 @@
       <HintPath>$(GamePath)/VintagestoryLib.dll</HintPath>
       <Private>false</Private>
     </Reference>
-    <Reference Include="0Harmony">
-      <HintPath>$(GamePath)/Lib/0Harmony.dll</HintPath>
-      <Private>false</Private>
-    </Reference>
     <Reference Include="Microsoft.Data.Sqlite">
       <HintPath>$(GamePath)/Lib/Microsoft.Data.Sqlite.dll</HintPath>
       <Private>false</Private>
@@ -52,6 +48,10 @@
     </Reference>
     <Reference Include="cairo-sharp">
       <HintPath>$(GamePath)/Lib/cairo-sharp.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="SkiaSharp">
+      <HintPath>$(GamePath)/Lib/SkiaSharp.dll</HintPath>
       <Private>false</Private>
     </Reference>
   </ItemGroup>

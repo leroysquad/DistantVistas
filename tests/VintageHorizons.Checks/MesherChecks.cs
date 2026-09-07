@@ -24,6 +24,21 @@ public static class MesherChecks
         UncapturedColumnDoesNotBecomeCliff(c);
         AntiFloaterSkipsPlantScrapsOnly(c);
         SkipFlagIsNotGeometry(c);
+        FrostedCanopyUpIsPaler(c);
+    }
+
+    static void FrostedCanopyUpIsPaler(Check c)
+    {
+        int stored = LodSurfaceMix.Pack(103, 103, 86);
+        byte frost = (byte)(LodPaletteEntry.FlagBaked | LodPaletteEntry.FlagFrost);
+        int wall = LodMesher.FrostFaceColor(stored, frost, upFace: false);
+        int up = LodMesher.FrostFaceColor(stored, frost, upFace: true);
+        c.Eq(stored, wall, "frosted walls keep the stored side colour");
+        LodPaletteRepair.Channels(up, out _, out _, out _, out int upLuma, out _);
+        LodPaletteRepair.Channels(stored, out _, out _, out _, out int sideLuma, out _);
+        c.True(upLuma > sideLuma + 20, "frosted UP faces extra-mix toward white");
+        c.Eq(stored, LodMesher.FrostFaceColor(stored, LodPaletteEntry.FlagBaked, upFace: true),
+            "FlagBaked without FlagFrost does not extra-white UP");
     }
 
     static void SkipFlagIsNotGeometry(Check c)

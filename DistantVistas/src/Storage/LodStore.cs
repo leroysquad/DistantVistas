@@ -421,9 +421,9 @@ public class LodStore : SQLiteDBConnection
 
         (byte flags, byte slot) = ClassifyBlock(blockId);
         LodPaletteEntry e = section.Palette[index];
-        byte baked = (byte)(e.Flags & LodPaletteEntry.FlagBaked);
-        e.Flags = (byte)(flags | baked);
-        e.TintSlot = baked != 0 ? (byte)0 : slot;
+        byte keep = (byte)(e.Flags & LodPaletteEntry.VisitKeepMask);
+        e.Flags = (byte)(flags | keep);
+        e.TintSlot = (keep & LodPaletteEntry.FlagBaked) != 0 ? (byte)0 : slot;
         section.Palette[index] = e;
     }
 

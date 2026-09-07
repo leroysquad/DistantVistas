@@ -195,16 +195,16 @@ public static class CoverageChecks
             "past 1.5x turning does not promote L2 plates to L0");
         c.True(LodCoveragePolicy.HorizonLeadCone(true, 0f),
             "shelf ban has no distance cap");
-        c.False(LodCoveragePolicy.StopDescentAtAvailableRung(2, 2, false, true, true, true, 0f, 800, 512),
-            "past 1.5x an L2 in the cone still does not stop");
+        c.True(LodCoveragePolicy.StopDescentAtAvailableRung(2, 2, false, true, true, true, 0f, 800, 512),
+            "past 1.5x a land-like L2 in the cone may stop so turning is not sky");
         c.False(LodCoveragePolicy.PastHorizonDraw(400, 512),
             "inside 3x is still the horizon band");
         c.True(LodCoveragePolicy.PastHorizonDraw(1600, 512),
-            "past 3x we stop; Farseer heightmaps are the silhouettes");
+            "past 3x is past the horizon band");
         c.False(LodCoveragePolicy.ShouldVisitChildForDraw(0, 2, false, true, true, true, 0f, true, false, 1600, 512),
             "past 3x do not walk L0");
-        c.False(LodCoveragePolicy.ShouldVisitChildForDraw(1, 2, false, true, true, true, 0f, true, false, 1600, 512),
-            "past 3x do not walk L1 either");
+        c.True(LodCoveragePolicy.ShouldVisitChildForDraw(1, 2, false, true, true, true, 0f, true, false, 1600, 512),
+            "Farseer off: still walk L1 past 3x so that band is not sky");
         c.Eq(1, LodCoveragePolicy.LeadConeMaxDrawLevel, "in-cone max draw level is L1");
         c.Eq(2, LodCoveragePolicy.LeadConeMaxCoverLevel, "in-cone whole cover caps at L2");
         c.False(LodCoveragePolicy.MayLeadConeCoarseCover(3, true, true, 0f, 400, 512, true),
@@ -543,6 +543,8 @@ public static class CoverageChecks
             "unmeshed dirty land still schedules idle");
         c.True(LodCoveragePolicy.ShouldRemeshWhileIdle(true, true, false),
             "a 64-block origin shift remeshes capture-dirty land");
+        c.True(LodCoveragePolicy.ShouldRemeshWhileIdle(false, true, false, true),
+            "force-swap remeshes idle land so the old GPU mesh stays until upload");
 
         c.False(LodCoveragePolicy.YieldFootprintToCompanion(false, false),
             "without Farseer we still draw peek fill");

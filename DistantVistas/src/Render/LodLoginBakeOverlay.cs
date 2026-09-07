@@ -3,16 +3,15 @@ using Vintagestory.API.Client;
 namespace DistantVistas;
 
 /// <summary>
-/// Coordinates vanilla world-loading UI and input blocking during the login visit sweep.
+/// Coordinates the login visit sweep overlay: one <see cref="HudElement"/> with Cairo
+/// progress UI and input capture. Does not hijack the framebuffer present path.
 /// </summary>
 public sealed class LodLoginBakeOverlay : IDisposable
 {
-    readonly LodLoginBakeVanillaLoadingHold vanillaLoading;
     readonly LodLoginBakeInputGuard inputGuard;
 
-    public LodLoginBakeOverlay(ICoreClientAPI capi, LodLoginBakeVanillaLoadingHold vanillaLoading)
+    public LodLoginBakeOverlay(ICoreClientAPI capi)
     {
-        this.vanillaLoading = vanillaLoading;
         inputGuard = new LodLoginBakeInputGuard(capi);
     }
 
@@ -22,26 +21,21 @@ public sealed class LodLoginBakeOverlay : IDisposable
         set => inputGuard.OnCancelRequested = value;
     }
 
-    public bool IsReady => vanillaLoading.IsReady;
-    public bool HasRendered => vanillaLoading.HasRendered;
+    public bool IsReady => inputGuard.IsReady;
+    public bool HasRendered => inputGuard.HasRendered;
 
     public void UpdateProgress(float fraction, string detail) =>
-        vanillaLoading.SetProgress(fraction, detail);
+        inputGuard.SetProgress(fraction, detail);
 
     public void SetOverlayAlpha(float alpha) =>
-        vanillaLoading.SetOverlayAlpha(alpha);
+        inputGuard.SetOverlayAlpha(alpha);
 
-    public void Show()
-    {
-        vanillaLoading.Show();
-        inputGuard.RequestShow();
-    }
+    public void Show() => inputGuard.RequestShow();
 
     public void EnsureInputBlocked() => inputGuard.TryEnsureOpen();
 
     public void Hide()
     {
-        vanillaLoading.Hide();
         inputGuard.RequestHide();
     }
 

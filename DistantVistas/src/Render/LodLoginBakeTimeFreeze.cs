@@ -13,7 +13,9 @@ public sealed class LodLoginBakeTimeFreeze
 
     readonly ICoreClientAPI capi;
     float? savedCalendarSpeedMul;
+    float? savedSpeedOfTime;
     double? anchoredTotalHours;
+    long freezeStartMs;
     bool frozen;
 
     public LodLoginBakeTimeFreeze(ICoreClientAPI capi) => this.capi = capi;
@@ -27,14 +29,18 @@ public sealed class LodLoginBakeTimeFreeze
         if (!frozen)
         {
             savedCalendarSpeedMul = cal.CalendarSpeedMul;
+            savedSpeedOfTime = cal.SpeedOfTime;
             anchoredTotalHours = cal.TotalHours;
+            freezeStartMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             frozen = true;
             capi.Logger.Notification("[DistantVistas] Login visit sweep: time frozen");
         }
 
         cal.CalendarSpeedMul = 0f;
         ZeroSpeedOfTime(cal);
-        AnchorTotalHours(cal);
+        // Do not rewind TotalHours every pulse. That parks the client ~1 hour
+        // behind the server; vanilla then catch-up-simulates it on restore
+        // ("daytime drifted 66 mins") and the main thread dies after land.
     }
 
     /// <summary>
@@ -47,12 +53,32 @@ public sealed class LodLoginBakeTimeFreeze
         if (!frozen) return;
 
         float? speedMul = savedCalendarSpeedMul;
+        float? speedOfTime = savedSpeedOfTime;
+        double? anchored = anchoredTotalHours;
+        long startedMs = freezeStartMs;
 
         try
         {
             IGameCalendar? cal = TryGetCalendar();
             if (cal != null)
             {
+                double hoursBefore = cal.TotalHours;
+                float jump = TryJumpHeldHours(cal, anchored, speedOfTime, speedMul, startedMs);
+                double hoursAfter = cal.TotalHours;
+                long elapsedMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - startedMs;
+                double heldGap = anchored.HasValue ? Math.Abs(hoursBefore - anchored.Value) : -1;
+                // #region agent log
+                try
+                {
+                    System.IO.File.AppendAllText(
+                        @"C:\Users\Private Citizen\AppData\Roaming\VintagestoryData\ClientMods\distantvistas\debug-40cccb.log",
+                        "{\"sessionId\":\"40cccb\",\"hypothesisId\":\"H1\",\"location\":\"LodLoginBakeTimeFreeze.Restore\",\"message\":\"time-restore-hours\",\"data\":{\"hoursBefore\":" + hoursBefore.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",\"hoursAfter\":" + hoursAfter.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",\"heldGap\":" + heldGap.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",\"jump\":" + jump.ToString(System.Globalization.CultureInfo.InvariantCulture) + ",\"elapsedMs\":" + elapsedMs + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
+                }
+                catch { }
+                // #endregion
+                capi.Logger.Notification(
+                    "[DistantVistas] Login visit sweep: time restore hours before={0:0.000} after={1:0.000} heldGap={2:0.00} jump={3:0.00} elapsedMs={4}",
+                    hoursBefore, hoursAfter, heldGap, jump, elapsedMs);
                 TryRemoveSpeedModifier(cal);
                 TryRestoreCalendarSpeedMul(cal, speedMul);
             }
@@ -60,7 +86,9 @@ public sealed class LodLoginBakeTimeFreeze
         finally
         {
             savedCalendarSpeedMul = null;
+            savedSpeedOfTime = null;
             anchoredTotalHours = null;
+            freezeStartMs = 0;
             frozen = false;
             capi.Logger.Notification("[DistantVistas] Login visit sweep: time restored");
         }
@@ -119,12 +147,31 @@ public sealed class LodLoginBakeTimeFreeze
             cal.SetTimeSpeedModifier(SpeedModifierKey, -speed);
     }
 
-    void AnchorTotalHours(IGameCalendar cal)
+    float TryJumpHeldHours(
+        IGameCalendar cal,
+        double? anchored,
+        float? speedOfTime,
+        float? speedMul,
+        long startedMs)
     {
-        if (!anchoredTotalHours.HasValue) return;
+        if (!anchored.HasValue) return 0f;
 
-        double drift = anchoredTotalHours.Value - cal.TotalHours;
-        if (Math.Abs(drift) > 1e-6)
-            cal.Add((float)drift);
+        double hoursNow = cal.TotalHours;
+        long elapsedMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - startedMs;
+        double heldGap = Math.Abs(hoursNow - anchored.Value);
+        float jump = 0f;
+        // Clock still sitting on the freeze hour after a long sweep: jump it
+        // so vanilla does not simulate the missing game-minutes on the main thread.
+        if (heldGap < 0.25 && elapsedMs > 5000)
+        {
+            float speed = speedOfTime.GetValueOrDefault(60f);
+            float mul = speedMul.GetValueOrDefault(1f);
+            jump = (float)(elapsedMs / 1000.0 * speed * mul / 3600.0);
+            if (jump > 0.05f)
+                cal.Add(jump);
+            else
+                jump = 0f;
+        }
+        return jump;
     }
 }
