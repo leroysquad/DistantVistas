@@ -741,6 +741,20 @@ public static class LoginSweepChecks
                 GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
                 .Contains("hop-unlock pump"),
             "Plan C is stream unlock pump only, not hop-sweep replacement");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
+                .Contains("1.0.39 hop-unlock pump"),
+            "walltime plan documents shipped hop-unlock in 1.0.39");
+        c.True(bake.Contains("LodLoginHopUnlock"),
+            "overlay integrates hop-unlock pump for cold annulus");
+        c.True(bake.Contains("hopUnlock.TryFirstHop"),
+            "first hop-unlock on all-WaitChunks stall signature");
+        c.Eq(16, LodLoginHopUnlock.TriggerPaintStarveTicks,
+            "hop-unlock waits for sustained paint starve before first pump");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
+                .Contains("hop-unlock"),
+            "hop-unlock telemetry for runId 1039 playtest");
         c.Eq(1, LodLoginScoutFill.MaxColdNearWaitChunksWhenStarving,
             "one cold-near WaitChunks streamer while paint starves");
         c.True(scoutFill.Contains("PendingPickScore"),

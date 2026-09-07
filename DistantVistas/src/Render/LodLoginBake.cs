@@ -12,9 +12,8 @@ namespace DistantVistas;
 ///
 /// Purpose (locked): during the HUD overlay, staggered <see cref="LodScoutViewerEntity"/>
 /// workers sit on visit cells as player-style stream/render centers — the primary
-/// parallel bake fleet (far more throughput than hop-sweep). The real player stays
-/// at pickup (PinPickupPose + look lock). Optional future hop-unlock is only a cold
-/// stream/residency pump behind the overlay, not a replacement for scouts.
+/// parallel bake fleet. The real player stays at pickup unless hop-unlock pumps cold
+/// annulus residency (look-locked, invisible, exact pickup restore at end).
 /// Near spawn: stream → capture → GetColor → mesh. Far ring: stream →
 /// capture → FlagBaked paint, then despawn (meshes fill in under the splash). Canvases
 /// persist to SQLite.
@@ -138,11 +137,13 @@ public sealed class LodLoginBake
     readonly List<long> leftoverKeys = new();
     readonly List<(double DistSq, long Key)> leftoverRank = new();
     readonly LodLoginScoutFill scoutFill = new();
+    readonly LodLoginHopUnlock hopUnlock = new();
     readonly Queue<long> scoutReady = new();
     readonly Dictionary<long, int> paintResumeCol = new();
     readonly List<long> paintOrderScratch = new(64);
     readonly List<long> resumePendingScratch = new(2048);
     readonly List<long> resumeCompletedScratch = new(2048);
+    readonly List<long> hopPendingScratch = new(512);
     int lastResumeSavedFinished;
     long lastResumeSaveMs;
     int sweepingTicks;
@@ -310,6 +311,7 @@ public sealed class LodLoginBake
         paintResumeCol.Clear();
         sweepingTicks = 0;
         paintStarveTicks = 0;
+        hopUnlock.Reset();
         overlayPaintCachesActive = false;
 
         overlay.Show();
@@ -667,9 +669,10 @@ public sealed class LodLoginBake
     void ReorderPendingByPaintReadiness()
     {
         if (pending.Count <= 1) return;
+        hopUnlock.StreamCenter(pickupX, pickupZ, out double streamX, out double streamZ);
         int footprint = LodSection.SectionBlocks;
-        int centerSx = (int)Math.Floor(pickupX / footprint);
-        int centerSz = (int)Math.Floor(pickupZ / footprint);
+        int centerSx = (int)Math.Floor(streamX / footprint);
+        int centerSz = (int)Math.Floor(streamZ / footprint);
         paintOrderScratch.Clear();
         while (pending.Count > 0)
             paintOrderScratch.Add(pending.Dequeue());
@@ -781,7 +784,7 @@ public sealed class LodLoginBake
         sweepingTicks++;
 
         if (sweepingTicks == 1 || sweepingTicks % SpawnRevealEveryTicks == 0)
-            GrowRevealAroundSpawn();
+            GrowRevealAroundStream();
         PinPickupPose();
 
         if (scoutFill.LiveCount > 0 && scoutReady.Count == 0)
@@ -792,23 +795,42 @@ public sealed class LodLoginBake
         scoutFill.SetWarmHoldBlocks(LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks);
         LodScoutSeqDiag.NotePaintStarve(paintStarveTicks);
 
+        scoutFill.CountLivePhases(out int waitChunksLive, out int captureLive, out _, out _);
+        int liveScouts = scoutFill.LiveCount;
+        CopyPendingKeys(hopPendingScratch);
+        bool stallSignature = LodLoginHopUnlock.MatchesStallSignature(
+            paintStarveTicks, waitChunksLive, captureLive, liveScouts, finished);
+        if (!hopUnlock.Active && stallSignature)
+        {
+            if (hopUnlock.TryFirstHop(capi, pickupX, pickupY, pickupZ, hopPendingScratch, finished))
+                spawnRevealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
+        }
+        else if (hopUnlock.Active && hopUnlock.ShouldAdvance(
+            paintStarveTicks, waitChunksLive, captureLive, liveScouts, finished))
+        {
+            if (hopUnlock.TryAdvanceHop(capi, pickupX, pickupY, pickupZ, hopPendingScratch, finished))
+                spawnRevealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
+        }
+        hopUnlock.TickAtPoint();
+
         if (paintStarveTicks >= 8 && paintStarveTicks % 32 == 0)
             ReorderPendingByPaintReadiness();
 
+        hopUnlock.StreamCenter(pickupX, pickupZ, out double streamX, out double streamZ);
         List<long> ready = scoutFill.Tick(
             capi, pipeline, renderer, pending, completedKeys,
             LodLoginScoutFill.LocalVisitRevealChunks,
             viewBoost.ChunkVisibleRadius,
-            pickupX, pickupZ,
+            streamX, streamZ,
             LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks);
         LodScoutSeqDiag.NoteChunkPressure(scoutFill.ChunkPressureActive);
-        scoutFill.CountLivePhases(out int waitChunksLive, out int captureLive, out _, out _);
+        scoutFill.CountLivePhases(out waitChunksLive, out captureLive, out _, out _);
         LodScoutSeqDiag.MaybeWarmRingProbe(
-            finished, total, capi, pipeline, pending, pickupX, pickupZ,
+            finished, total, capi, pipeline, pending, streamX, streamZ,
             LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks, waitChunksLive, captureLive,
             scoutFill.LiveCount, scoutReady.Count);
         LodScoutSeqDiag.MaybeStalledLiveProbe(
-            finished, capi, pipeline, scoutFill, pickupX, pickupZ,
+            finished, capi, pipeline, scoutFill, streamX, streamZ,
             LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks, paintStarveTicks, scoutReady.Count);
         PinPickupPose();
         for (int i = 0; i < ready.Count; i++)
@@ -823,7 +845,7 @@ public sealed class LodLoginBake
             waitChunksLive, captureLive);
 
         if (sweepingTicks % SpawnSweepEveryTicks == 0)
-            SweepColumnsAroundSpawn();
+            SweepColumnsAroundStream();
 
         int inFlight = scoutFill.LiveCount + scoutFill.HeldCount + scoutReady.Count;
         if (inFlight == 0 && pending.Count == 0)
@@ -1174,27 +1196,40 @@ public sealed class LodLoginBake
         FreezePickupPose();
     }
 
-    void GrowRevealAroundSpawn()
+    void CopyPendingKeys(List<long> dest)
+    {
+        dest.Clear();
+        foreach (long key in pending)
+            dest.Add(key);
+    }
+
+    void GrowRevealAroundStream()
     {
         if (!restoreCaptured) return;
+        hopUnlock.StreamCenter(pickupX, pickupZ, out double streamX, out double streamZ);
         int target = viewBoost.SpawnStreamRadiusChunks;
         if (spawnRevealRadius >= target) return;
         int before = spawnRevealRadius;
         spawnRevealRadius = Math.Min(target, spawnRevealRadius + RevealGrowPerTick);
         int dim = capi.World.Player.Entity.Pos.Dimension;
         LodLoginBakePlayerMove.RequestChunkColumnRing(
-            capi, restorePos.X, restorePos.Z, dim, before, spawnRevealRadius);
+            capi, streamX, streamZ, dim, before, spawnRevealRadius);
     }
 
-    void SweepColumnsAroundSpawn()
+    void GrowRevealAroundSpawn() => GrowRevealAroundStream();
+
+    void SweepColumnsAroundStream()
     {
         if (!restoreCaptured) return;
-        int cx = (int)Math.Floor(restorePos.X / GlobalConstants.ChunkSize);
-        int cz = (int)Math.Floor(restorePos.Z / GlobalConstants.ChunkSize);
+        hopUnlock.StreamCenter(pickupX, pickupZ, out double streamX, out double streamZ);
+        int cx = (int)Math.Floor(streamX / GlobalConstants.ChunkSize);
+        int cz = (int)Math.Floor(streamZ / GlobalConstants.ChunkSize);
         pipeline.SweepLoadedColumns(
             cx, cz, viewBoost.ChunkSweepRadiusChunks, forceRecapture: false,
             rowsPerCall: SweepRowsPerCall, lane: LodPipeline.SweepLaneSpawn);
     }
+
+    void SweepColumnsAroundSpawn() => SweepColumnsAroundStream();
 
     void CollectBatchBakeKeys(long primaryKey, List<long> dest)
     {
@@ -1521,6 +1556,7 @@ public sealed class LodLoginBake
         scoutFill.Reset(capi);
         scoutReady.Clear();
         paintResumeCol.Clear();
+        hopUnlock.Reset();
 
         if (success)
         {
@@ -1909,9 +1945,21 @@ public sealed class LodLoginBake
         entity.Pos.Motion.Set(0, 0, 0);
         if (!restoreCaptured || LooksUnset(pickupX, pickupZ)) return;
 
-        LodLoginBakePlayerMove.ApplyExactPickup(
-            capi, entity, pickupX, pickupY, pickupZ, pickupYaw, pickupPitch, requestChunks: false);
-        entity.Pos.SetFrom(restorePos);
+        if (hopUnlock.Active)
+        {
+            bool pumpStream = hopUnlock.TicksAtPoint <= 2 || hopUnlock.TicksAtPoint % 16 == 0;
+            LodLoginBakePlayerMove.ApplyExactPickup(
+                capi, entity, hopUnlock.X, hopUnlock.Y, hopUnlock.Z,
+                pickupYaw, pickupPitch,
+                pumpStream, viewBoost.SpawnStreamRadiusChunks);
+        }
+        else
+        {
+            LodLoginBakePlayerMove.ApplyExactPickup(
+                capi, entity, pickupX, pickupY, pickupZ, pickupYaw, pickupPitch, requestChunks: false);
+            entity.Pos.SetFrom(restorePos);
+        }
+
         LockPlayerCamera(capi, player, restorePos, restoreCameraPos);
     }
 

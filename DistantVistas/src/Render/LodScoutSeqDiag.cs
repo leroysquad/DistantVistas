@@ -15,7 +15,7 @@ public static class LodScoutSeqDiag
 
     const string HypothesisId = "H-SCOUT-SEQ";
     const string SessionId = "40cccb";
-    const string RunId = "1038";
+    const string RunId = "1039";
 
     const int ThrashMaxTicks = 5;
     const long ThrashRespawnMs = 2000;
@@ -363,6 +363,32 @@ public static class LodScoutSeqDiag
 
         spawnsWindow = 0;
         releasesWindow = 0;
+    }
+
+    public static void LogHopUnlock(
+        int ring,
+        bool advance,
+        double x,
+        double y,
+        double z,
+        int targetRadiusBlocks,
+        double bearingRad,
+        int finished,
+        int pendingCount)
+    {
+        if (!overlayActive) return;
+        Write("LodLoginHopUnlock.ApplyHop", "hop-unlock",
+            "{\"ring\":" + ring
+            + ",\"advance\":" + Bool(advance)
+            + ",\"x\":" + x.ToString("0.##", Inv)
+            + ",\"y\":" + y.ToString("0.##", Inv)
+            + ",\"z\":" + z.ToString("0.##", Inv)
+            + ",\"targetRadiusBlocks\":" + targetRadiusBlocks
+            + ",\"bearingRad\":" + bearingRad.ToString("0.####", Inv)
+            + ",\"finished\":" + finished
+            + ",\"pending\":" + pendingCount
+            + ",\"pickupRestore\":true"
+            + "}");
     }
 
     static long lastWarmRingMs;

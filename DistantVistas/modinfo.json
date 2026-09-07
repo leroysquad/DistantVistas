@@ -2,11 +2,11 @@
     "type":  "code",
     "modid":  "distantvistas",
     "name":  "Distant Vistas",
-    "version":  "1.0.38",
+    "version":  "1.0.39",
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.38. Warm-ring cliff fix: paint-readiness scheduling past ~358 stall (cold-near annulus, captureStall break, chunkPressure on paint starve). Full seasonal colors + 4075 disk. Farseer gray tent + black tips. Vintage Horizons fork.",
+    "description":  "Official 1.0.39. Hop-unlock pump past ~358 cliff: invisible look-locked player stream unlock + 16-scout parallel bake. Full seasonal colors + 4075 disk. Farseer gray tent + black tips. Vintage Horizons fork.",
     "authors":  [
                     "IllLeroySquad"
                 ],

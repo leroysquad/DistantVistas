@@ -433,6 +433,33 @@ Design from **warm-ring geometry**, not user guesses:
 
 Colors + full ~1680 / 4075 disk intent unchanged either branch.
 
+## 1.0.39 hop-unlock pump (1.0.38 playtest failed — runId 1038)
+
+**Playtest (runId 1038):** `finished≈353` stall; `paintReadyQueued=0` (25/25); `paintStarveTicks=382`; **`waitChunksLive=16`, `captureLive=0`, `farLive=16`**; `chunkPressure:true` but zero Capture; **maxWait 243**, captureStall 84 vs residentPaint 41. Scout-only scheduling insufficient — **Plan C now required**.
+
+### Shipped
+
+| Component | Behavior |
+|-----------|----------|
+| **`LodLoginHopUnlock`** | Detects 1038 stall signature; computes unlock XYZ from cold-pending bearing + warm-ring radius math |
+| **First unlock** | `radius = max(R_hold, finishedRadius + 64)` toward cold pending centroid |
+| **Advance** | Every **96 ticks** at same unlock if stall persists, or low progress — `radius += 0.88×R_hold` per ring (max 4) |
+| **`PinPickupPose`** | Player entity at unlock for vanilla 750 warm disk; **camera/look stay at pickup** |
+| **Scout fleet** | Unchanged 16 parallel workers; `streamX/streamZ` = unlock center when active |
+| **Restore** | `RestorePlayerPose` → exact pickup XYZ + yaw/pitch at overlay end |
+| **Telemetry** | `hop-unlock` NDJSON (runId **1039**) |
+
+**Reject:** per-L0 player hops; hop-sweep replacing scouts; visible motion; look unlock.
+
+**Expect after 1.0.39:**
+
+| Signal | 1038 @353 | Target |
+|--------|-----------|--------|
+| `hop-unlock` | none | fires at stall signature |
+| `captureLive` | 0 | **>0** after unlock warms annulus |
+| `finished` past 358 | stall | **climbing** |
+| `paintReadyQueued` | 0 | **>0** |
+
 ## Plan B — soft-release threshold (geometry, not ~600)
 
 **User clarification:** a ~600 `finished` cutoff is **not hard**. Derive release timing from **warm-ring / residency geometry** (same model as the ~358 cliff), not a magic constant.
