@@ -6,7 +6,7 @@
     "side":  "Universal",
     "requiredOnClient":  true,
     "requiredOnServer":  false,
-    "description":  "Official 1.0.32. 39,763 lines C#. Login bake disk: 4075-block radius, 8150 blocks end to end, 52168110 block². 16 scouts, stay at spawn. Vintage Horizons fork.",
+    "description":  "Official 1.0.32. Client-side far terrain for Vintage Story: persistent LOD cache, extended render distance, live seasonal colour, and a spawn-centered login bake. Works on any server without a server install. Fork of Vintage Horizons (MIT).",
     "authors":  [
                     "IllLeroySquad"
                 ],

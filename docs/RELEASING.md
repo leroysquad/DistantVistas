@@ -31,12 +31,16 @@ write the entry properly, rather than ship it thin.
 
 ## 4. Update the description
 
-Two places carry a description of what the mod does, and neither updates itself:
+Three places carry a description of what the mod does, and none of them updates itself:
 
+- **`docs/OFFICIAL-DESCRIPTION.md`** — canonical plain-English overview (what it does,
+  what it is capable of). Update this first when release behaviour changes.
 - **`DistantVistas/modinfo.json`**, the `"description"` field - shown in-game on the
-  mod list and read by ModDB's own listing.
+  mod list and read by ModDB's own listing. Keep this short; derive from the official
+  description.
 - **The ModDB page itself** (mods.vintagestory.at/distantvistas) - a separate, manual
-  edit; there is no API or script for this repo to reach it.
+  edit; there is no API or script for this repo to reach it. Scale figures live in
+  `docs/community/moddb-1.0.32-listing.html`.
 
 Re-read the current text against what the release actually does before assuming it still
 holds. It has gone stale before. The description said "fully client-side" from 0.1.0 on,
