@@ -751,18 +751,18 @@ public static class LoginSweepChecks
             "first hop-unlock on all-WaitChunks stall signature");
         c.True(File.ReadAllText(Path.Combine(
                 GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
-                .Contains("TryPickColdUnlockTarget"),
-            "hop-unlock retargets to cold pending L0 visit cells");
+                .Contains("TryPickNearAnnulusTarget"),
+            "hop-unlock prefers near-cliff annulus keys not outer disk");
         c.True(File.ReadAllText(Path.Combine(
                 GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
-                .Contains("MinHopDeltaBlocks"),
-            "each hop-unlock retarget moves at least MinHopDeltaBlocks");
+                .Contains("failedKeyBan"),
+            "hop-unlock bans keys that stay loaded=0 after dwell");
         c.True(File.ReadAllText(Path.Combine(
                 GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
-                .Contains("1.0.40 stronger hop-unlock"),
-            "walltime plan documents 1.0.40 hop-unlock fix");
-        c.Eq(128, LodLoginHopUnlock.MinHopDeltaBlocks,
-            "hop-unlock requires meaningful move between retargets");
+                .Contains("1.0.41 near-cliff annulus"),
+            "walltime plan documents 1.0.41 annulus fix");
+        c.Eq(48, LodLoginHopUnlock.FailedKeyDwellTicks,
+            "failed hop targets banned after dwell ticks");
         c.True(File.ReadAllText(Path.Combine(
                 GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
                 .Contains("hop-unlock"),

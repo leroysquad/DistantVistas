@@ -15,7 +15,7 @@ public static class LodScoutSeqDiag
 
     const string HypothesisId = "H-SCOUT-SEQ";
     const string SessionId = "40cccb";
-    const string RunId = "1040";
+    const string RunId = "1041";
 
     const int ThrashMaxTicks = 5;
     const long ThrashRespawnMs = 2000;
@@ -377,7 +377,11 @@ public static class LodScoutSeqDiag
         int pendingCount,
         long targetKey,
         int loadedMapChunks,
-        bool usedFallback)
+        bool usedFallback,
+        int distFromPickup,
+        int pastWarmBlocks,
+        int loadedAfterDwell,
+        int skippedCooldown)
     {
         if (!overlayActive) return;
         Write("LodLoginHopUnlock.ApplyHop", "hop-unlock",
@@ -387,8 +391,12 @@ public static class LodScoutSeqDiag
             + ",\"y\":" + y.ToString("0.##", Inv)
             + ",\"z\":" + z.ToString("0.##", Inv)
             + ",\"targetRadiusBlocks\":" + targetRadiusBlocks
+            + ",\"distFromPickup\":" + distFromPickup
+            + ",\"pastWarmBlocks\":" + pastWarmBlocks
             + ",\"targetKey\":" + targetKey
             + ",\"loadedMapChunks\":" + loadedMapChunks
+            + ",\"loadedAfterDwell\":" + loadedAfterDwell
+            + ",\"skippedCooldown\":" + skippedCooldown
             + ",\"usedFallback\":" + Bool(usedFallback)
             + ",\"bearingRad\":" + bearingRad.ToString("0.####", Inv)
             + ",\"finished\":" + finished

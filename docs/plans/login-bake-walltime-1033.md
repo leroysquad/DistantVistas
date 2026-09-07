@@ -486,6 +486,32 @@ Colors + full ~1680 / 4075 disk intent unchanged either branch.
 | `captureLive` | 0 | **>0** |
 | `finished` | 358 stall | **>400 climbing** |
 
+## 1.0.41 near-cliff annulus unlock (1.0.40 playtest failed — runId 1040)
+
+**Playtest (runId 1040):** L0-centered hops worked initially (280→358) then **11 retargets on 2 keys** @ dist **4040–4075** blocks; `loadedMapChunks=0` forever; A↔B oscillation from `lastTargetKey` skip + **maximize-distance score**.
+
+**Root cause:** selector scored `+distPickupSq` (farthest cold keys on full **4075 disk**), not the **warm-ring annulus ~680–900 blocks** where far scouts stall.
+
+### Shipped
+
+| Fix | Mechanism |
+|-----|-----------|
+| **Annulus filter** | Candidates only **750 &lt; dist ≤ 1024** blocks from pickup (spawn-solid cold-near) |
+| **Near-first score** | Minimize `pastWarm = dist − R_hold`, then loaded, then proximity to finished radius |
+| **Failed-key ban** | After **48 ticks** dwell with loaded=0 → **8-ring cooldown** (no A↔B ping-pong) |
+| **Unlock placement** | Player at **visit XYZ** of chosen near-cold L0 (750 warm disk covers that cell) |
+| **Fallback** | Radial pump inside spawn-solid toward near-cold bearing, not outer disk |
+| **Telemetry** | `distFromPickup`, `pastWarmBlocks`, `loadedAfterDwell`, `skippedCooldown` (runId **1041**) |
+
+**Expect after 1.0.41:**
+
+| Signal | 1040 @358 | Target |
+|--------|-----------|--------|
+| `distFromPickup` | 4040–4075 | **750–1024** |
+| Unique `targetKey` | 2 oscillating | **many** near annulus |
+| `loadedAfterDwell` | 0 | **≥1** or key banned |
+| `finished` | 358 stall | **>358 climbing** |
+
 ## Plan B — soft-release threshold (geometry, not ~600)
 
 **User clarification:** a ~600 `finished` cutoff is **not hard**. Derive release timing from **warm-ring / residency geometry** (same model as the ~358 cliff), not a magic constant.
