@@ -494,8 +494,18 @@ public class LodPipeline
 
     // ---- Loaded-chunk sweep ----
 
+    /// <summary>Play-time sliding window around the real player.</summary>
+    public const int SweepLanePlay = 0;
+    /// <summary>Overlay spawn-disk completeness. Must not share a row cursor with scout rings.</summary>
+    public const int SweepLaneSpawn = 1;
+    /// <summary>Scout visit-cell neighbourhood (radius 3). Sharing the spawn lane punched holes.</summary>
+    public const int SweepLaneScout = 2;
+    /// <summary>Visit-cell force recapture while GetColor-painting a stop.</summary>
+    public const int SweepLaneVisit = 3;
+
     int sweepRow = int.MinValue;
     int sweepRadius;
+    readonly Dictionary<int, (int Row, int Radius)> sweepLanes = new();
 
     /// <summary>
     /// Re-queue loaded chunk columns whose L0 quadrant is not captured (or only
@@ -508,11 +518,17 @@ public class LodPipeline
     /// One row of the square per call, so a 55x55 chunk square (view distance 832)
     /// costs 55 map-chunk lookups a tick and covers the whole disc in under 3 seconds.
     /// Main thread only: it reads the loaded chunk list.
+    /// Overlay spawn vs scout rings use separate lanes: one shared cursor reset
+    /// whenever radius flipped (129 vs 3) and never scanned spawn-local rows.
     /// </summary>
     public void SweepLoadedColumns(int centreCx, int centreCz, int radiusChunks) =>
         SweepLoadedColumns(centreCx, centreCz, radiusChunks, forceRecapture: false, rowsPerCall: 1);
 
-    public void SweepLoadedColumns(int centreCx, int centreCz, int radiusChunks, bool forceRecapture, int rowsPerCall)
+    public void SweepLoadedColumns(int centreCx, int centreCz, int radiusChunks, bool forceRecapture, int rowsPerCall) =>
+        SweepLoadedColumns(centreCx, centreCz, radiusChunks, forceRecapture, rowsPerCall, SweepLanePlay);
+
+    public void SweepLoadedColumns(
+        int centreCx, int centreCz, int radiusChunks, bool forceRecapture, int rowsPerCall, int lane)
     {
         if (!Active || radiusChunks <= 0) return;
         if (DiscoverOnly && Worker.CaptureResults.Count >= MaxCaptureResultBacklog)
@@ -521,16 +537,12 @@ public class LodPipeline
             return;
         }
 
-        if (sweepRow == int.MinValue || sweepRow > radiusChunks || sweepRadius != radiusChunks)
-        {
-            sweepRow = -radiusChunks;
-            sweepRadius = radiusChunks;
-        }
+        int cursor = ReadSweepRow(lane, radiusChunks);
 
         int rows = Math.Max(1, rowsPerCall);
         for (int row = 0; row < rows; row++)
         {
-            int cz = centreCz + sweepRow;
+            int cz = centreCz + cursor;
             if (cz >= 0)
             {
                 for (int dx = -radiusChunks; dx <= radiusChunks; dx++)
@@ -542,7 +554,11 @@ public class LodPipeline
                     long key = ((long)cz << 32) | (uint)cx;
                     if (queuedColumns.ContainsKey(key)) continue;
                     if (api.World.BlockAccessor.GetMapChunk(cx, cz) == null) continue;
-                    if (pendingColumns.Count >= MaxPendingColumns) return;
+                    if (pendingColumns.Count >= MaxPendingColumns)
+                    {
+                        WriteSweepRow(lane, cursor, radiusChunks);
+                        return;
+                    }
                     if (forceRecapture)
                     {
                         int before = pendingColumns.Count;
@@ -558,9 +574,44 @@ public class LodPipeline
                 }
             }
 
-            sweepRow++;
-            if (sweepRow > radiusChunks) sweepRow = -radiusChunks;
+            cursor++;
+            if (cursor > radiusChunks) cursor = -radiusChunks;
         }
+
+        WriteSweepRow(lane, cursor, radiusChunks);
+    }
+
+    int ReadSweepRow(int lane, int radiusChunks)
+    {
+        if (lane == SweepLanePlay)
+        {
+            if (sweepRow == int.MinValue || sweepRow > radiusChunks || sweepRadius != radiusChunks)
+            {
+                sweepRow = -radiusChunks;
+                sweepRadius = radiusChunks;
+            }
+            return sweepRow;
+        }
+
+        if (!sweepLanes.TryGetValue(lane, out (int Row, int Radius) st)
+            || st.Radius != radiusChunks
+            || st.Row > radiusChunks)
+        {
+            st = (-radiusChunks, radiusChunks);
+            sweepLanes[lane] = st;
+        }
+        return st.Row;
+    }
+
+    void WriteSweepRow(int lane, int row, int radiusChunks)
+    {
+        if (lane == SweepLanePlay)
+        {
+            sweepRow = row;
+            sweepRadius = radiusChunks;
+            return;
+        }
+        sweepLanes[lane] = (row, radiusChunks);
     }
 
     /// <summary>
@@ -751,6 +802,7 @@ public class LodPipeline
         long t0 = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         long mark = t0;
         AgentTickStep("tick-install-enter", t0, ref mark, storageThread?.LoadResults.Count ?? 0, ExploreBake.PendingCount);
+        paletteRemeshLeft = PaletteRepairRemeshPerTick;
         InstallLoadedSections();
         AgentTickStep("tick-install-exit", t0, ref mark, storageThread?.LoadResults.Count ?? 0, ExploreBake.PendingCount);
         ScheduleCaptures();
@@ -759,18 +811,31 @@ public class LodPipeline
         double applyMs = applyClock.Elapsed.TotalMilliseconds;
         LastApplyMs = applyMs;
         AgentTickStep("tick-apply-exit", t0, ref mark, captureBacklog, LastAppliedCount);
-        if (applyMs <= 8.0)
-            DrainExploreBake(captureBacklog);
+        bool paused = false;
+        try { paused = api is ICoreClientAPI capiPause && capiPause.IsGamePaused; } catch { }
+
+        PlayModeBakeBudget.TickBudget playBudget = PlayModeBakeBudget.Compute(
+            DiscoverOnly, paused, captureBacklog, applyMs);
+
+        if (applyMs <= PlayModeBakeBudget.ApplySpikeMs || !DiscoverOnly)
+        {
+            if (!DiscoverOnly || playBudget.AllowExploreDrain)
+                DrainExploreBake(captureBacklog, playBudget);
+        }
         AgentTickStep("tick-explore-exit", t0, ref mark, ExploreBake.LastDrainSpins, ExploreBake.PendingCount);
-        int propagationBudget = PropagationsPerTick;
+        int propagationBudget = DiscoverOnly
+            ? playBudget.MipPropagations
+            : PropagationsPerTick;
         if (!DiscoverOnly && World.MipDirty.Count > CatchUpPropagationThreshold)
             propagationBudget = CatchUpPropagationsPerTick;
-        if (applyMs > 8.0)
-            propagationBudget = Math.Min(propagationBudget, 2);
+        if (applyMs > PlayModeBakeBudget.ApplySpikeMs)
+            propagationBudget = Math.Min(propagationBudget, DiscoverOnly ? 1 : 2);
         World.ProcessPropagation(propagationBudget, World.RequestGpuSwap);
-        int saveBudget = DiscoverOnly ? 1 : SectionSavesPerTick;
-        if (applyMs > 8.0) saveBudget = 0;
+        int saveBudget = DiscoverOnly ? playBudget.SaveRows : SectionSavesPerTick;
+        if (applyMs > PlayModeBakeBudget.ApplySpikeMs) saveBudget = DiscoverOnly ? 0 : 0;
         SaveSomeDirtySections(saveBudget);
+        if (DiscoverOnly)
+            PlayModeBakeBudget.MaybeLogBudget(ExploreBake.PendingCount, World.RenderDirty.Count);
         AgentTickStep("tick-exit", t0, ref mark, World.SaveDirty.Count, ExploreBake.PendingCount);
         tickCounter++;
     }
@@ -794,7 +859,7 @@ public class LodPipeline
     }
     // #endregion
 
-    void DrainExploreBake(int captureBacklog)
+    void DrainExploreBake(int captureBacklog, PlayModeBakeBudget.TickBudget budget)
     {
         if (api.Side != EnumAppSide.Client || ExploreUntintedOf == null) return;
         var capi = (ICoreClientAPI)api;
@@ -803,7 +868,8 @@ public class LodPipeline
             this,
             ExplorePlantTintFallback,
             ExploreUntintedOf,
-            captureBacklog);
+            captureBacklog,
+            budget);
     }
 
     /// <summary>
@@ -817,15 +883,38 @@ public class LodPipeline
         return tickCounter % 1200 == 0;
     }
 
+    const int InstallsPerTick = 8;
+    const int OverlayInstallsPerTick = 2;
+    const double InstallBudgetMs = 2.0;
+    const double OverlayInstallBudgetMs = 1.0;
+    /// <summary>
+    /// Load-time no-colour palette fill used to MarkChanged every section (neighbor
+    /// remesh + mip). First join of a large cache (~3419 entries) stormed the mesh
+    /// queue. Persist every repair; remesh at most this many sections per tick.
+    /// First draw of unrepaired-GPU sections still reads the in-RAM palette.
+    /// </summary>
+    internal const int PaletteRepairRemeshPerTick = 2;
+
+    int paletteRemeshLeft = PaletteRepairRemeshPerTick;
+
     /// <summary>
     /// Adopt sections the storage thread finished reading. Cheap: the decompress
-    /// already happened off-thread, this only publishes the reference.
+    /// already happened off-thread, this only publishes the reference. Bounded so a
+    /// join/discover flood of async loads cannot dump 50–90 ms onto one game tick.
     /// </summary>
     void InstallLoadedSections()
     {
         if (storageThread == null) return;
 
-        while (storageThread.LoadResults.TryDequeue(out (long Key, LodSection? Section) result))
+        int cap = DeferLegacyHeal ? OverlayInstallsPerTick : InstallsPerTick;
+        double budgetMs = DeferLegacyHeal ? OverlayInstallBudgetMs : InstallBudgetMs;
+        long budgetTicks = (long)(System.Diagnostics.Stopwatch.Frequency * budgetMs / 1000.0);
+
+        int installed = 0;
+        long start = System.Diagnostics.Stopwatch.GetTimestamp();
+        while (installed < cap
+               && System.Diagnostics.Stopwatch.GetTimestamp() - start < budgetTicks
+               && storageThread.LoadResults.TryDequeue(out (long Key, LodSection? Section) result))
         {
             int repaired = 0;
             // Palette ids are resolved here, on the world thread, before anything can
@@ -845,10 +934,8 @@ public class LodPipeline
             // rest of the world's life. This is the only reason a read marks a section
             // dirty, and it stops as soon as the cache is clean.
             if (repaired > 0)
-            {
-                PaletteEntriesRepaired += repaired;
-                World.MarkChanged(result.Key);
-            }
+                NotePaletteRepair(result.Key, repaired);
+            installed++;
         }
     }
 
@@ -864,9 +951,12 @@ public class LodPipeline
         {
             if (LodWorld.KeyLevel(key) == 0)
             {
-                // Live visit bake when chunks load — FlagBaked cells overwrite from
-                // the visual top, including snow that the stored run skipped.
-                ExploreBake.Queue(key, section, false);
+                // Only queue live-tint L0 for explore GetColor. FlagBaked canvases
+                // already have season paint; re-queueing every streamed disk load
+                // flooded ExploreBake (40–70 pending) and hitch-baked on discover.
+                // Near-player FlagBaked refresh stays on QueueExploreBakeNearPlayer.
+                if (LodExploreBake.SectionHasLiveTint(section))
+                    ExploreBake.Queue(key, section, false);
                 World.RequestGpuSwap(key);
                 // #region agent log
                 if (++debugLoadDrop <= 16)
@@ -891,8 +981,7 @@ public class LodPipeline
                 if (healed > 0)
                 {
                     repaired += healed;
-                    World.RenderDirty.Add(key);
-                    InvalidateGpuMesh?.Invoke(key);
+                    World.RequestGpuSwap(key);
                 }
             }
         }
@@ -902,11 +991,17 @@ public class LodPipeline
     {
         int repaired = 0;
         AfterSectionLoaded(key, section, ref repaired);
-        if (repaired > 0)
-        {
-            PaletteEntriesRepaired += repaired;
-            World.MarkChanged(key);
-        }
+        NotePaletteRepair(key, repaired);
+    }
+
+    void NotePaletteRepair(long key, int repaired)
+    {
+        if (repaired <= 0) return;
+        PaletteEntriesRepaired += repaired;
+        World.SaveDirty.Add(key);
+        if (paletteRemeshLeft <= 0) return;
+        World.RequestGpuSwap(key);
+        paletteRemeshLeft--;
     }
 
     // ---- Capture scheduling (world thread gathers refs, worker reads blocks) ----
@@ -983,6 +1078,7 @@ public class LodPipeline
         // when a single apply overruns; a result is never split.
         bool busy = Worker.CaptureResults.Count >= CaptureBusyThreshold || deferredCaptures.Count > 0;
         int budget = busy ? CaptureAppliesPerTickBusy : CaptureAppliesPerTick;
+        if (DiscoverOnly) budget = Math.Min(budget, 1);
         int applied = 0;
         applyClock.Restart();
         LastAppliedCount = 0;
@@ -1204,9 +1300,10 @@ public class LodPipeline
     public bool HasPendingLoginPersistence =>
         World.SaveDirty.Count > 0 || (storageThread?.Backlog ?? 0) > 0;
 
-    /// <summary>Push baked L0 colours into parent mips so far LOD matches near.</summary>
+    /// <summary>Push baked L0 colours into parent mips so far LOD matches near.
+    /// Keep resident GPU meshes until the remesh uploads (InvalidateGpuMesh punched holes).</summary>
     public void DrainLoginMip(int budget = 48) =>
-        World.ProcessPropagation(budget, InvalidateGpuMesh);
+        World.ProcessPropagation(budget, World.RequestGpuSwap);
 
     /// <summary>Swap stale coarse meshes after L0 visit bake — keep GPU until upload.</summary>
     internal void InvalidateMipAncestors(long key)
@@ -1310,6 +1407,7 @@ public class LodPipeline
         ProvisionalQuadrantsConfirmed = 0;
         columnsDropped = 0;
         sweepRow = int.MinValue;
+        sweepLanes.Clear();
         DbPath = null;
     }
 

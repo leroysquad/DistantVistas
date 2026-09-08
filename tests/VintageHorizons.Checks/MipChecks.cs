@@ -26,6 +26,7 @@ public static class MipChecks
         TerrainOverACaveKeepsItsSurface(c);
         FloatingLeafCrownIsStillDropped(c);
         SkippedCanopyDoesNotBecomeParentSurface(c);
+        FlagBakedCanopySurvivesMip(c);
     }
 
     static void SkippedCanopyDoesNotBecomeParentSurface(Check c)
@@ -44,6 +45,40 @@ public static class MipChecks
         ulong[] merged = parent.ColumnRuns(LodSection.ColumnIndex(0, 0)).ToArray();
         c.True(merged.Length > 0, "terrain under a skipped canopy still mips");
         c.Eq(20, LodSection.RunYTop(merged[0]), "skipped canopy is not the parent surface");
+    }
+
+    /// <summary>
+    /// Sparse FlagBaked autumn canopy must stay the parent surface with FlagBaked
+    /// so walk-away L1/L2 does not flip to live-tint green dirt.
+    /// </summary>
+    static void FlagBakedCanopySurvivesMip(Check c)
+    {
+        var child = new LodSection();
+        int dirt = child.FindOrAddPaletteEntry(blockId: 1, color: 0x00509050, flags: 0, tintSlot: 3);
+        int autumn = child.FindOrAddPaletteEntry(
+            blockId: 2, color: 0x002050C8,
+            flags: LodPaletteEntry.FlagBaked, tintSlot: 0);
+        ulong[] col =
+        {
+            LodSection.PackRun(autumn, 42, 38),
+            LodSection.PackRun(dirt, 20, 1),
+        };
+        child.SetColumn(LodSection.ColumnIndex(0, 0), col);
+        child.SetColumn(LodSection.ColumnIndex(1, 0), new[] { LodSection.PackRun(dirt, 20, 1) });
+        child.SetColumn(LodSection.ColumnIndex(0, 1), new[] { LodSection.PackRun(dirt, 20, 1) });
+        child.SetColumn(LodSection.ColumnIndex(1, 1), new[] { LodSection.PackRun(dirt, 20, 1) });
+
+        var parent = new LodSection();
+        LodMip.DownsampleIntoParent(child, parent, 0, 0);
+        ulong[] merged = parent.ColumnRuns(LodSection.ColumnIndex(0, 0)).ToArray();
+        c.True(merged.Length > 0, "baked canopy mip produces a parent column");
+        int topPid = LodSection.RunPaletteId(merged[0]);
+        c.Eq(42, LodSection.RunYTop(merged[0]), "FlagBaked canopy stays the parent surface");
+        c.True((parent.Palette[topPid].Flags & LodPaletteEntry.FlagBaked) != 0,
+            "parent palette keeps FlagBaked so the shader skips live green tint");
+        c.Eq(0x002050C8, parent.Palette[topPid].Color,
+            "parent keeps GetColor RGB, not climate-map green");
+        c.True(parent.HasVisitPaint, "parent reports visit paint after FlagBaked mip");
     }
 
     /// <summary>

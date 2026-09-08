@@ -49,14 +49,17 @@ public static class LodCoveragePolicy
         viewDistanceAnchor * KeepCircleScale;
 
     /// <summary>
-    /// Draw at full L0/L1 only inside live vanilla view distance. The keep-circle
-    /// is larger and only about holding GPU meshes, not about which mesh we submit.
+    /// Draw at full L0/L1 inside live vanilla view distance times this scale.
+    /// 1.2 keeps 1-block columns a bit past the vanilla cut so the handoff ring
+    /// does not snap to 2-block "slab" L1 immediately. Keep-circle is still wider.
     /// </summary>
+    public const float DrawFullDetailScale = 1.2f;
+
     public static bool IsDrawFullDetail(double distance, double viewDistanceAnchor) =>
-        distance < viewDistanceAnchor;
+        viewDistanceAnchor > 0 && distance < viewDistanceAnchor * DrawFullDetailScale;
 
     public static double DrawFullDetailRadius(double viewDistanceAnchor) =>
-        viewDistanceAnchor;
+        viewDistanceAnchor * DrawFullDetailScale;
 
     public static bool ShouldKeepVisitedDraw(int level, bool hasDataSet, double distance, double viewDistanceAnchor) =>
         hasDataSet && IsVisitedKeepLevel(level) && IsNearVisitedTrail(distance, viewDistanceAnchor);
@@ -356,16 +359,67 @@ public static class LodCoveragePolicy
     public const float LeadConeFineScale = 1.5f;
 
     /// <summary>
-    /// Farthest we hand off in the lead cone when a companion is actually
-    /// drawing past us, as a multiple of view distance. 3x is our L1 hills
-    /// through the fog band. Past it Farseer's heightmaps are the cheap
-    /// silhouettes. When the companion is off we keep DV land-like cover
-    /// instead of stopping into empty sky.
+    /// Where Distant Vistas empty-stops in the lead cone when a companion draws.
+    /// Midground stays ours; LodFrontierScout fills capture toward this rim.
     /// </summary>
-    public const float HorizonDrawScale = 3f;
+    public const float HorizonDrawScale = 4.5f;
+
+    /// <summary>
+    /// Extra blocks past scale*VD for Farseer onset and DV horizon empty-stop
+    /// (1.0.25: ~700 so silhouettes sit farther behind swept FlagBaked land).
+    /// </summary>
+    public const float FarseerOnsetExtraBlocks = 700f;
+
+    /// <summary>
+    /// Farseer silhouette onset scale (visited and unvisited). Combined with
+    /// <see cref="FarseerOnsetExtraBlocks"/> via <see cref="FarseerSilhouetteOnsetDistance"/>.
+    /// </summary>
+    public const float FarseerSilhouetteOnsetScale = HorizonDrawScale;
+
+    /// <summary>
+    /// Alias for <see cref="FarseerSilhouetteOnsetScale"/> (late-only; no 1x ring).
+    /// </summary>
+    public const float UnvisitedFarseerOnsetScale = FarseerSilhouetteOnsetScale;
 
     public static double HorizonDrawDistance(double viewDistance) =>
-        viewDistance <= 0 ? 0 : viewDistance * HorizonDrawScale;
+        viewDistance <= 0 ? 0 : viewDistance * HorizonDrawScale + FarseerOnsetExtraBlocks;
+
+    public static double FarseerSilhouetteOnsetDistance(double viewDistance) =>
+        viewDistance <= 0 ? 0 : viewDistance * FarseerSilhouetteOnsetScale + FarseerOnsetExtraBlocks;
+
+    /// <summary>Uniform scale for Farseer shaders: (scale*VD + extra) / VD.</summary>
+    public static float FarseerSilhouetteOnsetScaleForView(float viewDistance) =>
+        viewDistance <= 1f
+            ? FarseerSilhouetteOnsetScale
+            : (float)(FarseerSilhouetteOnsetDistance(viewDistance) / viewDistance);
+
+    /// <summary>
+    /// Pull Farseer smoke to the meshed rim when FlagBaked lags the silhouette
+    /// by more than this many blocks (white sky strip). Overlay far-ready 75%
+    /// gate is unchanged; this only moves the companion onset uniform.
+    /// </summary>
+    public const float MeshLagSmokeBlocks = 256f;
+
+    /// <summary>Overlap so smoke sits just behind the last FlagBaked mesh.</summary>
+    public const float MeshSmokeOverlapBlocks = 128f;
+
+    /// <summary>
+    /// Shader onset scale. When <paramref name="meshedDist"/> is more than
+    /// <see cref="MeshLagSmokeBlocks"/> short of the silhouette, pull onset in
+    /// so gray tent covers the unmeshed band instead of sky. Recedes to the
+    /// full <see cref="FarseerSilhouetteOnsetDistance"/> as meshes catch up.
+    /// Does not change region.fsh.
+    /// </summary>
+    public static float FarseerOnsetScaleForMeshedRim(double viewDistance, double meshedDist)
+    {
+        float target = FarseerSilhouetteOnsetScaleForView((float)viewDistance);
+        if (viewDistance <= 1.0 || meshedDist <= 0.0) return target;
+        double targetBlocks = FarseerSilhouetteOnsetDistance(viewDistance);
+        if (meshedDist + MeshLagSmokeBlocks >= targetBlocks) return target;
+        double start = Math.Max(meshedDist - MeshSmokeOverlapBlocks, viewDistance * 0.5);
+        if (start >= targetBlocks) return target;
+        return (float)(start / viewDistance);
+    }
 
     public static bool PastHorizonDraw(double nearDist, double viewDistance) =>
         viewDistance > 0 && nearDist > HorizonDrawDistance(viewDistance);

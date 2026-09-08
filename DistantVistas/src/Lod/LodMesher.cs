@@ -38,15 +38,50 @@ public static class LodMesher
     const byte BakedBase = LodTintRegistry.MaxSlots * 3;
 
     /// <summary>
-    /// Stored colour is the frosted side. Horizontal UP faces extra-mix toward
-    /// frost white. Walls and bottoms keep the stored RGB.
+    /// Upper wall band (blocks) that inherits the UP/crown face colour so frost
+    /// white and autumn canopy read from the side, not only on flat tops.
     /// </summary>
-    public static int FrostFaceColor(int stored, byte flags, bool upFace)
+    public const int CrownSideBlocks = 2;
+
+    /// <summary>
+    /// FlagFrost columns store pure GetColor. Walls get side frost; UP faces add
+    /// an extra crown wash. Both scale by live calendar winter so early-spring
+    /// remesh drops December white without rebaking. Mid/far levels use a lighter
+    /// wash so autumn chroma under frost survives.
+    /// </summary>
+    public static int FrostFaceColor(int stored, byte flags, bool upFace, int level = 0)
     {
-        if (stored == 0 || !upFace) return stored;
+        if (stored == 0) return stored;
         if ((flags & LodPaletteEntry.FlagFrost) == 0) return stored;
-        return LodSeasonBake.MixTowardWhite(stored, LodSeasonBake.TopFrostExtra);
+        float w = LodSeasonBake.LiveWinterAmount;
+        if (w < LodSeasonBake.FrostSeasonMin) return stored;
+
+        float sideMix = LodSeasonBake.SideFrostAlpha * w;
+        float mix = sideMix;
+        if (upFace)
+        {
+            float topExtra = LodSeasonBake.TopFrostExtra * w;
+            if (level >= 2) topExtra *= 0.35f;
+            else if (level >= 1) topExtra *= 0.55f;
+            mix = sideMix + (1f - sideMix) * topExtra;
+            LodPaletteRepair.Channels(stored, out _, out _, out _, out _, out int chroma);
+            if (chroma > 40) mix = sideMix + (mix - sideMix) * 0.45f;
+        }
+        else if (level >= 1)
+        {
+            mix *= level >= 2 ? 0.55f : 0.75f;
+        }
+
+        if (mix <= 0.02f) return stored;
+        return LodSeasonBake.MixTowardWhite(stored, mix);
     }
+
+    /// <summary>
+    /// Wall colour for the upper <see cref="CrownSideBlocks"/> of a run: same as UP
+    /// so far LOD shows frost/canopy from the side. Below that, side frost only.
+    /// </summary>
+    public static int FrostWallColor(int stored, byte flags, bool crownBand, int level = 0) =>
+        FrostFaceColor(stored, flags, upFace: crownBand, level);
 
     static byte AlphaFor(byte paletteFlags, byte tintSlot, int color)
     {
@@ -147,8 +182,8 @@ public static class LodMesher
                     if (sealUnderwater && !isTranslucent && yTop < sealFloorY) continue;
 
                     bool isThin = (self.PaletteFlags[pid] & LodPaletteEntry.FlagThin) != 0;
-            // FidelityStep 1: keep thin mats through L1 (was drop at L1+); still cull L2+.
-            int thinDropLevel = LodWorld.FidelityStep >= 0.5 ? 2 : 1;
+            // Keep thin mats through L2 so mid/far rings still show cover; cull L3+.
+            int thinDropLevel = LodWorld.FidelityStep >= 0.5 ? 3 : 2;
             if (isThin && level >= thinDropLevel) continue;
 
                     // Ground cover is a few centimetres of plant in a one-block cell, so
@@ -168,18 +203,21 @@ public static class LodMesher
                         continue;
                     }
 
-                    // Mid-far anti-floater: skip short plant scraps that hang in air
-                    // (sparse leaf pixels after mip) unless supported within 1 block.
-                    // Plant only: a short soil or ore run at a cave ceiling is the
-                    // bottom of the terrain above it, and skipping it slit the face.
+                    // Mid-far anti-floater: skip short unsupported TintSlot scraps
+                    // (sparse leaf pixels after mip). Visit-baked / frost canopy must
+                    // survive L1/L2; dropping those stripped autumn tops into bare earth.
                     if (level >= 1 && !isTranslucent
-                        && self.PaletteTintSlots[pid] != LodTintRegistry.SlotNone)
+                        && self.PaletteTintSlots[pid] != LodTintRegistry.SlotNone
+                        && (self.PaletteFlags[pid] & LodPaletteEntry.FlagBaked) == 0
+                        && (self.PaletteFlags[pid] & LodPaletteEntry.FlagFrost) == 0)
                     {
                         int runH = yTop - yBottom;
                         bool supported = r < runs.Length - 1
                             && LodSection.RunYTop(runs[r + 1]) >= yBottom - 1;
                         if (!supported) supported = yBottom <= 2;
-                        if (!supported && runH <= 4) continue; // floating leaf/veg scrap
+                        // Floating tinted scraps only (FlagBaked/FlagFrost already
+                        // exempted). Surface leaf pixels after mip are the usual case.
+                        if (!supported && runH <= 4) continue;
                     }
 
                     bool topCovered = r > 0
@@ -216,8 +254,8 @@ public static class LodMesher
 
         // ---- Phase 2: greedy-merge and emit ----
 
-        EmitHorizontalGreedy(hf, self, opaque, water, step);
-        EmitVerticalMerged(vf, self, opaque, water, step);
+        EmitHorizontalGreedy(hf, self, opaque, water, step, level);
+        EmitVerticalMerged(vf, self, opaque, water, step, level);
 
         return new MeshResult
         {
@@ -250,7 +288,7 @@ public static class LodMesher
     [ThreadStatic] static int[]? planeGrid;
     [ThreadStatic] static int planeGridStamp;
 
-    static void EmitHorizontalGreedy(List<HFace> faces, SectionSnapshot self, Buffers opaque, Buffers water, int step)
+    static void EmitHorizontalGreedy(List<HFace> faces, SectionSnapshot self, Buffers opaque, Buffers water, int step, int level)
     {
         if (faces.Count == 0) return;
         int gs = LodSection.GridSize;
@@ -308,7 +346,7 @@ public static class LodMesher
 
             Buffers buf = first.Water ? water : opaque;
             int color = FrostFaceColor(
-                self.PaletteColors[first.Pid], self.PaletteFlags[first.Pid], upFace: !first.Bottom);
+                self.PaletteColors[first.Pid], self.PaletteFlags[first.Pid], upFace: !first.Bottom, level);
             if (first.Water) color = LodPaletteRepair.WaterDrawColor(color);
             byte alpha = AlphaFor(self.PaletteFlags[first.Pid], self.PaletteTintSlots[first.Pid], color);
 
@@ -371,7 +409,7 @@ public static class LodMesher
 
     // ---- Vertical faces: merge along the strip axis ----
 
-    static void EmitVerticalMerged(List<VFace> faces, SectionSnapshot self, Buffers opaque, Buffers water, int step)
+    static void EmitVerticalMerged(List<VFace> faces, SectionSnapshot self, Buffers opaque, Buffers water, int step, int level)
     {
         if (faces.Count == 0) return;
 
@@ -408,9 +446,9 @@ public static class LodMesher
             }
 
             Buffers buf = seg.Water ? water : opaque;
-            int color = self.PaletteColors[seg.Pid];
-            if (seg.Water) color = LodPaletteRepair.WaterDrawColor(color);
-            byte alpha = AlphaFor(self.PaletteFlags[seg.Pid], self.PaletteTintSlots[seg.Pid], color);
+            int stored = self.PaletteColors[seg.Pid];
+            byte flags = self.PaletteFlags[seg.Pid];
+            byte tint = self.PaletteTintSlots[seg.Pid];
 
             // W/E walls run along Z at fixed X; N/S walls run along X at fixed Z.
             bool xWall = seg.Dir is W or E;
@@ -424,18 +462,37 @@ public static class LodMesher
             float a0 = seg.Along * step;
             float a1 = alongEnd * step;
 
-            if (xWall)
+            int yBottom = seg.YBottom;
+            int yTop = seg.YTop;
+            int height = yTop - yBottom;
+            int crownCut = height <= CrownSideBlocks
+                ? yBottom
+                : Math.Max(yBottom, yTop - CrownSideBlocks);
+
+            void EmitWallBand(int y0, int y1, bool crown)
             {
-                AddQuad(buf, color, alpha,
-                    fixedCoord, seg.YBottom, a0, fixedCoord, seg.YBottom, a1,
-                    fixedCoord, seg.YTop, a1, fixedCoord, seg.YTop, a0);
+                if (y1 <= y0) return;
+                int color = FrostWallColor(stored, flags, crown, level);
+                if (seg.Water) color = LodPaletteRepair.WaterDrawColor(color);
+                byte alpha = AlphaFor(flags, tint, color);
+                if (xWall)
+                {
+                    AddQuad(buf, color, alpha,
+                        fixedCoord, y0, a0, fixedCoord, y0, a1,
+                        fixedCoord, y1, a1, fixedCoord, y1, a0);
+                }
+                else
+                {
+                    AddQuad(buf, color, alpha,
+                        a0, y0, fixedCoord, a1, y0, fixedCoord,
+                        a1, y1, fixedCoord, a0, y1, fixedCoord);
+                }
             }
-            else
-            {
-                AddQuad(buf, color, alpha,
-                    a0, seg.YBottom, fixedCoord, a1, seg.YBottom, fixedCoord,
-                    a1, seg.YTop, fixedCoord, a0, seg.YTop, fixedCoord);
-            }
+
+            // Lower wall: side frost. Upper band: UP/crown wash so frost and
+            // canopy colour read from the side at far LOD.
+            EmitWallBand(yBottom, crownCut, crown: false);
+            EmitWallBand(crownCut, yTop, crown: true);
 
             i = j;
         }

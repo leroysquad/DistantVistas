@@ -24,6 +24,7 @@ public sealed class LodLoginBakePulse
     {
         if (bake?.Active != true) return;
 
+        bake.FreezePickupPose();
         bake.PollCancelFromRender();
 
         if (deltaTime <= 0f) deltaTime = 1f / 60f;
@@ -34,6 +35,7 @@ public sealed class LodLoginBakePulse
         if (accum < TickStepSec) return;
         accum = 0;
         bake.Tick((float)TickStepSec);
+        bake.FreezePickupPose();
         pump?.Invoke();
     }
 }

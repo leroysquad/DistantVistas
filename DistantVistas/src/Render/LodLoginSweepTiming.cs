@@ -12,44 +12,57 @@ public sealed class LodLoginSweepTiming
     /// <summary>Lower bound of the first-pass wall target.</summary>
     public const double TargetMinSec = 30.0;
 
-    /// <summary>First-pass wall-clock cap. 4x the 0.8.64/65 shrink (40s → 160s).</summary>
-    public const double TargetMaxSec = 160.0;
+    /// <summary>
+    /// First-pass wall-clock cap. 1.0.25: ~7 minutes so scout streams paint
+    /// FlagBaked land out toward the Farseer rim (measured MachineSecPerStop).
+    /// </summary>
+    public const double TargetMaxSec = 420.0;
 
     /// <summary>First-join bootstrap uses the same first-pass wall cap.</summary>
     public const double BootstrapTargetMaxSec = TargetMaxSec;
 
-    /// <summary>Retry pass wall cap — 2x the shrink, still shorter than first pass.</summary>
-    public const double RetryTargetSec = 32.0;
+    /// <summary>Retry pass wall cap — denser gap-fill after the first hop.</summary>
+    public const double RetryTargetSec = 90.0;
 
     /// <summary>
     /// Fallback per-stop seconds only when this machine has no measured samples yet.
+    /// Concurrent scouts have no hop cost; live ETA uses wall / finishes, not this
+    /// seed, once a batch has painted.
     /// </summary>
-    public const double InitialSecPerStop = 2.0;
+    public const double InitialSecPerStop = 0.25;
 
-    public const int MinVisitStops = 64;
-    public const int MaxVisitStops = 96;
-    public const int MinRetryStops = 16;
-    public const int MaxRetryStops = 32;
+    /// <summary>
+    /// Parallel PaintReadyScouts can finish many stops in one overlay tick.
+    /// Do not clamp measured rates up to 0.25s — that made ETA assume hop-era pacing.
+    /// </summary>
+    public const double MeasuredMinSecPerStop = 0.02;
+
+    public const int MinVisitStops = 480;
+    public const int MaxVisitStops = 1680;
+    public const int MinRetryStops = 36;
+    public const int MaxRetryStops = 96;
 
     /// <summary>This PC's measured (or fallback) seconds per visit stop.</summary>
     public static double MachineSecPerStop { get; private set; } = InitialSecPerStop;
 
     readonly Stopwatch clock = new();
     readonly Stopwatch wall = new();
-    readonly List<double> stopDurations = new();
+    double measuredElapsed;
+    int measuredStops;
     double? seeded;
     int lastFinished;
 
     public static void SetMachineSecPerStop(double secPerStop) =>
-        MachineSecPerStop = Math.Clamp(secPerStop, 0.75, 6.0);
+        MachineSecPerStop = Math.Clamp(secPerStop, MeasuredMinSecPerStop, 6.0);
 
     public void Seed(double secPerStop) =>
-        seeded = Math.Clamp(secPerStop, 0.75, 6.0);
+        seeded = Math.Clamp(secPerStop, MeasuredMinSecPerStop, 6.0);
 
     public void BeginSession(double seededSec)
     {
         Seed(seededSec);
-        stopDurations.Clear();
+        measuredElapsed = 0;
+        measuredStops = 0;
         lastFinished = 0;
         clock.Restart();
         wall.Restart();
@@ -59,19 +72,29 @@ public sealed class LodLoginSweepTiming
     {
         clock.Restart();
         lastFinished = 0;
-        if (resetSamples) stopDurations.Clear();
+        if (resetSamples)
+        {
+            measuredElapsed = 0;
+            measuredStops = 0;
+        }
         if (!wall.IsRunning) wall.Start();
     }
 
+    /// <summary>
+    /// Record wall time for however many stops finished since the last note.
+    /// Painting 24 scouts in one tick is not one 0.25s hop.
+    /// </summary>
     public void NoteFinished(int finished)
     {
-        if (finished <= lastFinished) return;
+        int delta = finished - lastFinished;
+        if (delta <= 0) return;
+        measuredElapsed += clock.Elapsed.TotalSeconds;
+        measuredStops += delta;
         lastFinished = finished;
-        stopDurations.Add(clock.Elapsed.TotalSeconds);
         clock.Restart();
     }
 
-    public int SampleCount => stopDurations.Count;
+    public int SampleCount => measuredStops;
 
     public double WallSec => wall.Elapsed.TotalSeconds;
 
@@ -79,10 +102,8 @@ public sealed class LodLoginSweepTiming
     {
         get
         {
-            if (stopDurations.Count == 0) return seeded ?? MachineSecPerStop;
-            double sum = 0;
-            foreach (double d in stopDurations) sum += d;
-            return sum / stopDurations.Count;
+            if (measuredStops <= 0) return seeded ?? MachineSecPerStop;
+            return measuredElapsed / measuredStops;
         }
     }
 
@@ -106,13 +127,13 @@ public sealed class LodLoginSweepTiming
     /// </summary>
     public static int VisitStopBudget(double secPerStop, double targetMaxSec) =>
         (int)Math.Clamp(
-            Math.Round(targetMaxSec / Math.Max(0.75, secPerStop)),
+            Math.Round(targetMaxSec / Math.Max(InitialSecPerStop, secPerStop)),
             MinVisitStops,
             MaxVisitStops);
 
     public static int RetryStopBudget(double secPerStop) =>
         (int)Math.Clamp(
-            Math.Round(RetryTargetSec / Math.Max(0.75, secPerStop)),
+            Math.Round(RetryTargetSec / Math.Max(InitialSecPerStop, secPerStop)),
             MinRetryStops,
             MaxRetryStops);
 

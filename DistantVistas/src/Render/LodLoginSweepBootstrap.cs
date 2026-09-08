@@ -52,21 +52,25 @@ public readonly struct LodLoginSweepPlan
 
 /// <summary>
 /// Plans which L0 cells the login visit sweep should touch. With no per-world complete
-/// marker, always bootstraps a coast-guard ocean sweep or ~36 km radius around the player
-/// (even if some land was already walked). After a successful complete, existing visited
-/// canvases are spatially subsampled to a wall-clock revisit budget.
+/// marker, always bootstraps a coast-guard ocean sweep or the Farseer-onset disk
+/// (<see cref="EmptyCanvasBootstrapRadiusBlocks"/>, 4.5× the 750-block hold + 700)
+/// around the player (even if some land was already walked). After a successful complete,
+/// existing visited canvases are spatially subsampled to a wall-clock revisit budget.
 /// </summary>
 public static class LodLoginSweepBootstrap
 {
     /// <summary>
-    /// Season-expired / first-join disk around the player. 36000 = 2× the old 18 km
-    /// radius (2× diameter). Canvas outside this disk is kept, never wiped.
+    /// First-join / season-expire disk around the player: Farseer onset at the
+    /// login graphics hold (4.5 × 750 + 700 ≈ 4075 blocks). A 288 km probe with
+    /// 420 stops left a thin ring — vanilla will not stream that far from spawn.
+    /// Canvas outside this disk is kept, never wiped.
     /// </summary>
-    public const int EmptyCanvasBootstrapRadiusBlocks = 36000;
+    public static int EmptyCanvasBootstrapRadiusBlocks =>
+        LodLoginBakeViewBoost.SweepVisitRadiusBlocks;
 
     /// <summary>
     /// Hard cap on bootstrap visit stops at this PC's measured stop rate.
-    /// Spatial subsample uses <see cref="BudgetBootstrapVisitStops"/> (outer-weighted bands).
+    /// Spatial subsample uses <see cref="BudgetBootstrapVisitStops"/> (spawn first, then rim).
     /// </summary>
     public static int BootstrapMaxVisitStops =>
         LodLoginSweepTiming.BootstrapCellBudget(LodLoginSweepTiming.MachineSecPerStop);
@@ -77,6 +81,12 @@ public static class LodLoginSweepBootstrap
     /// </summary>
     public static int RevisitMaxVisitStops =>
         LodLoginSweepTiming.RevisitCellBudget(LodLoginSweepTiming.MachineSecPerStop);
+
+    /// <summary>
+    /// Spawn neighbourhood visited first so FlagBaked land is centered on the
+    /// player (1.0.28 playtest showed an offset rim with holes underfoot).
+    /// </summary>
+    public const int SpawnPriorityRadiusBlocks = 1024;
 
     /// <summary>Shorter miss-retry hop so the overlay does not run the first pass twice.</summary>
     public static int RetryMaxVisitStops =>
@@ -93,6 +103,13 @@ public static class LodLoginSweepBootstrap
 
     /// <summary>Representative open-ocean sample visits (full bake) spread across the body.</summary>
     public const int OpenOceanMaxSamples = 3;
+
+    /// <summary>
+    /// Hard ceiling on rain-height ClassifyCell calls during empty-canvas planning.
+    /// Full-disk classify at hundreds of km would freeze the client. The onset disk
+    /// is ~12k L0 cells; this ceiling covers it so land/ocean classify is not a sample.
+    /// </summary>
+    public const int MaxBootstrapClassifyCells = 16384;
 
     internal enum CellKind { Unknown, Ocean, Land }
 
@@ -121,8 +138,8 @@ public static class LodLoginSweepBootstrap
         Plan(world, clientWorld, pipeline, blocks, plantTintFallback, untintedOf, capi, RevisitMaxVisitStops);
 
     /// <summary>
-    /// First-sweep / empty-canvas plan: coast-guard or ~36 km player-radius disk, spatially
-    /// subsampled to <see cref="BootstrapMaxVisitStops"/>. Skips L0 cells already fully
+    /// First-sweep / empty-canvas plan: coast-guard or Farseer-onset player-radius disk,
+    /// spatially subsampled to <see cref="BootstrapMaxVisitStops"/>. Skips L0 cells already fully
     /// baked in the per-world cache; ocean sample/stamp rules unchanged.
     /// </summary>
     public static LodLoginSweepPlan PlanBootstrap(
@@ -199,16 +216,13 @@ public static class LodLoginSweepBootstrap
 
         if (planned.Count > maxVisitStops)
         {
-            if (needsVisit.Count >= maxVisitStops)
-                planned = BudgetVisitStops(needsVisit, centerSx, centerSz, maxVisitStops);
-            else
-            {
-                planned = new List<long>(needsVisit);
-                int left = maxVisitStops - planned.Count;
-                if (left > 0)
-                    planned.AddRange(BudgetVisitStops(complete, centerSx, centerSz, left));
-            }
+            planned = BudgetBootstrapVisitStops(
+                planned, centerSx, centerSz, maxVisitStops, clientWorld.BlockAccessor);
             LogBudget(capi, visitedTotal, planned.Count, "Revisit");
+        }
+        else if (planned.Count > 0)
+        {
+            OrderVisitKeysByResidency(planned, clientWorld.BlockAccessor, centerSx, centerSz);
         }
 
         string label = LabelForBudgetedRevisit(visitedTotal, planned.Count, gapCount, seasonRefresh);
@@ -265,7 +279,8 @@ public static class LodLoginSweepBootstrap
 
         int diskCount = visited.Count;
         int maxVisitStops = RevisitMaxVisitStops;
-        List<long> planned = BudgetVisitStops(visited, centerSx, centerSz, maxVisitStops);
+        List<long> planned = BudgetBootstrapVisitStops(
+            visited, centerSx, centerSz, maxVisitStops, clientWorld.BlockAccessor);
         int interiorBudget = RetryMaxVisitStops;
         List<long> interior = InteriorGapsBetweenStops(visited, planned, interiorBudget);
         if (interior.Count > 0)
@@ -331,7 +346,8 @@ public static class LodLoginSweepBootstrap
                 centerSx = (int)Math.Floor(clientWorld.Player.Entity.Pos.X / footprint);
                 centerSz = (int)Math.Floor(clientWorld.Player.Entity.Pos.Z / footprint);
             }
-            keys = BudgetVisitStops(keys, centerSx, centerSz, maxVisitStops);
+            keys = BudgetBootstrapVisitStops(
+                keys, centerSx, centerSz, maxVisitStops, clientWorld?.BlockAccessor);
         }
         string label = gapCount == 1
             ? "Repairing 1 incomplete region"
@@ -369,9 +385,22 @@ public static class LodLoginSweepBootstrap
         int cellRadius = BootstrapCellRadius(footprint);
         int sea = world.SeaLevel;
         double radiusSq = EmptyCanvasBootstrapRadiusBlocks * (double)EmptyCanvasBootstrapRadiusBlocks;
+        int diskEstimate = EstimateDiskCellCount(cellRadius);
 
-        var disk = EnumerateDiskCells(centerSx, centerSz, cellRadius, footprint, pos.X, pos.Z, radiusSq)
-            .ToList();
+        // Never walk every L0 cell in a huge probe disk on the main thread.
+        List<(int Sx, int Sz)> disk = diskEstimate <= MaxBootstrapClassifyCells
+            ? EnumerateDiskCells(centerSx, centerSz, cellRadius, footprint, pos.X, pos.Z, radiusSq)
+                .ToList()
+            : SampleDiskCells(
+                centerSx, centerSz, cellRadius, footprint, pos.X, pos.Z, radiusSq,
+                MaxBootstrapClassifyCells);
+
+        if (diskEstimate > MaxBootstrapClassifyCells)
+        {
+            capi?.Logger.Notification(
+                "[DistantVistas] Bootstrap plan: classifying {0} of ~{1} L0 cells in the {2} km disk (sample — full classify freezes the client).",
+                disk.Count, diskEstimate, EmptyCanvasBootstrapRadiusBlocks / 1000);
+        }
 
         var kinds = new Dictionary<long, CellKind>(disk.Count);
         foreach ((int sx, int sz) in disk)
@@ -387,14 +416,16 @@ public static class LodLoginSweepBootstrap
                 lodWorld, pipeline, blocks, plantTintFallback, untintedOf,
                 kinds, centerSx, centerSz, capi,
                 LodLoginSweepPlanMode.BootstrapCoastGuard,
-                "Bootstrap (coast guard)");
+                "Bootstrap (coast guard)",
+                diskEstimate);
         }
 
         return PlanBootstrapDisk(
             lodWorld, pipeline, blocks, plantTintFallback, untintedOf,
             kinds, centerSx, centerSz, capi,
             LodLoginSweepPlanMode.BootstrapRadius,
-            "Bootstrap (new world)");
+            "Bootstrap (new world)",
+            diskEstimate);
     }
 
     static LodLoginSweepPlan PlanBootstrapDisk(
@@ -408,7 +439,8 @@ public static class LodLoginSweepBootstrap
         int centerSz,
         ICoreClientAPI? capi,
         LodLoginSweepPlanMode mode,
-        string labelBase)
+        string labelBase,
+        int diskCellEstimate = 0)
     {
         List<long> landAll = SelectLandVisitCells(kinds);
         List<long> landVisit = LodLoginBakeAudit.FilterNeedsVisit(
@@ -429,7 +461,7 @@ public static class LodLoginSweepBootstrap
         }
 
         List<long> landBudgeted = BudgetBootstrapVisitStops(
-            landVisit, centerSx, centerSz, BootstrapMaxVisitStops);
+            landVisit, centerSx, centerSz, BootstrapMaxVisitStops, capi?.World?.BlockAccessor);
 
         var visitKeys = new List<long>(landBudgeted);
         foreach (long key in oceanSamples)
@@ -438,14 +470,21 @@ public static class LodLoginSweepBootstrap
                 visitKeys.Add(key);
         }
 
+        // Prefer the geometric disk size in UI/logs when we only classified a sample.
+        int plannedForLabel = diskCellEstimate > landVisit.Count ? diskCellEstimate : landVisit.Count;
+
         LogOceanPlan(capi, openOceanNeeding.Count, oceanSamples.Count, openOceanFill.Count, landBudgeted.Count);
-        LogBudget(capi, landVisit.Count, landBudgeted.Count);
-        visitKeys.Sort();
+        LogBudget(capi, plannedForLabel, landBudgeted.Count);
+        IBlockAccessor? blockAccessor = capi?.World?.BlockAccessor;
+        if (blockAccessor != null)
+            OrderVisitKeysByResidency(visitKeys, blockAccessor, centerSx, centerSz);
+        else
+            OrderVisitKeysFromCenter(visitKeys, centerSx, centerSz);
 
         return new LodLoginSweepPlan(
             mode,
             visitKeys,
-            LabelForBudgetedBootstrap(labelBase, landVisit.Count, landBudgeted.Count),
+            LabelForBudgetedBootstrap(labelBase, plannedForLabel, landBudgeted.Count),
             oceanSamples,
             openOceanFill);
     }
@@ -556,28 +595,104 @@ public static class LodLoginSweepBootstrap
     }
 
     /// <summary>
-    /// First-join bootstrap subsample across the ~36 km probe disk. Linear distance picks
-    /// (see <see cref="BudgetVisitStops"/>) left ~1 stop per long outer arc. Outer-weighted
-    /// distance bands put more teleports on the horizon ring so the far LOD looks filled.
+    /// First-join bootstrap subsample across the Farseer-onset disk. Spawn
+    /// neighbourhood is filled first so land is centered on the player; remaining
+    /// stops go to outer bands so FlagBaked land still meets Farseer.
     /// </summary>
     internal static List<long> BudgetBootstrapVisitStops(
         List<long> keys,
         int centerSx,
         int centerSz,
-        int max)
+        int max,
+        IBlockAccessor? blockAccessor = null)
     {
-        if (keys.Count <= max) return keys;
+        if (keys.Count <= max)
+        {
+            List<long> ordered = OrderVisitKeysFromCenter(keys, centerSx, centerSz);
+            return blockAccessor != null
+                ? OrderVisitKeysByResidency(ordered, blockAccessor, centerSx, centerSz)
+                : ordered;
+        }
 
+        OrderVisitKeysFromCenter(keys, centerSx, centerSz);
+
+        int innerCells = Math.Max(1,
+            (int)Math.Ceiling(SpawnPriorityRadiusBlocks / (double)LodSection.SectionBlocks));
+        long innerRsq = (long)innerCells * innerCells;
+        var inner = new List<long>();
+        var outer = new List<long>();
+        for (int i = 0; i < keys.Count; i++)
+        {
+            long key = keys[i];
+            if (DistSq(key, centerSx, centerSz) <= innerRsq) inner.Add(key);
+            else outer.Add(key);
+        }
+
+        int innerTake = Math.Min(inner.Count, Math.Max((max * 3) / 4, 64));
+        innerTake = Math.Min(innerTake, max);
+        var result = new List<long>(max);
+        var used = new HashSet<long>();
+        for (int i = 0; i < innerTake; i++)
+        {
+            used.Add(inner[i]);
+            result.Add(inner[i]);
+        }
+
+        int remain = max - result.Count;
+        if (remain > 0 && outer.Count > 0)
+        {
+            List<long> rim = SampleDistanceBands(outer, remain, used);
+            result.AddRange(rim);
+        }
+
+        for (int i = innerTake; result.Count < max && i < inner.Count; i++)
+        {
+            if (used.Add(inner[i]))
+                result.Add(inner[i]);
+        }
+
+        List<long> centered = OrderVisitKeysFromCenter(result, centerSx, centerSz);
+        return blockAccessor != null
+            ? OrderVisitKeysByResidency(centered, blockAccessor, centerSx, centerSz)
+            : centered;
+    }
+
+    /// <summary>A4: same stop count — resident map chunks first, then distance.</summary>
+    internal static List<long> OrderVisitKeysByResidency(
+        List<long> keys,
+        IBlockAccessor blockAccessor,
+        int centerSx,
+        int centerSz)
+    {
         keys.Sort((a, b) =>
         {
+            int la = LodLoginSweep.CountLoadedMapChunks(blockAccessor, a);
+            int lb = LodLoginSweep.CountLoadedMapChunks(blockAccessor, b);
+            if (la != lb) return lb.CompareTo(la);
             long da = DistSq(a, centerSx, centerSz);
             long db = DistSq(b, centerSx, centerSz);
-            return da.CompareTo(db);
+            int cmp = da.CompareTo(db);
+            return cmp != 0 ? cmp : a.CompareTo(b);
         });
+        return keys;
+    }
+
+    internal static List<long> OrderVisitKeysFromCenter(List<long> keys, int centerSx, int centerSz)
+    {
+        keys.Sort((a, b) =>
+        {
+            int cmp = DistSq(a, centerSx, centerSz).CompareTo(DistSq(b, centerSx, centerSz));
+            return cmp != 0 ? cmp : a.CompareTo(b);
+        });
+        return keys;
+    }
+
+    static List<long> SampleDistanceBands(List<long> keys, int max, HashSet<long> used)
+    {
+        if (keys.Count == 0 || max <= 0) return new List<long>();
 
         int bands = Math.Clamp(max / 5, 10, 18);
         var result = new List<long>(max);
-        var used = new HashSet<long>();
         int weightSum = bands * (bands + 1) / 2;
 
         for (int b = 0; b < bands && result.Count < max; b++)
@@ -588,7 +703,8 @@ public static class LodLoginSweepBootstrap
             int span = end - start;
             if (span <= 0) continue;
 
-            int weight = b + 1;
+            // Nearer outer bands (low b) get more stops; silhouette is sparse.
+            int weight = Math.Max(1, bands - b);
             int picks = Math.Max(1, (int)Math.Round(max * weight / (double)weightSum));
             picks = Math.Min(picks, max - result.Count);
             picks = Math.Min(picks, span);
@@ -608,7 +724,7 @@ public static class LodLoginSweepBootstrap
         {
             int idx = max == 1
                 ? 0
-                : (int)((long)i * (keys.Count - 1) / (max - 1));
+                : (int)((long)i * (keys.Count - 1) / Math.Max(1, max - 1));
             if (used.Add(keys[idx]))
                 result.Add(keys[idx]);
         }
@@ -760,6 +876,10 @@ public static class LodLoginSweepBootstrap
         return Math.Abs(y - sea) <= OceanSeaDelta ? CellKind.Ocean : CellKind.Land;
     }
 
+    /// <summary>Approximate L0 cells inside a square-bounded circle of the given cell radius.</summary>
+    internal static int EstimateDiskCellCount(int cellRadius) =>
+        (int)Math.Ceiling(Math.PI * cellRadius * (double)cellRadius);
+
     static IEnumerable<(int Sx, int Sz)> EnumerateDiskCells(
         int centerSx,
         int centerSz,
@@ -783,5 +903,73 @@ public static class LodLoginSweepBootstrap
                     yield return (sx, sz);
             }
         }
+    }
+
+    /// <summary>
+    /// Outer-weighted ring sample of L0 cells across the probe disk. Same spirit as
+    /// <see cref="BudgetBootstrapVisitStops"/>, but chosen before ClassifyCell so a
+    /// 216 km radius never freezes on millions of map-chunk probes.
+    /// </summary>
+    internal static List<(int Sx, int Sz)> SampleDiskCells(
+        int centerSx,
+        int centerSz,
+        int cellRadius,
+        int footprint,
+        double originX,
+        double originZ,
+        double radiusSq,
+        int maxSamples)
+    {
+        var result = new List<(int Sx, int Sz)>(Math.Min(maxSamples, 512));
+        var used = new HashSet<(int, int)>();
+
+        void TryAdd(int sx, int sz)
+        {
+            if (sx < 0 || sz < 0) return;
+            if (result.Count >= maxSamples) return;
+            double cx = sx * footprint + footprint * 0.5;
+            double cz = sz * footprint + footprint * 0.5;
+            double dx = cx - originX;
+            double dz = cz - originZ;
+            if (dx * dx + dz * dz > radiusSq) return;
+            if (!used.Add((sx, sz))) return;
+            result.Add((sx, sz));
+        }
+
+        TryAdd(centerSx, centerSz);
+        if (cellRadius <= 0 || maxSamples <= 1)
+            return result;
+
+        int bands = Math.Clamp(maxSamples / 8, 12, 48);
+        int weightSum = bands * (bands + 1) / 2;
+
+        for (int b = 0; b < bands && result.Count < maxSamples; b++)
+        {
+            double t0 = b / (double)bands;
+            double t1 = (b + 1) / (double)bands;
+            double rCells = (t0 + t1) * 0.5 * cellRadius;
+            int weight = b + 1;
+            int picks = Math.Max(1, (int)Math.Round(maxSamples * weight / (double)weightSum));
+            picks = Math.Min(picks, maxSamples - result.Count);
+
+            for (int p = 0; p < picks; p++)
+            {
+                double ang = (2.0 * Math.PI * (p + 0.5) / picks) + (b * 0.41);
+                int dsx = (int)Math.Round(rCells * Math.Cos(ang));
+                int dsz = (int)Math.Round(rCells * Math.Sin(ang));
+                TryAdd(centerSx + dsx, centerSz + dsz);
+            }
+        }
+
+        // If rings collided / clipped, pad with a denser outer ring.
+        for (int p = 0; result.Count < maxSamples && p < maxSamples * 2; p++)
+        {
+            double ang = 2.0 * Math.PI * p / (maxSamples * 2.0);
+            int dsx = (int)Math.Round(cellRadius * 0.92 * Math.Cos(ang));
+            int dsz = (int)Math.Round(cellRadius * 0.92 * Math.Sin(ang));
+            TryAdd(centerSx + dsx, centerSz + dsz);
+        }
+
+        return result;
     }
 }

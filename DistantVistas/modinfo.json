@@ -2,11 +2,11 @@
     "type": "code",
     "modid": "distantvistas",
     "name": "Distant Vistas",
-    "version": "1.0.0",
+    "version": "1.0.46",
     "side": "Universal",
     "requiredOnClient": true,
     "requiredOnServer": false,
-    "description": "Official 1.0. Far terrain that stays. Seasons and winter frost match the ground. Join overlay paints the horizon. Vintage Horizons fork. What works for me might not work for you.",
+    "description": "Official 1.0.46. Queue-safe login bake: completion-gated scout-host admission (max 24 in-flight, 2 priority starts/tick, 2 ForceSend/tick), client visibility coordinator with pressure feedback, and stream +32/5s only on quiet host+client windows. No servermagicnumbers bump required. Visit disk 4075. Scouts primary.",
     "authors": [
         "IllLeroySquad"
     ],

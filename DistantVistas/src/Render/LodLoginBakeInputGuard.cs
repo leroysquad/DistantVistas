@@ -25,6 +25,7 @@ public sealed class LodLoginBakeInputGuard : HudElement
     int composeFailStreak;
 
     public Action? OnCancelRequested;
+    public Action? OnRenderPin;
 
     public LodLoginBakeInputGuard(ICoreClientAPI capi) : base(capi) { }
 
@@ -137,6 +138,7 @@ public sealed class LodLoginBakeInputGuard : HudElement
     {
         if (wantActive)
         {
+            OnRenderPin?.Invoke();
             LodLoginBakeInputLock.HoldLook(capi);
             if (NeedsCompose() && composeFailStreak < 8) TryCompose();
             if (!IsOpened()) TryEnsureOpen();

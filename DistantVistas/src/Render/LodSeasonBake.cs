@@ -71,7 +71,7 @@ public static class LodSeasonBake
         if (!IsColumnMapLoaded(acc, x, z)) return false;
 
         int start = Math.Min(mapHeight - 1, Math.Max(storedY + 24, storedY));
-        var pos = new BlockPos(x, start, z);
+        BlockPos pos = LodBakeScratch.Pos(x, start, z);
         for (int py = start; py >= 1; py--)
         {
             pos.Y = py;
@@ -146,6 +146,20 @@ public static class LodSeasonBake
     /// </summary>
     internal static bool AllowExpireNoMapSample;
 
+    /// <summary>
+    /// Expire leftover GetColor without a map chunk can sample unknown.png white.
+    /// Do not write that strip. Real snow/ice/water keep pale RGB via
+    /// <see cref="KeepVisitSnowColor"/>.
+    /// </summary>
+    public static bool RejectExpireMissingTex(Block block, int color)
+    {
+        if (color == 0) return true;
+        if (!LodPaletteRepair.IsMissingTextureWhite(color)
+            && !LodPaletteRepair.IsMissingTextureSky(color))
+            return false;
+        return !KeepVisitSnowColor(block, waterColumn: false);
+    }
+
     /// <summary>Map chunk present for a single column — visit bake is per-column, not all-or-nothing.</summary>
     public static bool IsColumnMapLoaded(IBlockAccessor blockAccessor, int x, int z)
     {
@@ -161,19 +175,56 @@ public static class LodSeasonBake
     /// </summary>
     public static int SampleVanillaColor(ICoreClientAPI capi, Block block, int x, int y, int z)
     {
+        int id = block.BlockId;
+        if (LodBlockPolicy.IsClimateUntinted(block))
+        {
+            if (LodBakeScratch.TryGetOverlayBlockIdGetColor(id, out int overlayUntinted))
+                return overlayUntinted;
+            if (LodBakeScratch.TryGetBlockIdGetColor(id, out int untintedCached))
+                return untintedCached;
+        }
+
+        if (LodBakeScratch.TryGetOverlayGetColor(id, x, y, z, out int overlayCached))
+            return overlayCached;
+
+        if (LodBakeScratch.TryGetSectionGetColor(id, x, y, z, out int cached))
+            return cached;
+
         try
         {
-            var pos = new BlockPos(x, y, z);
-            int color = block.GetColor(capi, pos);
+            int color = block.GetColor(capi, LodBakeScratch.Pos(x, y, z));
+            LodBakeScratch.NoteGetColorCall();
             if (color != 0)
             {
-                color = ApplyVisitFrost(capi.World, block, pos, color);
+                // Pure GetColor. FlagFrost + mesher apply the wash so early-spring
+                // remesh thaws walls and crowns without rebaking every column.
+                if (!LodBlockPolicy.IsClimateUntinted(block))
+                    _ = ApplyVisitFrost(capi.World, block, LodBakeScratch.Pos(x, y, z), color);
+                LodBakeScratch.RememberSectionGetColor(id, x, y, z, color);
+                LodBakeScratch.RememberOverlayGetColor(id, x, y, z, color);
+                if (LodBlockPolicy.IsClimateUntinted(block))
+                {
+                    LodBakeScratch.RememberBlockIdGetColor(id, color);
+                    LodBakeScratch.RememberOverlayBlockIdGetColor(id, color);
+                }
+                // #region agent log
+                if (LodCanopyGray.IsSeasonFoliage(block))
+                    FarCoverageDiag.NoteCanopySample(getColor: true, zero: false);
+                // #endregion
                 return color;
             }
+            // #region agent log
+            if (LodCanopyGray.IsSeasonFoliage(block))
+                FarCoverageDiag.NoteCanopySample(getColor: false, zero: true);
+            // #endregion
         }
         catch
         {
             // Fall back to manual tint reproduction.
+            // #region agent log
+            if (LodCanopyGray.IsSeasonFoliage(block))
+                FarCoverageDiag.NoteCanopySample(getColor: false, zero: true);
+            // #endregion
         }
         return 0;
     }
@@ -187,9 +238,14 @@ public static class LodSeasonBake
 
     public static int SampleTextureMean(ICoreClientAPI capi, Block block, int x, int y, int z)
     {
+        int id = block.BlockId;
+        if (LodBakeScratch.TryGetSectionTextureMean(id, out int cached))
+            return cached;
+
+        int mean = 0;
         try
         {
-            var pos = new BlockPos(x, y, z);
+            BlockPos pos = LodBakeScratch.Pos(x, y, z);
             long r = 0, g = 0, b = 0;
             int n = 0;
             for (int i = 0; i < TextureMeanSamples; i++)
@@ -201,12 +257,15 @@ public static class LodSeasonBake
                 b += (c >> 16) & 0xFF;
                 n++;
             }
-            return n == 0 ? 0 : LodSurfaceMix.Pack((int)(r / n), (int)(g / n), (int)(b / n));
+            mean = n == 0 ? 0 : LodSurfaceMix.Pack((int)(r / n), (int)(g / n), (int)(b / n));
         }
         catch
         {
-            return 0;
+            mean = 0;
         }
+
+        LodBakeScratch.RememberSectionTextureMean(id, mean);
+        return mean;
     }
 
     /// <summary>
@@ -230,35 +289,55 @@ public static class LodSeasonBake
     public const float GroundFrostAlpha = 0.18f;
 
     /// <summary>
-    /// Vanilla frost is shader-only (colormap.fsh). GetColor is climate+season
-    /// without that overlay, so far LOD would keep autumn leaves in December.
-    /// Leaves are EnumBlockMaterial.Leaves, not Plant — the Plant-only gate
-    /// dropped every tree. Stored RGB is the side colour; UP faces extra-whiten
-    /// in the mesher.
+    /// Calendar winter amount (0 late spring/summer … 1 winter). Renderer sets
+    /// this every draw. May must not keep baking or meshing frost-white LODs
+    /// from cold climate samples alone.
+    /// </summary>
+    public static float LiveWinterAmount;
+
+    /// <summary>
+    /// Below this, no FlagFrost bake and no mesher frost wash. 0.75 ≈ late autumn
+    /// (WinterAmount ramp ends near calendar winter). Mid-autumn stays GetColor only.
+    /// </summary>
+    public const float FrostSeasonMin = 0.75f;
+
+    public static bool SeasonAllowsFrost => LiveWinterAmount >= FrostSeasonMin;
+
+    /// <summary>
+    /// Visit bake no longer mixes frost into stored RGB (PaintRevision 6+).
+    /// FlagFrost marks climate frost; <see cref="LodMesher.FrostFaceColor"/>
+    /// applies side + UP wash scaled by live winter so thaw remesh clears it.
+    /// Kept as a probe hook so diagnostics still exercise the frost gate.
     /// </summary>
     public static int ApplyVisitFrost(IClientWorldAccessor world, Block block, BlockPos pos, int seasonRgb)
     {
+        if (!SeasonAllowsFrost) return seasonRgb;
         if (seasonRgb == 0 || !IsFrostableCanopy(block)) return seasonRgb;
         if (!TryVisitFrostWeight(world, pos, out float w, out _, out _)) return seasonRgb;
         if (w <= 0f) return seasonRgb;
-        return MixTowardWhite(seasonRgb, w * SideFrostAlpha);
+        return seasonRgb;
     }
 
     public static bool IsFrostableCanopy(Block? block)
     {
         if (block == null || !block.Frostable) return false;
-        return LodCanopyGray.IsVanillaTreeCanopy(block);
+        return LodCanopyGray.IsSeasonFoliage(block);
     }
 
     /// <summary>
-    /// Walk capture may store soil while the live top is canopy. Path is the
+    /// Walk capture may store soil while the live top is canopy/bush. Path is the
     /// visual top from <see cref="LodSurfaceMix.ProbeTopPath"/>.
     /// </summary>
     public static bool ShouldFlagFrost(float frostW, Block? block, string? path)
     {
-        if (frostW < FrostFlagMin) return false;
-        if (IsFrostableCanopy(block)) return true;
-        return LodCanopyGray.IsVanillaTreeCanopyPath(path);
+        bool allows = SeasonAllowsFrost;
+        bool flagged = allows
+            && frostW >= FrostFlagMin
+            && (IsFrostableCanopy(block) || LodCanopyGray.IsSeasonFoliagePath(path));
+        // #region agent log
+        ColorPathDiag.NoteBakeFrostGate(LiveWinterAmount, allows, flagged);
+        // #endregion
+        return flagged;
     }
 
     public static byte MixVisitBakeFlags(byte flags, bool frost)
@@ -274,7 +353,7 @@ public static class LodSeasonBake
     public static bool VisitColumnFrost(
         IClientWorldAccessor world, int x, int y, int z, Block? block, string? path)
     {
-        TryVisitFrostWeight(world, new BlockPos(x, y, z), out float w, out _, out _);
+        TryVisitFrostWeight(world, LodBakeScratch.Pos(x, y, z), out float w, out _, out _);
         return ShouldFlagFrost(w, block, path);
     }
 
@@ -414,7 +493,7 @@ public static class LodSeasonBake
             sb = LodTopSoil.Dilute(share.B, sb);
 
             float temp = 128f;
-            ClimateCondition? cl = world.BlockAccessor.GetClimateAt(new BlockPos(x, world.SeaLevel, z));
+            ClimateCondition? cl = world.BlockAccessor.GetClimateAt(LodBakeScratch.Pos(x, world.SeaLevel, z));
             if (cl != null)
                 temp = LodTintRegistry.UnscaledTempByteFromCelsius(cl.WorldGenTemperature);
             float amt = LodTintRegistry.SeasonWeightFromTempByte(temp);
@@ -523,9 +602,39 @@ public static class LodSeasonBake
         int cols = gs * gs;
         int mapH = world.BlockAccessor.MapSizeY;
         LodSurfaceMix.Rent(cols, out int[] raw, out int[] blurred, out byte[] mask);
-        var tops = new Block?[cols];
-        var topY = new int[cols];
-        var frostCol = new bool[cols];
+        LodBakeScratch.RentColumnMeta(cols, out Block?[] tops, out int[] topY, out bool[] frostCol);
+        LodBakeScratch.BeginSectionTextureMeans();
+        try
+        {
+            changed = BakeSectionFromVisitBody(
+                capi, world, section, sectionKey, untintedOf,
+                cols, mapH, raw, blurred, mask, tops, topY, frostCol, ref tally);
+        }
+        finally
+        {
+            LodBakeScratch.EndSectionTextureMeans();
+        }
+        return changed;
+    }
+
+    static int BakeSectionFromVisitBody(
+        ICoreClientAPI capi,
+        IClientWorldAccessor world,
+        LodSection section,
+        long sectionKey,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
+        int cols,
+        int mapH,
+        int[] raw,
+        int[] blurred,
+        byte[] mask,
+        Block?[] tops,
+        int[] topY,
+        bool[] frostCol,
+        ref VisitBakeTally tally)
+    {
+        int changed = 0;
+        int gs = LodSection.GridSize;
         int nLand = 0, nSnowTop = 0, nPlantTop = 0, nGroundTop = 0;
         long sumTopR = 0, sumMixR = 0, sumBlurR = 0, sumFinalR = 0;
         int nKeepChanged = 0, nSkipped = 0;
@@ -567,6 +676,11 @@ public static class LodSeasonBake
                     continue;
                 }
                 expireColor = LodSurfaceMix.MixVisitBlock(capi, block, x, y, z, expireColor);
+                if (RejectExpireMissingTex(block, expireColor))
+                {
+                    tally.Zero++;
+                    continue;
+                }
                 tops[col] = block;
                 topY[col] = y;
                 frostCol[col] = VisitColumnFrost(world, x, y, z, block, block.Code?.Path);
@@ -697,7 +811,7 @@ public static class LodSeasonBake
             if (dbgCanopy < 8 && VanillaCanopyPath(probePath))
             {
                 dbgCanopy++;
-                SampleFinalTint(world, block, x, y, z, LodUntintedShare.None, plantTintFallback,
+                SampleFinalTint(world, block, x, y, z, LodUntintedShare.None, null,
                     out float sr, out float sg, out float sb);
                 int tintR = (int)(sr * 255f + 0.5f);
                 int tintG = (int)(sg * 255f + 0.5f);
@@ -921,6 +1035,178 @@ public static class LodSeasonBake
                 + ",\"key\":" + sectionKey + "}");
         }
         // #endregion
+        return changed;
+    }
+
+    /// <summary>
+    /// Walk/discover visit bake: paint at most <paramref name="maxColumns"/> captured
+    /// tops starting at <paramref name="startCol"/>, under a wall-clock budget.
+    /// Writes raw column colours (no neighbour blur) so work can split across ticks.
+    /// Incomplete means "continue next tick from <paramref name="nextCol"/>" — the
+    /// section mesh stays drawn; only season GetColor is elongated. Login sweep still
+    /// uses the full <see cref="BakeSectionFromVisit"/> path with blur.
+    /// </summary>
+    public static int BakeSectionFromVisitChunked(
+        ICoreClientAPI capi,
+        LodSection section,
+        long sectionKey,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
+        int startCol,
+        int maxColumns,
+        double maxMs,
+        out int nextCol,
+        out bool complete) =>
+        BakeSectionFromVisitChunked(
+            capi, section, sectionKey, plantTintFallback, untintedOf,
+            startCol, maxColumns, maxMs, out nextCol, out complete, out _);
+
+    public static int BakeSectionFromVisitChunked(
+        ICoreClientAPI capi,
+        LodSection section,
+        long sectionKey,
+        Block? plantTintFallback,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
+        int startCol,
+        int maxColumns,
+        double maxMs,
+        out int nextCol,
+        out bool complete,
+        out int getColorCalls)
+    {
+        _ = plantTintFallback;
+        getColorCalls = 0;
+        nextCol = startCol;
+        complete = false;
+        if (maxColumns <= 0 || maxMs <= 0) return 0;
+
+        IClientWorldAccessor world = capi.World;
+        int gs = LodSection.GridSize;
+        int cols = gs * gs;
+        if (startCol < 0) startCol = 0;
+        if (startCol >= cols)
+        {
+            complete = true;
+            nextCol = cols;
+            return 0;
+        }
+
+        int mapH = world.BlockAccessor.MapSizeY;
+        int painted = 0;
+        long deadline = Stopwatch.GetTimestamp()
+            + (long)(Stopwatch.Frequency * maxMs / 1000.0);
+
+        LodBakeScratch.BeginSectionTextureMeans();
+        try
+        {
+            int changed = BakeSectionFromVisitChunkedBody(
+                capi, world, section, sectionKey, untintedOf,
+                startCol, maxColumns, cols, mapH, deadline,
+                out nextCol, out complete, ref painted);
+            getColorCalls = LodBakeScratch.SectionGetColorCalls;
+            return changed;
+        }
+        finally
+        {
+            LodBakeScratch.EndSectionTextureMeans();
+        }
+    }
+
+    static int BakeSectionFromVisitChunkedBody(
+        ICoreClientAPI capi,
+        IClientWorldAccessor world,
+        LodSection section,
+        long sectionKey,
+        System.Func<Block, (int Color, LodUntintedShare Share)> untintedOf,
+        int startCol,
+        int maxColumns,
+        int cols,
+        int mapH,
+        long deadline,
+        out int nextCol,
+        out bool complete,
+        ref int painted)
+    {
+        int changed = 0;
+        complete = false;
+        nextCol = startCol;
+
+        for (int col = startCol; col < cols; col++)
+        {
+            // Stop *before* advancing past this column so incomplete resume
+            // revisits it — never skip a Captured top just because the budget ended.
+            if (painted >= maxColumns)
+            {
+                nextCol = col;
+                return changed;
+            }
+            if ((painted & 15) == 0 && Stopwatch.GetTimestamp() >= deadline)
+            {
+                nextCol = col;
+                return changed;
+            }
+
+            if (!section.Captured[col]) continue;
+            if (!section.TryGetTopRun(col, out ulong topRun)) continue;
+
+            int pid = LodSection.RunPaletteId(topRun);
+            if (pid < 0 || pid >= section.Palette.Count) continue;
+
+            LodPaletteEntry entry = section.Palette[pid];
+            if (entry.BlockId <= 0 || entry.BlockId >= world.Blocks.Count) continue;
+
+            Block block = world.Blocks[entry.BlockId];
+            (int x, int y, int z) = LodPipeline.CaptureBlockPos(sectionKey, col, topRun);
+            if (TryResolveLiveSurface(
+                    world.BlockAccessor, x, y, z, mapH,
+                    out Block? live, out int liveY)
+                && live != null)
+            {
+                block = live;
+                y = liveY;
+            }
+
+            if (!IsColumnMapLoaded(world.BlockAccessor, x, z))
+                continue;
+
+            int mix = LodSurfaceMix.SampleColumnStack(
+                capi, world.BlockAccessor, x, y, z, out bool water, out _);
+            if (mix == 0) continue;
+
+            bool frost = ShouldFlagFrost(
+                LodSurfaceMix.ProbeFrostW, block, LodSurfaceMix.ProbeTopPath);
+            (int untinted, _) = untintedOf(block);
+            untinted = LodPaletteRepair.KeepCapturedColor(
+                untinted, untinted, LodBlockPolicy.IsClimateUntinted(block));
+            mix = LodPaletteRepair.KeepCapturedColor(
+                mix, untinted, KeepVisitSnowColor(block, water));
+
+            byte bakedFlags = MixVisitBakeFlags(entry.Flags, frost);
+            int targetPid = section.FindOrAddPaletteEntry(
+                block.BlockId, mix, bakedFlags, LodTintRegistry.SlotNone);
+
+            if (targetPid != pid)
+            {
+                if (section.TrySetTopRunPaletteId(col, targetPid))
+                    changed++;
+            }
+            else if (entry.Color != mix
+                || entry.TintSlot != LodTintRegistry.SlotNone
+                || entry.Flags != bakedFlags)
+            {
+                entry.Color = mix;
+                entry.Flags = bakedFlags;
+                entry.TintSlot = LodTintRegistry.SlotNone;
+                section.Palette[pid] = entry;
+                changed++;
+            }
+
+            painted++;
+        }
+
+        nextCol = cols;
+        complete = true;
+        if (changed > 0) section.InvalidatePaletteSnapshot();
         return changed;
     }
 
@@ -1188,7 +1474,6 @@ public static class LodSeasonBake
             paletteChanges += n;
             changedSections++;
             world.MarkChanged(key);
-            pipeline.InvalidateGpuMesh?.Invoke(key);
             pipeline.InvalidateMipAncestors(key);
             world.RenderDirty.Add(key);
         }

@@ -193,13 +193,17 @@ public static class LodMip
     }
 
     /// <summary>
-    /// Most common covering block. Bright-white (snow / missing tex) may win only with
-    /// a true 3-of-4 majority; otherwise the rock/dirt neighbour in the same slice wins.
+    /// Most common covering block. Visit-baked / frost canopy tops win even when
+    /// sparse so autumn leaf crowns survive L1/L2 mip. Bright-white snow or
+    /// missing-tex rock may win only with a true 3-of-4 majority; frost-whitened
+    /// canopy (FlagFrost + TintSlot / FlagBaked) is never treated as a disposable
+    /// bright rock cap.
     /// </summary>
     static int PickSlicePalette(LodSection child, ReadOnlySpan<int> pidList, ReadOnlySpan<int> pidN, int nPids)
     {
         int bestPid = -1, bestN = -1;
         int bestEarthPid = -1, bestEarthN = -1;
+        int bestCanopyPid = -1, bestCanopyN = -1;
         for (int k = 0; k < nPids; k++)
         {
             int pid = pidList[k];
@@ -209,8 +213,15 @@ public static class LodMip
                 bestN = n;
                 bestPid = pid;
             }
+            if (pid >= 0 && pid < child.Palette.Count && IsCanopySurfaceEntry(child.Palette[pid])
+                && n > bestCanopyN)
+            {
+                bestCanopyN = n;
+                bestCanopyPid = pid;
+            }
             bool bright = pid >= 0 && pid < child.Palette.Count
-                && LodPaletteRepair.IsBrightCap(child.Palette[pid].Color);
+                && LodPaletteRepair.IsBrightCap(child.Palette[pid].Color)
+                && !IsCanopySurfaceEntry(child.Palette[pid]);
             if (!bright && n > bestEarthN)
             {
                 bestEarthN = n;
@@ -218,16 +229,32 @@ public static class LodMip
             }
         }
 
+        // Sparse FlagBaked / FlagFrost canopy beats dirt or bright-rock majority.
+        if (bestCanopyPid >= 0 && bestCanopyN >= 1) return bestCanopyPid;
+
         if (bestPid < 0) return -1;
         bool winnerBright = bestPid < child.Palette.Count
-            && LodPaletteRepair.IsBrightCap(child.Palette[bestPid].Color);
+            && LodPaletteRepair.IsBrightCap(child.Palette[bestPid].Color)
+            && !IsCanopySurfaceEntry(child.Palette[bestPid]);
         // 3-of-4 or unanimous bright is real snow (or a whole missing-tex plateau).
-        // A 1-of-4 or 2-of-4 bright cap is patchy snow or a missing tex; closer in those blocks are rock.
-        // Skip a bright slice that is not a 3-of-4 majority. Returning -1 drops a
-        // lone snow/missing-tex cap so the rock below becomes the parent surface.
+        // A 1-of-4 or 2-of-4 bright rock cap is patchy snow or a missing tex.
         if (winnerBright && bestN < 3)
             return bestEarthPid;
         return bestPid;
+    }
+
+    /// <summary>
+    /// Visit-baked autumn leaf or frost-crowned canopy that must stay the surface
+    /// colour through mip, not lose to rock/dirt majority or bright-cap drops.
+    /// </summary>
+    static bool IsCanopySurfaceEntry(LodPaletteEntry e)
+    {
+        if ((e.Flags & LodPaletteEntry.FlagBaked) != 0) return true;
+        if ((e.Flags & LodPaletteEntry.FlagFrost) != 0
+            && (e.TintSlot != LodTintRegistry.SlotNone
+                || (e.Flags & LodPaletteEntry.FlagThin) != 0))
+            return true;
+        return false;
     }
 
     /// <summary>
@@ -254,6 +281,7 @@ public static class LodMip
         // topDown is top->bottom. Walk bottom-up building support.
         var kept = new List<ulong>(topDown.Count);
         int supportTop = 1; // ground support starts at bedrock band
+        int columnSurfaceTop = LodSection.RunYTop(topDown[0]);
         int bottom = topDown.Count - 1;
         while (bottom >= 0)
         {
@@ -268,7 +296,8 @@ public static class LodMip
             }
 
             bool floating = LodSection.RunYBottom(topDown[bottom]) > supportTop + 1;
-            if (!floating || !IsPlantScrap(child, topDown, top, bottom))
+            bool isColumnSurface = stackTop >= columnSurfaceTop;
+            if (!floating || !IsPlantScrap(child, topDown, top, bottom, isColumnSurface))
             {
                 for (int k = bottom; k >= top; k--) kept.Add(topDown[k]);
                 if (stackTop > supportTop) supportTop = stackTop;
@@ -282,25 +311,39 @@ public static class LodMip
     }
 
     /// <summary>
-    /// A floating stack is a scrap when every run in it is plant matter or the snow on
-    /// top of plant matter, and at least one run is plant. Plant is anything the tint
-    /// registry gave a climate/season slot (leaves, grass tops, ferns) or thin cover.
-    /// Bright-only stacks are not plant: a chalk cliff over a cave keeps its cap.
+    /// Floating scrap is thin ground cover only (flowers/ferns). Visit-baked /
+    /// frost canopy and climate-tinted leaf crowns stay: dropping those when the
+    /// trunk lost majority vote turned mid/far mountains into bare green earth.
+    /// The original column surface is never scrap. Bright-only stacks are not
+    /// plant: a chalk cliff over a cave keeps its cap.
     /// </summary>
-    static bool IsPlantScrap(LodSection child, List<ulong> runs, int top, int bottom)
+    static bool IsPlantScrap(LodSection child, List<ulong> runs, int top, int bottom, bool isColumnSurface)
     {
-        bool anyPlant = false;
+        if (isColumnSurface)
+        {
+            for (int k = top; k <= bottom; k++)
+            {
+                int pid = LodSection.RunPaletteId(runs[k]);
+                if (pid < 0 || pid >= child.Palette.Count) continue;
+                LodPaletteEntry surf = child.Palette[pid];
+                if (IsCanopySurfaceEntry(surf) || surf.TintSlot != LodTintRegistry.SlotNone)
+                    return false;
+            }
+        }
+
+        bool anyThin = false;
         for (int k = top; k <= bottom; k++)
         {
             int pid = LodSection.RunPaletteId(runs[k]);
             if (pid < 0 || pid >= child.Palette.Count) return false;
             LodPaletteEntry e = child.Palette[pid];
             if ((e.Flags & LodPaletteEntry.FlagWater) != 0) return false;
-            bool plant = (e.Flags & LodPaletteEntry.FlagThin) != 0
-                || e.TintSlot != LodTintRegistry.SlotNone;
-            if (plant) { anyPlant = true; continue; }
+            if (IsCanopySurfaceEntry(e)) return false;
+            if ((e.Flags & LodPaletteEntry.FlagThin) != 0) { anyThin = true; continue; }
+            // Climate leaf/grass: keep the stack (not scrap). Snow on thin is ok.
+            if (e.TintSlot != LodTintRegistry.SlotNone) continue;
             if (!LodPaletteRepair.IsSnowOrIceAlbedo(e.Color)) return false;
         }
-        return anyPlant;
+        return anyThin;
     }
 }

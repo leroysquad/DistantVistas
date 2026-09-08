@@ -21,6 +21,12 @@ public sealed class LodLoginBakeOverlay : IDisposable
         set => inputGuard.OnCancelRequested = value;
     }
 
+    public Action? OnRenderPin
+    {
+        get => inputGuard.OnRenderPin;
+        set => inputGuard.OnRenderPin = value;
+    }
+
     public bool IsReady => inputGuard.IsReady;
     public bool HasRendered => inputGuard.HasRendered;
 

@@ -14,11 +14,11 @@ public static class LodLoginSweep
 {
     public const int WorldReadyRadiusChunks = 2;
 
-    /// <summary>~2.0s max chunk wait at 50 ms pulse (750-block bake view overlap).</summary>
-    public const int MaxChunkWaitTicks = 40;
+    /// <summary>~1.2s max chunk wait at 50 ms pulse — hop on; ring still streams in.</summary>
+    public const int MaxChunkWaitTicks = 24;
 
-    /// <summary>~0.7s max capture wait at 50 ms pulse.</summary>
-    public const int MaxCaptureWaitTicks = 28;
+    /// <summary>~0.8s max capture wait at 50 ms pulse.</summary>
+    public const int MaxCaptureWaitTicks = 16;
 
     public const int MaxWorldReadyTicks = 2400;
 
@@ -77,6 +77,27 @@ public static class LodLoginSweep
             minX, minX + footprint, minZ, minZ + footprint,
             GlobalConstants.ChunkSize,
             (cx, cz) => blockAccessor.GetMapChunk(cx, cz) != null);
+    }
+
+    /// <summary>At least one map chunk of the L0 footprint is resident (partial stream).</summary>
+    public static bool AnyMapChunksLoaded(IBlockAccessor blockAccessor, long l0Key)
+    {
+        foreach ((int cx, int cz) in ChunkColumnsForL0(l0Key))
+        {
+            if (blockAccessor.GetMapChunk(cx, cz) != null) return true;
+        }
+        return false;
+    }
+
+    /// <summary>How many of the four L0 map columns are resident (0–4).</summary>
+    public static int CountLoadedMapChunks(IBlockAccessor blockAccessor, long l0Key)
+    {
+        int n = 0;
+        foreach ((int cx, int cz) in ChunkColumnsForL0(l0Key))
+        {
+            if (blockAccessor.GetMapChunk(cx, cz) != null) n++;
+        }
+        return n;
     }
 
     /// <summary>

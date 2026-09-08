@@ -5,9 +5,11 @@ namespace DistantVistas;
 
 /// <summary>
 /// Potato-tier FOV occlusion at draw-submit time. Casts a coarse XZ sample line
-/// from the camera toward a tile and reads intervening LodSection SurfaceYMax
-/// already in RAM. Skips Submit when a nearer ridge clearly hides the tile top.
-/// Fail open (draw) when height data is missing. Never deletes disk/RAM cache.
+/// from the camera toward a tile and reads intervening column tops already in RAM.
+/// Skips Submit when a nearer solid ridge clearly hides the tile top.
+/// Fail open (draw) when height data is missing, or when intervening land is a
+/// broken-up high ridge (sky gaps between peaks) — hiding behind that punches
+/// holes through the map. Never deletes disk/RAM cache.
 /// Temporal cache + per-frame test budget keep turn hitch cheap when occCull=0.
 /// </summary>
 public sealed class LodHeightfieldOcclusion
@@ -23,6 +25,12 @@ public sealed class LodHeightfieldOcclusion
     /// uncertain cases bias toward drawing.
     /// </summary>
     public int PeekMarginBlocks = 32;
+
+    /// <summary>
+    /// Local column-top range (blocks) that marks a sample as porous / broken-up.
+    /// Floating high chunks next to sky gaps exceed this; a solid ridge crest does not.
+    /// </summary>
+    public int BrokenReliefBlocks = 40;
 
     /// <summary>Only L0/L1 (expensive meshes). L2 temporary cover stays for holes.</summary>
     public int MaxLevel = 1;
@@ -72,7 +80,7 @@ public sealed class LodHeightfieldOcclusion
 
     /// <summary>
     /// True when intervening surface tops clearly block the tile's visible top.
-    /// False means draw (including every uncertain / missing-height / budget case).
+    /// False means draw (including every uncertain / missing-height / porous / budget case).
     /// </summary>
     public bool IsOccluded(
         LodWorld world,
@@ -113,6 +121,15 @@ public sealed class LodHeightfieldOcclusion
         int tileMaxY = tile.SurfaceYMax;
         int tileMinY = tile.SurfaceYMin;
 
+        // Cliff / broken mountain face: never FOV-cull. A nearer shoulder of the same
+        // landmass used to hide mid-slope tiles and punch sky through the silhouette.
+        int brokenRelief = BrokenReliefBlocks < 16 ? 16 : BrokenReliefBlocks;
+        if (tile.SurfaceRelief >= brokenRelief)
+        {
+            Remember(key, false);
+            return false;
+        }
+
         double dx = tileCx - camX;
         double dz = tileCz - camZ;
         double distSq = dx * dx + dz * dz;
@@ -134,8 +151,16 @@ public sealed class LodHeightfieldOcclusion
         if (endT > 0.92) endT = 0.92;
         if (endT < 0.35) endT = 0.35;
 
+        // Do not treat land in the last approach as an occluder — that is the same
+        // mountain face / near shoulder, not a separate ridge in front.
+        double nearSkipBlocks = footprint * 1.5;
+        double nearSkipT = 1.0 - (nearSkipBlocks / dist);
+        if (nearSkipT < 0.2) nearSkipT = 0.2;
+        if (endT > nearSkipT) endT = nearSkipT;
+
         int hits = 0;
         int topBlockers = 0;
+        int porousHits = 0;
         int maxOcc = int.MinValue;
         int tileSx = LodWorld.KeySx(key);
         int tileSz = LodWorld.KeySz(key);
@@ -146,11 +171,18 @@ public sealed class LodHeightfieldOcclusion
             double sx = camX + dx * t;
             double sz = camZ + dz * t;
 
-            if (!TryPeekSurfaceMaxY(world, sx, sz, tileSx, tileSz, level, out int y))
+            if (!TryPeekColumnTopY(world, sx, sz, tileSx, tileSz, level, brokenRelief, out int y, out bool porous))
                 continue;
 
             hits++;
             if (y > maxOcc) maxOcc = y;
+
+            if (porous)
+            {
+                // Broken-up high land (peaks with sky gaps). Never treat as a wall.
+                porousHits++;
+                continue;
+            }
 
             if (y <= camY + 2.0) continue;
 
@@ -164,9 +196,17 @@ public sealed class LodHeightfieldOcclusion
             return false;
         }
 
-        occluderMaxY = maxOcc;
+        // Any real broken-up band along the ray → draw everything behind it.
+        // Hiding behind sparse high chunks is exactly the sky-hole bug.
+        if (porousHits >= Math.Max(2, (hits + 2) / 3))
+        {
+            Remember(key, false);
+            return false;
+        }
 
-        if (tileMaxY >= maxOcc + margin)
+        occluderMaxY = maxOcc == int.MinValue ? 0 : maxOcc;
+
+        if (maxOcc == int.MinValue || tileMaxY >= maxOcc + margin)
         {
             Remember(key, false);
             return false;
@@ -220,8 +260,52 @@ public sealed class LodHeightfieldOcclusion
     }
 
     /// <summary>
-    /// Resident section SurfaceYMax at world XZ. Prefers L0, then L1. Never loads
-    /// vanilla chunks or cold store rows — missing data means fail open.
+    /// Resident column top at world XZ. Prefers L0, then L1. Never loads vanilla
+    /// chunks or cold store rows — missing data means fail open.
+    /// Porous = local neighborhood height range exceeds brokenRelief (broken-up peaks).
+    /// </summary>
+    public static bool TryPeekColumnTopY(
+        LodWorld world,
+        double worldX,
+        double worldZ,
+        int excludeSx,
+        int excludeSz,
+        int excludeLevel,
+        int brokenRelief,
+        out int maxY,
+        out bool porous)
+    {
+        maxY = 0;
+        porous = false;
+        int step = LodSection.SectionBlocks; // 64
+
+        int sx0 = FloorDiv((int)Math.Floor(worldX), step);
+        int sz0 = FloorDiv((int)Math.Floor(worldZ), step);
+
+        if (!(excludeLevel == 0 && sx0 == excludeSx && sz0 == excludeSz))
+        {
+            long k0 = LodWorld.SectionKey(0, sx0, sz0);
+            if (world.Sections.TryGetValue(k0, out LodSection? s0)
+                && TryColumnNeighborhood(s0, 0, worldX, worldZ, brokenRelief, out maxY, out porous))
+                return true;
+        }
+
+        int sx1 = sx0 >> 1;
+        int sz1 = sz0 >> 1;
+        if (excludeLevel == 1 && sx1 == excludeSx && sz1 == excludeSz)
+            return false;
+
+        long k1 = LodWorld.SectionKey(1, sx1, sz1);
+        if (world.Sections.TryGetValue(k1, out LodSection? s1)
+            && TryColumnNeighborhood(s1, 1, worldX, worldZ, brokenRelief, out maxY, out porous))
+            return true;
+
+        return false;
+    }
+
+    /// <summary>
+    /// Legacy name: section-max peek. Kept for call sites; now column-accurate and
+    /// ignores porosity (caller that needs porous uses <see cref="TryPeekColumnTopY"/>).
     /// </summary>
     public static bool TryPeekSurfaceMaxY(
         LodWorld world,
@@ -231,36 +315,99 @@ public sealed class LodHeightfieldOcclusion
         int excludeSz,
         int excludeLevel,
         out int maxY)
+        => TryPeekColumnTopY(world, worldX, worldZ, excludeSx, excludeSz, excludeLevel, 40, out maxY, out _);
+
+    /// <summary>
+    /// Center column top plus same-section 4-neighbors. Porous when those tops
+    /// span more than <paramref name="brokenRelief"/> blocks — broken-up peaks
+    /// with sky gaps. Neighbors stay in-section so we never read the wrong tile.
+    /// </summary>
+    public static bool TryColumnNeighborhood(
+        LodSection section,
+        int level,
+        double worldX,
+        double worldZ,
+        int brokenRelief,
+        out int centerY,
+        out bool porous)
     {
-        maxY = 0;
-        int step = LodSection.SectionBlocks; // 64
-
-        int sx0 = FloorDiv((int)Math.Floor(worldX), step);
-        int sz0 = FloorDiv((int)Math.Floor(worldZ), step);
-
-        if (excludeLevel == 0 && sx0 == excludeSx && sz0 == excludeSz)
+        centerY = 0;
+        porous = false;
+        if (!TryResolveColumn(section, level, worldX, worldZ, out int colX, out int colZ, out centerY))
             return false;
 
-        long k0 = LodWorld.SectionKey(0, sx0, sz0);
-        if (world.Sections.TryGetValue(k0, out LodSection? s0) && s0.HasSurfaceBounds)
-        {
-            maxY = s0.SurfaceYMax;
-            return true;
-        }
+        int localMin = centerY;
+        int localMax = centerY;
+        int n = 1;
+        SampleCol(section, colX + 1, colZ, ref localMin, ref localMax, ref n);
+        SampleCol(section, colX - 1, colZ, ref localMin, ref localMax, ref n);
+        SampleCol(section, colX, colZ + 1, ref localMin, ref localMax, ref n);
+        SampleCol(section, colX, colZ - 1, ref localMin, ref localMax, ref n);
 
-        int sx1 = sx0 >> 1;
-        int sz1 = sz0 >> 1;
-        if (excludeLevel == 1 && sx1 == excludeSx && sz1 == excludeSz)
+        // Two tops already disagree by a cliff — not a solid occluder wall.
+        if (n >= 2 && (localMax - localMin) > brokenRelief)
+            porous = true;
+
+        return true;
+    }
+
+    static void SampleCol(
+        LodSection section,
+        int colX,
+        int colZ,
+        ref int localMin,
+        ref int localMax,
+        ref int n)
+    {
+        if (colX < 0 || colZ < 0 || colX >= LodSection.GridSize || colZ >= LodSection.GridSize)
+            return;
+        int col = colZ * LodSection.GridSize + colX;
+        if (!section.TryGetTopRun(col, out ulong run)) return;
+        int y = LodSection.RunYTop(run);
+        if (y < localMin) localMin = y;
+        if (y > localMax) localMax = y;
+        n++;
+    }
+
+    public static bool TryColumnTopAt(
+        LodSection section,
+        int level,
+        double worldX,
+        double worldZ,
+        out int yTop)
+        => TryResolveColumn(section, level, worldX, worldZ, out _, out _, out yTop);
+
+    public static bool TryResolveColumn(
+        LodSection section,
+        int level,
+        double worldX,
+        double worldZ,
+        out int colX,
+        out int colZ,
+        out int yTop)
+    {
+        colX = colZ = 0;
+        yTop = 0;
+        int footprint = LodSection.SectionBlocks << level;
+        int colStep = LodSection.ColumnStepBlocks << level;
+        if (colStep < 1) colStep = 1;
+
+        int sx = FloorDiv((int)Math.Floor(worldX), footprint);
+        int sz = FloorDiv((int)Math.Floor(worldZ), footprint);
+        int localX = (int)Math.Floor(worldX) - sx * footprint;
+        int localZ = (int)Math.Floor(worldZ) - sz * footprint;
+        if (localX < 0 || localZ < 0 || localX >= footprint || localZ >= footprint)
             return false;
 
-        long k1 = LodWorld.SectionKey(1, sx1, sz1);
-        if (world.Sections.TryGetValue(k1, out LodSection? s1) && s1.HasSurfaceBounds)
-        {
-            maxY = s1.SurfaceYMax;
-            return true;
-        }
+        colX = localX / colStep;
+        colZ = localZ / colStep;
+        if (colX < 0 || colZ < 0 || colX >= LodSection.GridSize || colZ >= LodSection.GridSize)
+            return false;
 
-        return false;
+        int col = colZ * LodSection.GridSize + colX;
+        if (!section.TryGetTopRun(col, out ulong run)) return false;
+        yTop = LodSection.RunYTop(run);
+        return true;
     }
 
     static int FloorDiv(int a, int b)

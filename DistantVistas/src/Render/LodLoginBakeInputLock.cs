@@ -13,6 +13,8 @@ namespace DistantVistas;
 /// </summary>
 public static class LodLoginBakeInputLock
 {
+    public static bool OverlayLookLocked { get; private set; }
+
     const BindingFlags WorldFlags =
         BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.FlattenHierarchy;
 
@@ -102,6 +104,7 @@ public static class LodLoginBakeInputLock
     public static void HoldLook(ICoreClientAPI capi)
     {
         if (capi?.World == null) return;
+        OverlayLookLocked = true;
         SetAllowCameraControl(capi, false);
         DrainLookDeltas(capi);
     }
@@ -113,6 +116,7 @@ public static class LodLoginBakeInputLock
     public static void RestoreLook(ICoreClientAPI capi)
     {
         if (capi?.World == null) return;
+        OverlayLookLocked = false;
         DrainLookDeltas(capi);
         SetAllowCameraControl(capi, true);
         ResyncYawPitch(capi);

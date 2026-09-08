@@ -18,10 +18,14 @@ namespace DistantVistas;
 public static class FarseerShaderOverlay
 {
     /// <summary>
-    /// Overlay inject is off. Stock Farseer with SkyTint 4.3 paints a sky-coloured
-    /// disc, not hills. Yielding for that disc punched holes in us. Last shot failed.
+    /// Overlay inject is on. Stock Farseer starts at 0.785x view distance and
+    /// fights our LOD. We rewrite region shaders for visit-aware onset:
+    /// unvisited early (UnvisitedFarseerOnsetScale), visited late
+    /// (HorizonDrawScale). FarseerVisitOnset binds the visit mask each frame.
+    /// Past the late line both bands are Farseer's; visited samples are
+    /// sharpened by FarseerVisitedHeightEnrich. Inside visited midground is ours.
     /// </summary>
-    public const bool OverlayActive = false;
+    public const bool OverlayActive = true;
 
     public const string Marker = "DV_FARSEER_OVERLAY";
 

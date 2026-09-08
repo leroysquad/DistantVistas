@@ -200,6 +200,16 @@ public static class StaticAssetChecks
             "lodterrain.vsh dist == 1 is the real far rim, not 512 blocks inside the land we hold");
         c.True(fsh.Contains("if (dist > 1.0) discard;"),
             "lodterrain.fsh keeps the far discard as the one true far clip");
+        c.False(Regex.IsMatch(fsh, @"float\s+flat\b"),
+            "lodterrain.fsh does not use GLSL reserved identifier float flat (C7537)");
+        c.True(fsh.Contains("float flatness"),
+            "lodterrain.fsh names low-ground mist flatness");
+        c.True(fsh.Contains("lowMist"),
+            "lodterrain.fsh keeps the 1.0.25 low-ground mist wash");
+        c.True(fsh.Contains("flatness * 0.010"),
+            "lodterrain.fsh thins near-ground mist so login does not wash desert into a white blob");
+        c.True(fsh.Contains("lowMistCol"),
+            "lodterrain.fsh lightens low-ground mist toward pale fog");
 
         // Gap fill: the renderer draws a parent mesh clipped to one child
         // footprint. Both halves of that contract live in the shaders.
@@ -221,10 +231,12 @@ public static class StaticAssetChecks
             GameAssemblies.RepoRoot, "DistantVistas", "assets", "farseer", "shaders", "region.vsh"));
         string fsh = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "assets", "farseer", "shaders", "region.fsh"));
-        c.False(FarseerShaderOverlay.OverlayActive,
-            "Farseer overlay inject is off (stock SkyTint bleaches; yield punched our holes)");
-        c.True(vsh.Contains("distStart = viewDistance * 0.785"),
-            "farseer overlay inner disc is stock so the spawn 512-block region can rasterize");
+        c.True(FarseerShaderOverlay.OverlayActive,
+            "Farseer overlay inject is on (visit-aware onset + mist silhouette)");
+        // Visit-onset uniforms replace stock 0.785; keep a safe floor so the
+        // spawn disc still rasterizes (see farseer-region.vsh).
+        c.True(vsh.Contains("distStart < viewDistance * 0.5"),
+            "farseer overlay keeps a half-VD floor so the spawn region can rasterize");
         c.False(vsh.Contains("distStart = 24.0"),
             "farseer overlay inner disc is not a 24-block hole under the player");
         c.False(vsh.Contains("distStart = viewDistance * 1.5"),
@@ -237,9 +249,9 @@ public static class StaticAssetChecks
             "farseer overlay does not run sphere fog (sky ring)");
         c.True(fsh.Contains("clamp(skyTint, 0.0, 0.4)"),
             "farseer overlay clamps SkyTint so 5-10 cannot bleach the heightmap");
-        c.True(fsh.Contains("min(colorTint.a, 0.12)"),
+        c.True(fsh.Contains("min(colorTint.a, 0.28)"),
             "farseer overlay clamps ColorTint so slate wash cannot hide relief");
-        c.True(fsh.Contains("smoothstep(0.88, 1.0, dist)"),
+        c.True(fsh.Contains("smoothstep(0.82, 1.0, dist)"),
             "farseer overlay only mixes sky at the far rim");
         c.True(vsh.Contains("DV_FARSEER_OVERLAY") && fsh.Contains("DV_FARSEER_OVERLAY"),
             "farseer overlay carries a marker the boot log can see");
@@ -247,8 +259,32 @@ public static class StaticAssetChecks
             "farseer overlay does not sink heightmaps (that buried the silhouette)");
         c.False(fsh.Contains("0.35 * radial"),
             "farseer overlay does not discard overhead (that ate the heightmap disc)");
-        c.True(fsh.Contains("terraColor.rgb *= 0.78"),
-            "farseer overlay darkens sky-sampled heightmaps so hills read against sky");
+        c.False(fsh.Contains("terraColor.rgb *= 0.92"),
+            "farseer overlay uses ridge inkAmt, not a global 0.92 multiply");
+        c.True(fsh.Contains("mix(terraColor.rgb, mistCol, mist)"),
+            "farseer overlay mixes paler mist for a misty silhouette");
+        c.True(fsh.Contains("mist * 0.12"),
+            "farseer overlay thins sky-mix so mist does not bleach the skyline");
+        c.True(fsh.Contains("0.0, 0.38)"),
+            "farseer overlay mist cap is thinner than the 1.0.25 0.62 wash");
+        c.True(fsh.Contains("height01 * height01"),
+            "farseer overlay darkens mountain tips so ridges read against sky");
+        c.True(fsh.Contains("smokeGray"),
+            "farseer overlay uses grayish smoke (gray tent body, black tips)");
+        c.True(fsh.Contains("inkAmt"),
+            "farseer overlay keeps a little far/top ink, not a hard wall");
+        c.True(fsh.Contains("0.0, 0.24)"),
+            "1.0.28 ridge-ink cap kept -- coverage must not flatten the silhouette to empty black");
+        c.True(fsh.Contains("(1.0 - height01) * 0.02"),
+            "farseer overlay cuts low-ground smoke so near terrain is not a white blob");
+        c.True(fsh.Contains("0.12 + nearRim * 0.10"),
+            "farseer overlay quieter near-rim smoke (1.0.30) without dropping gray tent + black tips");
+        c.False(fsh.Contains("onsetMist"),
+            "farseer overlay is the 1.0.18 mist wash (no onsetMist lean cloud)");
+        c.False(vsh.Contains("nearBand"),
+            "farseer overlay does not lean the near rim (1.0.18 geometry)");
+        c.False(fsh.Contains("terraColor.rgb *= 0.78"),
+            "farseer overlay no longer uses the hard 0.78 ink darken");
 
         string overlayCs = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "DistantVistasModSystem.cs"));

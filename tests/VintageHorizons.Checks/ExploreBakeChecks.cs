@@ -38,6 +38,10 @@ public static class ExploreBakeChecks
             "visit bake still walks parent keys after L0 bake");
         c.True(pipeline.Contains("ProcessPropagation(propagationBudget, World.RequestGpuSwap)"),
             "play remip keeps the old GPU mesh until the new one uploads");
+        c.True(pipeline.Contains("ProcessPropagation(budget, World.RequestGpuSwap)"),
+            "login mip drain keeps GPU meshes until swap-in (does not punch holes)");
+        c.True(pipeline.Contains("SweepLaneSpawn") && pipeline.Contains("SweepLaneScout"),
+            "overlay spawn-disk sweep and scout rings keep separate row cursors");
         c.True(pipeline.Contains("World.RequestGpuSwap"),
             "walk-time bake swaps GPU meshes instead of disposing first");
 
@@ -56,14 +60,16 @@ public static class ExploreBakeChecks
             "walk visit bake tags the shared GetColor path");
         string login = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
-        c.True(login.Contains("BakeSectionFromVisit"),
-            "overlay visit bake uses the same GetColor path as walk");
+        c.True(login.Contains("BakeSectionFromVisitChunked"),
+            "overlay visit bake uses the same chunked GetColor path as walk");
         c.True(login.Contains("DebugVisitKind = \"overlay\""),
             "overlay visit bake tags the shared GetColor path");
         c.True(season.Contains("FinishColumnPaint"),
             "overlay and walk share FinishColumnPaint season-ground mix");
         c.True(season.Contains("SampleTextureMean"),
             "visit bake samples texture mean for winter camouflage specks");
+        c.True(season.Contains("BeginSectionTextureMeans"),
+            "visit bake opens the per-section texture-mean cache");
         c.True(season.Contains("MixVisitBlock"),
             "expire leftover uses the same season-ground mix as overlay and walk");
         string mix = File.ReadAllText(Path.Combine(
@@ -84,7 +90,7 @@ public static class ExploreBakeChecks
             "visit bake reads the loaded column top, not only the stored run");
         c.False(explore.Contains("if (!SectionHasLiveTint(section)) return;"),
             "explore bake queues FlagBaked L0 so live snow and canopy can overwrite");
-        c.True(explore.Contains("int remaining = pending.Count"),
+        c.True(explore.Contains("int guard = pending.Count"),
             "explore drain snapshots queue length so not-ready keys cannot livelock Tick");
         c.True(explore.Contains("readyAttempted"),
             "explore drain stops retrying a live-tint L0 that already baked with chunks loaded");
@@ -99,6 +105,10 @@ public static class ExploreBakeChecks
         c.True(ContainsBetween(pipeline, "void AfterSectionLoaded(long key, LodSection section, ref int repaired)",
                 "void AfterSectionLoaded(long key, LodSection section)", "ExploreBake.Queue"),
             "disk load queues visit bake for L0 live-tint sections");
+        c.True(pipeline.Contains("NotePaletteRepair"),
+            "load-time palette fill persists without a MarkChanged remesh storm");
+        c.Eq(2, LodPipeline.PaletteRepairRemeshPerTick,
+            "palette repair remeshes at most two sections per tick");
 
         string mesher = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Lod", "LodMesher.cs"));

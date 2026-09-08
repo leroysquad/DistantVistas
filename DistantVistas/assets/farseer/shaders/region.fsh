@@ -7,6 +7,8 @@
 // paints the heightmap as sky, so the silhouette vanishes and clouds get cut.
 // Clamp tint, skip sphere fog, only dissolve at the far rim. ColorTint alpha
 // is also clamped so a 0.4 slate wash cannot hide relief.
+// Mist veil: grayish smoke (more gray near/low, little black far/top).
+// 1.0.28: darker ridge tips, thinner paler mist so the skyline reads.
 
 in vec4 worldPos;
 in float yLevel;
@@ -71,13 +73,33 @@ void main()
     skyColor.rgb = applyUnderwaterEffects(skyColor.rgb, murkiness);
     skyGlow.y *= clamp((dayLight - 0.05) * 2.0 - 50.0 * murkiness, 0.0, 1.0);
 
-    terraColor.rgb = mix(terraColor.rgb, colorTint.rgb, min(colorTint.a, 0.12));
+    // Slate ColorTint as atmosphere, not terrain paint. Cap below stock 0.4 bleach.
+    terraColor.rgb = mix(terraColor.rgb, colorTint.rgb, min(colorTint.a, 0.28));
     terraColor.rgb *= bias(clamp(sunColor * dayLight, 0.0, 1.0), lightLevelBias);
-    terraColor.rgb *= 0.78;
+    // Grayish smoke silhouette (1.0.25): gray tent body, black tips. 1.0.30:
+    // less low-ground smoke so near terrain is not a white blob.
+    vec3 smokeGray = mix(rgbaFog.rgb, vec3(0.62, 0.64, 0.67), 0.55);
+    float height01 = clamp((yLevel - float(seaLevel)) / 90.0, 0.0, 1.0);
+    float nearRim = 1.0 - smoothstep(0.35, 0.85, dist);
+    float smokeAmt = clamp(0.12 + nearRim * 0.10 + (1.0 - height01) * 0.02, 0.0, 0.32);
+    // 1.0.28: extra ridge/far-tip ink so the skyline reads against sky.
+    float inkAmt = clamp(
+        smoothstep(0.62, 1.0, dist) * 0.16 * height01
+        + height01 * height01 * 0.12,
+        0.0, 0.24);
+    terraColor.rgb = mix(terraColor.rgb, smokeGray, smokeAmt);
+    terraColor.rgb *= 1.0 - inkAmt;
+
+    // 1.0.28: thinner, paler mist — less sky mix so ridges stay readable.
+    vec3 mistCol = mix(rgbaFog.rgb, vec3(0.78, 0.80, 0.83), 0.40);
+    float mist = clamp(fogAmount * 0.28 + smoothstep(0.62, 0.98, dist) * 0.18, 0.0, 0.38);
+    terraColor.rgb = mix(terraColor.rgb, mistCol, mist);
+    terraColor.rgb = mix(terraColor.rgb, skyColor.rgb, mist * 0.12);
+
     terraColor = applyFog(terraColor, fogAmount);
     terraGlow *= dist;
 
-    float fade = smoothstep(0.88, 1.0, dist);
+    float fade = smoothstep(0.82, 1.0, dist);
     fade *= step(0.0, fadeBias + 1.0);
     outColor = mix(terraColor, skyColor, fade);
     outGlow = mix(vec4(0.0), skyGlow, fade);

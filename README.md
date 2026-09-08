@@ -1,6 +1,6 @@
 # Distant Vistas
 
-Official 1.0. Far terrain past vanilla view distance for [Vintage Story](https://www.vintagestory.at/).
+Official 1.0.1. Far terrain past vanilla view distance for [Vintage Story](https://www.vintagestory.at/).
 
 I was using [Vintage Horizons](https://github.com/AliasFactory/Vintage-Horizons) and kept
 running into problems in my own worlds. Fog seams, colours looking wrong (especially in
@@ -33,6 +33,9 @@ Story can download it for joining players.
   mid-session.
 - **Join overlay**. Four-season splash. A hop-scan paints far land so hills exist
   when you spawn. Graphics view is held at 750, then your real slider comes back.
+  Overlay runs in singleplayer and on servers that have Distant Vistas. A public
+  server without this mod skips the overlay (no teleports, no gamemode) and
+  captures while you walk, like 0.7.78.
 - **Visited land stays drawn.** Backing away does not punch sky rectangles through hills
   you already walked, and new ground you generate is still there when you leave.
 - **Persistent per-world cache** that grows as you play. Join time and memory use do not
@@ -40,8 +43,10 @@ Story can download it for joining players.
 
 ## What it cannot do
 
-A client-side mod knows only the terrain that the server sent it. The join overlay hops
-a disk so far hills exist when you spawn. Land beyond that disk still waits until you
+A client-side mod knows only the terrain that the server sent it. In singleplayer (and
+on a server that also has Distant Vistas) the join overlay hops a disk so far hills
+exist when you spawn. On a vanilla public server the overlay is skipped so the hop
+cannot kick you off; land fills in as you walk. Land beyond that still waits until you
 travel.
 
 Server-side generators (Farseer, ChunkLOD) ask the world generator directly and do not

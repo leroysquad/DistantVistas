@@ -29,16 +29,29 @@ public static class MesherChecks
 
     static void FrostedCanopyUpIsPaler(Check c)
     {
-        int stored = LodSurfaceMix.Pack(103, 103, 86);
+        LodSeasonBake.LiveWinterAmount = 1f;
+        int clean = LodSurfaceMix.Pack(32, 31, 7);
         byte frost = (byte)(LodPaletteEntry.FlagBaked | LodPaletteEntry.FlagFrost);
-        int wall = LodMesher.FrostFaceColor(stored, frost, upFace: false);
-        int up = LodMesher.FrostFaceColor(stored, frost, upFace: true);
-        c.Eq(stored, wall, "frosted walls keep the stored side colour");
+        int wall = LodMesher.FrostFaceColor(clean, frost, upFace: false);
+        int up = LodMesher.FrostFaceColor(clean, frost, upFace: true);
+        int expectSide = LodSeasonBake.MixTowardWhite(clean, LodSeasonBake.SideFrostAlpha);
+        c.Eq(expectSide, wall, "frosted walls mix side frost from pure GetColor");
         LodPaletteRepair.Channels(up, out _, out _, out _, out int upLuma, out _);
-        LodPaletteRepair.Channels(stored, out _, out _, out _, out int sideLuma, out _);
+        LodPaletteRepair.Channels(wall, out _, out _, out _, out int sideLuma, out _);
         c.True(upLuma > sideLuma + 20, "frosted UP faces extra-mix toward white");
-        c.Eq(stored, LodMesher.FrostFaceColor(stored, LodPaletteEntry.FlagBaked, upFace: true),
+        c.Eq(up, LodMesher.FrostWallColor(clean, frost, crownBand: true),
+            "crown wall band matches UP frost wash");
+        c.Eq(wall, LodMesher.FrostWallColor(clean, frost, crownBand: false),
+            "lower wall band matches side frost");
+        c.Eq(clean, LodMesher.FrostFaceColor(clean, LodPaletteEntry.FlagBaked, upFace: true),
             "FlagBaked without FlagFrost does not extra-white UP");
+
+        LodSeasonBake.LiveWinterAmount = 0f;
+        c.Eq(clean, LodMesher.FrostFaceColor(clean, frost, upFace: true),
+            "early spring LiveWinterAmount drops UP frost wash");
+        c.Eq(clean, LodMesher.FrostFaceColor(clean, frost, upFace: false),
+            "early spring LiveWinterAmount drops wall frost wash");
+        LodSeasonBake.LiveWinterAmount = 1f;
     }
 
     static void SkipFlagIsNotGeometry(Check c)
@@ -323,7 +336,8 @@ public static class MesherChecks
         for (int i = 0; i < neighbors.Length; i++) neighbors[i] = Fixtures.Snap(shorter);
 
         MeshResult stepped = LodMesher.BuildMesh(Fixtures.Job(flat, neighbors: neighbors));
-        c.Eq(5, Quads(stepped.VertexCount),
+        // 1 top + 4 walls, each wall split into lower + crown band (CrownSideBlocks).
+        c.Eq(9, Quads(stepped.VertexCount),
             "a loaded shorter neighbour still exposes a real cliff");
     }
 

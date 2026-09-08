@@ -1,0 +1,21 @@
+{
+	"code": "scoutviewer",
+	"class": "LodScoutViewer",
+	"hitboxSize": { "x": 0.08, "y": 0.08 },
+	"deadHitboxSize": { "x": 0.08, "y": 0.08 },
+	"eyeHeight": 0.04,
+	"weight": 0,
+	"canClimb": false,
+	"fallDamage": false,
+	"knockbackResistance": 1,
+	"drops": [],
+	"client": {
+		"renderer": "Shape",
+		"shape": { "base": "game:block/basic/cube" },
+		"size": 0.001,
+		"behaviors": []
+	},
+	"server": {
+		"behaviors": []
+	}
+}

@@ -21,14 +21,14 @@ public class LodWorld
     /// halves resolution. L2+ thresholds pull in slightly for a cheaper skyline.
     /// Tunable live via .dvdetail; ViewDistanceAnchor is updated every frame.
     /// </summary>
-    /// <summary>0.7.10: one step up from 256 so mid-far keeps detail a rung longer.</summary>
-    public static double DetailDistance = 320;
+    /// <summary>1.0.13: 400 keeps 1-block L0 a bit farther so near rings look less slabby.</summary>
+    public static double DetailDistance = 400;
 
     /// <summary>
     /// Incremental fidelity bump (0 = 0.7.9 aggressiveness, 1 = one step up).
-    /// Bump again later without rewriting ladder math. Kept modest for FPS.
+    /// 1.0.13 default 1.35 softens mid-ring coarsen without maxing poly count.
     /// </summary>
-    public static double FidelityStep = 1.0;
+    public static double FidelityStep = 1.35;
 
     public const double MinDetailDistance = 128;
     public const double MaxDetailDistance = 4096;
@@ -370,6 +370,12 @@ public class LodWorld
     }
 
     /// <summary>
+    /// Clears a sticky empty-mesh claim so remesh can run after new columns land.
+    /// Wired to the renderer; never dispose resident meshes here.
+    /// </summary>
+    public Action<long>? ClearEmptyMeshClaim;
+
+    /// <summary>
     /// Keep the current GPU mesh and remesh on top of it. Walk-time visit bake
     /// must not dispose first — that punched holes every quadrant capture.
     /// </summary>
@@ -377,6 +383,7 @@ public class LodWorld
     {
         RenderDirty.Add(key);
         ForceRemesh.Add(key);
+        ClearEmptyMeshClaim?.Invoke(key);
     }
 
     public void MarkChanged(long key)
@@ -384,6 +391,8 @@ public class LodWorld
         if (Sections.TryGetValue(key, out LodSection? changed))
             changed.RefreshSurfaceBounds();
         RenderDirty.Add(key);
+        ForceRemesh.Add(key);
+        ClearEmptyMeshClaim?.Invoke(key);
         SaveDirty.Add(key);
         if (KeyLevel(key) < MaxLevel) MipDirty.Add(key);
 

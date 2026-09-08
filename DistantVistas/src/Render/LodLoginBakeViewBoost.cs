@@ -6,9 +6,11 @@ using Vintagestory.API.MathTools;
 namespace DistantVistas;
 
 /// <summary>
-/// Holds vanilla graphics view at 750 for the login visit scan and bake, then
-/// writes back the slider the player had before Distant Vistas touched it.
-/// Never holds 1000. Never restores 750, leftover 1000, or a maxed ~1536/1500 as original.
+/// Overlay writes vanilla view to a frontier-relative stream disk (at least spawn-solid
+/// 1024, then finishedRadius + lead, capped at 2048), then restores the player's slider.
+/// Applied VD steps one chunk / 5s so chunkdb can pause for autosave (1.0.44 flood).
+/// Visit / Farseer math stays on the 750 onset baseline so the FlagBaked disk remains 4075.
+/// Never holds 1000. Never restores 750, overlay stream, leftover 1000, or a maxed ~1536 as original.
 /// </summary>
 public sealed class LodLoginBakeViewBoost
 {
@@ -19,11 +21,43 @@ public sealed class LodLoginBakeViewBoost
     public const int SweepMinViewDistanceBlocks = 256;
 
     /// <summary>
-    /// Login visit holds vanilla graphics view at this distance (blocks), then restores
-    /// the player's slider. Must write <c>ClientSettings.viewDistance</c> — DesiredViewDistance
-    /// alone is overwritten from the slider every RequestMode.
+    /// Farseer / visit-disk baseline (blocks). <c>4.5 × 750 + 700 = 4075</c>.
+    /// Not the vanilla stream radius — see <see cref="MinOverlayStreamBlocks"/>.
     /// </summary>
     public const int SweepBoostViewDistanceBlocks = 750;
+
+    /// <summary>
+    /// Floor for overlay vanilla stream (spawn-solid). 1.0.43 held this constant and
+    /// cliffed at finished≈639 (~913 blocks, ~0.89 of 1024).
+    /// </summary>
+    public const int MinOverlayStreamBlocks = 1024;
+
+    /// <summary>Deprecated alias of <see cref="MinOverlayStreamBlocks"/> (1.0.43 constant).</summary>
+    public const int SweepStreamViewDistanceBlocks = MinOverlayStreamBlocks;
+
+    /// <summary>
+    /// Keep stream ahead of the filled disk so the next annulus sits in the useful
+    /// interior, not the ~11% dead rim (683/750 and 913/1024 playtests).
+    /// </summary>
+    public const int StreamLeadBlocks = 256;
+
+    /// <summary>Playtest useful fraction of overlay VD (358/750 and 639/1024 ≈ 0.89).</summary>
+    public const double StreamUsefulFillRatio = 0.88;
+
+    /// <summary>
+    /// One vanilla chunk per grow. 1.0.44 jumped 1024→1184 in one write and flooded
+    /// RequestChunkColumnsQueue until chunkdbthread could not pause for autosave.
+    /// </summary>
+    public const int StreamGrowStepBlocks = 32;
+
+    /// <summary>Wall-clock pause between stream steps so chunkdb can drain.</summary>
+    public const int StreamGrowDwellMs = 5000;
+
+    /// <summary>
+    /// Overlay tick gap that means the integrated server is hitching (SP playtest
+    /// died at ~3.2s ticks). Hold stream growth until ticks recover.
+    /// </summary>
+    public const int StreamGrowHitchPressureMs = 800;
 
     /// <summary>Old overlay hold. Never write this. Never treat it as the player's slider.</summary>
     public const int LegacySweepHoldBlocks = 1000;
@@ -45,6 +79,13 @@ public sealed class LodLoginBakeViewBoost
     bool applied;
     int boostedViewDistance;
     bool loggedBoost;
+    int desiredStreamBlocks;
+    long lastEnsureMs;
+    long lastGrowMs;
+    long lastPressureMs;
+    int lastHitchMs;
+    bool hitchPressure;
+    bool requestPressure;
 
     public LodLoginBakeViewBoost(ICoreClientAPI capi, LodTerrainRenderer renderer)
     {
@@ -58,28 +99,123 @@ public sealed class LodLoginBakeViewBoost
     {
         get
         {
-            int vd = applied ? boostedViewDistance : (int)renderer.LiveViewDistance;
-            vd = Math.Min(vd, SweepBoostViewDistanceBlocks);
+            // Capture sweep of columns scouts already streamed, out to Farseer
+            // onset (gray tent + black tips). Does not tessellate vanilla that far.
+            int blocks = SweepVisitRadiusBlocks;
             int cs = GlobalConstants.ChunkSize;
-            return Math.Max(4, (int)Math.Ceiling(vd / (double)cs) + 2);
+            return Math.Max(4, (int)Math.Ceiling(blocks / (double)cs) + 2);
         }
     }
+
+    /// <summary>
+    /// Vanilla SetChunkColumnVisible around the real player during overlay.
+    /// Follows the live overlay stream so cliff L0s stay inside client view-cull.
+    /// The FlagBaked 4075 disk is scout visit coverage, not a 4 km tessellation storm.
+    /// </summary>
+    public int SpawnStreamRadiusChunks
+    {
+        get
+        {
+            int cs = GlobalConstants.ChunkSize;
+            int blocks = LiveStreamViewDistanceBlocks;
+            return Math.Max(4, (int)Math.Ceiling(blocks / (double)cs) + 2);
+        }
+    }
+
+    /// <summary>Live overlay vanilla stream (blocks), or the 1024 floor before boost applies.</summary>
+    public int LiveStreamViewDistanceBlocks =>
+        applied && boostedViewDistance > 0 ? boostedViewDistance : MinOverlayStreamBlocks;
+
+    /// <summary>Frontier-relative target; applied stream steps toward this.</summary>
+    public int DesiredStreamViewDistanceBlocks =>
+        desiredStreamBlocks > 0 ? desiredStreamBlocks : MinOverlayStreamBlocks;
+
+    public int LastHitchMs => lastHitchMs;
+
+    public bool HitchPressure => hitchPressure;
+    public bool RequestPressure => requestPressure;
+
+    /// <summary>Spawn-solid Chebyshev radius in chunks — overlay SetChunkColumnVisible cap.</summary>
+    public static int SpawnSolidStreamChunks()
+    {
+        int cs = GlobalConstants.ChunkSize;
+        if (cs < 1) cs = 32;
+        return Math.Max(4, (int)Math.Ceiling(MinOverlayStreamBlocks / (double)cs) + 2);
+    }
+
+    /// <summary>
+    /// Step overlay vanilla VD one chunk at a time with dwell, never the full
+    /// <see cref="OverlayStreamBlocks"/> jump (1.0.44 1024→1184 FIFO flood).
+    /// </summary>
+    public static int StepAppliedStream(
+        int applied,
+        int desired,
+        long nowMs,
+        long lastGrowMs,
+        bool hitchPressure,
+        bool requestPressure = false,
+        long lastPressureMs = 0)
+    {
+        if (applied <= 0)
+            return MinOverlayStreamBlocks;
+        if (desired <= applied)
+            return applied;
+        if (hitchPressure || requestPressure)
+            return applied;
+        if (lastPressureMs > 0 && nowMs - lastPressureMs < StreamGrowDwellMs)
+            return applied;
+        if (lastGrowMs > 0 && nowMs - lastGrowMs < StreamGrowDwellMs)
+            return applied;
+        int next = applied + StreamGrowStepBlocks;
+        if (next > desired)
+            next = desired;
+        return GameMath.Clamp(next, MinOverlayStreamBlocks, MaxVanillaViewDistance);
+    }
+
+    /// <summary>
+    /// Overlay vanilla / LastApproved view for this finished count: at least spawn-solid,
+    /// then max(finishedRadius + lead, finishedRadius / usefulFill), snapped to chunk size,
+    /// capped at the engine 2048 ceiling (not the 4075 visit disk).
+    /// </summary>
+    public static int OverlayStreamBlocks(int finishedL0)
+    {
+        int finishedR = LodLoginScoutFill.FinishedToRadiusBlocks(finishedL0);
+        int byLead = finishedR + StreamLeadBlocks;
+        int byRatio = finishedR <= 0
+            ? MinOverlayStreamBlocks
+            : (int)Math.Ceiling(finishedR / StreamUsefulFillRatio);
+        int want = Math.Max(MinOverlayStreamBlocks, Math.Max(byLead, byRatio));
+        int cs = GlobalConstants.ChunkSize;
+        if (cs < 1) cs = 32;
+        want = (int)Math.Ceiling(want / (double)cs) * cs;
+        return GameMath.Clamp(want, MinOverlayStreamBlocks, MaxVanillaViewDistance);
+    }
+
+    /// <summary>
+    /// Login visit disk in blocks: graphics hold × horizon onset so FlagBaked
+    /// land meets the Farseer silhouette (~4.5× VD + 700), not a thin 750 ring
+    /// and not empty sky past that rim.
+    /// </summary>
+    public static int SweepVisitRadiusBlocks =>
+        (int)Math.Ceiling(LodCoveragePolicy.HorizonDrawDistance(SweepBoostViewDistanceBlocks));
 
     public int ChunkVisibleRadius
     {
         get
         {
-            int vd = applied ? boostedViewDistance : (int)renderer.LiveViewDistance;
-            vd = Math.Min(vd, SweepBoostViewDistanceBlocks);
+            // Scout ring clamp / visit onset. Stream to Farseer onset + 700 so
+            // local scout rings do not grow past the silhouette into empty sky.
+            int blocks = SweepVisitRadiusBlocks;
             int cs = GlobalConstants.ChunkSize;
-            int cap = Math.Max(4, (int)Math.Ceiling(SweepBoostViewDistanceBlocks / (double)cs) + 2);
-            return GameMath.Clamp((int)Math.Ceiling(vd / (double)cs), 4, cap);
+            return Math.Max(4, (int)Math.Ceiling(blocks / (double)cs) + 2);
         }
     }
 
-    /// <summary>750 (this hold) or 1000 (old hold). Not a value we may restore as original.</summary>
+    /// <summary>750 visit baseline, 1000 leftover, or any overlay stream 1024–2048. Never restore as original.</summary>
     public static bool IsSweepHoldValue(int blocks) =>
-        blocks == SweepBoostViewDistanceBlocks || blocks == LegacySweepHoldBlocks;
+        blocks == SweepBoostViewDistanceBlocks
+        || blocks == LegacySweepHoldBlocks
+        || (blocks >= MinOverlayStreamBlocks && blocks <= MaxVanillaViewDistance);
 
     /// <summary>
     /// A graphics slider the player actually set. Scan hold (750), old hold (1000),
@@ -148,33 +284,79 @@ public sealed class LodLoginBakeViewBoost
         AgentViewLog("view-recover", slider, live, store.Desired, store.Approved, store.Armed);
     }
 
-    public void EnsureBoosted()
+    public void EnsureBoosted(int finishedL0 = 0)
     {
         IWorldPlayerData data = capi.World.Player.WorldData;
-        int target = ResolveBoostViewDistance(data);
-        int clientNow = ReadClientViewDistance(capi, target);
+        desiredStreamBlocks = OverlayStreamBlocks(finishedL0);
+        long nowMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        lastHitchMs = lastEnsureMs == 0
+            ? 0
+            : (int)Math.Min(int.MaxValue, nowMs - lastEnsureMs);
+        lastEnsureMs = nowMs;
+        hitchPressure = lastHitchMs >= StreamGrowHitchPressureMs;
+        requestPressure = LodLoginChunkRequestBudget.RequestPressureActive;
+        if (hitchPressure || requestPressure)
+            lastPressureMs = nowMs;
+
         int approvedNow = 0;
         try { approvedNow = data.LastApprovedViewDistance; } catch { }
 
+        int target;
         if (!applied)
         {
+            int clientNow = ReadClientViewDistance(capi, MinOverlayStreamBlocks);
             CapturePlayerView(data, clientNow, approvedNow);
             applied = true;
+            target = MinOverlayStreamBlocks;
+            lastGrowMs = nowMs;
+        }
+        else
+        {
+            int current = boostedViewDistance > 0 ? boostedViewDistance : MinOverlayStreamBlocks;
+            target = StepAppliedStream(
+                current, desiredStreamBlocks, nowMs, lastGrowMs,
+                hitchPressure, requestPressure, lastPressureMs);
         }
 
-        if (clientNow != target)
+        int sliderNow = ReadClientViewDistance(capi, target);
+        if (sliderNow != target)
             WriteClientViewDistance(capi, target);
+
+        int previousStream = boostedViewDistance;
 
         if (data.DesiredViewDistance != target)
         {
             data.DesiredViewDistance = target;
-            capi.World.Player.Entity.UpdatePartitioning();
+            LodVsCompat.TryUpdatePartitioning(capi.World.Player.Entity);
         }
 
         if (data.LastApprovedViewDistance > 0 && data.LastApprovedViewDistance < target)
             data.LastApprovedViewDistance = target;
+        else if (data.LastApprovedViewDistance > 0 && data.LastApprovedViewDistance > target
+                 && target >= MinOverlayStreamBlocks)
+            data.LastApprovedViewDistance = target;
 
         boostedViewDistance = target;
+
+        if (target > previousStream && target > MinOverlayStreamBlocks)
+        {
+            lastGrowMs = nowMs;
+            LodScoutSeqDiag.LogStreamGrow(
+                finishedL0, target, desiredStreamBlocks, lastHitchMs,
+                hitchPressure, requestPressure);
+            if (previousStream > 0)
+            {
+                capi.Logger.Notification(
+                    "[DistantVistas] Overlay stream grew {0}→{1} (desired {2}) at finished {3} (filled radius {4}).",
+                    previousStream,
+                    target,
+                    desiredStreamBlocks,
+                    finishedL0,
+                    LodLoginScoutFill.FinishedToRadiusBlocks(finishedL0));
+            }
+        }
+        else if (target > previousStream && previousStream > 0)
+            lastGrowMs = nowMs;
 
         if (renderer.FarViewDistanceCap != 0)
             renderer.FarViewDistanceCap = 0;
@@ -188,7 +370,7 @@ public sealed class LodLoginBakeViewBoost
             loggedBoost = true;
             capi.Logger.Notification(
                 "[DistantVistas] Login sweep view hold: slider {0}→{1}, DesiredViewDistance {2}→{3}, LastApproved {4}→{5}, FarViewDistanceCap {6}→0, OverdrawStart {7:0.00}→{8:0.00}, chunk sweep radius {9}.",
-                savedClientViewDistance ?? clientNow,
+                savedClientViewDistance ?? sliderNow,
                 ReadClientViewDistance(capi, target),
                 savedDesiredViewDistance ?? target,
                 target,
@@ -246,6 +428,13 @@ public sealed class LodLoginBakeViewBoost
             boostedViewDistance = 0;
             applied = false;
             loggedBoost = false;
+            desiredStreamBlocks = 0;
+            lastEnsureMs = 0;
+            lastGrowMs = 0;
+            lastPressureMs = 0;
+            lastHitchMs = 0;
+            hitchPressure = false;
+            requestPressure = false;
         }
 
         _ = before;
@@ -267,6 +456,9 @@ public sealed class LodLoginBakeViewBoost
         }
 
         ApplySavedPlayerView();
+        renderer.OverdrawStart = savedOverdrawStart;
+        renderer.FarViewDistanceCap = savedFarViewDistanceCap;
+        try { renderer.ApplyZFar(); } catch { }
     }
 
     void CapturePlayerView(IWorldPlayerData data, int clientNow, int approvedNow)
@@ -314,7 +506,7 @@ public sealed class LodLoginBakeViewBoost
             if (IsPlayerViewDistance(desired))
             {
                 data.DesiredViewDistance = desired;
-                capi.World.Player.Entity.UpdatePartitioning();
+                LodVsCompat.TryUpdatePartitioning(capi.World.Player.Entity);
             }
 
             if (savedLastApprovedViewDistance.HasValue && savedLastApprovedViewDistance.Value > 0)
@@ -349,7 +541,7 @@ public sealed class LodLoginBakeViewBoost
             if (IsPlayerViewDistance(wantDesired))
             {
                 data.DesiredViewDistance = wantDesired;
-                capi.World.Player.Entity.UpdatePartitioning();
+                LodVsCompat.TryUpdatePartitioning(capi.World.Player.Entity);
             }
 
             if (approved > 0)
@@ -372,7 +564,9 @@ public sealed class LodLoginBakeViewBoost
 
     static void WriteClientViewDistance(ICoreClientAPI capi, int blocks)
     {
-        if (IsSweepHoldValue(blocks) && blocks != SweepBoostViewDistanceBlocks)
+        // Never persist leftover 1000. Overlay streams (1024–2048) write on purpose;
+        // player sliders are always below the 750 visit baseline.
+        if (blocks == LegacySweepHoldBlocks)
             return;
         try
         {
@@ -395,7 +589,8 @@ public sealed class LodLoginBakeViewBoost
                 + ",\"desired\":" + desired
                 + ",\"approved\":" + approved
                 + ",\"armed\":" + (armed ? "true" : "false")
-                + ",\"hold\":" + SweepBoostViewDistanceBlocks
+                + ",\"holdFloor\":" + MinOverlayStreamBlocks
+                + ",\"visitHold\":" + SweepBoostViewDistanceBlocks
                 + "},\"timestamp\":" + DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + "}\n");
         }
         catch { }
@@ -404,6 +599,6 @@ public sealed class LodLoginBakeViewBoost
     internal static int ResolveBoostViewDistance(IWorldPlayerData data)
     {
         _ = data;
-        return GameMath.Clamp(SweepBoostViewDistanceBlocks, SweepMinViewDistanceBlocks, MaxVanillaViewDistance);
+        return OverlayStreamBlocks(0);
     }
 }

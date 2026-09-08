@@ -64,6 +64,25 @@ public static class WireFormatChecks
         // The negotiated protocol number itself. A client takes Math.Min of its own and
         // the server's, so bumping this is a deliberate compatibility decision.
         c.Eq(1, LodAssist.Protocol, "the protocol version is 1");
+
+        c.Eq("distantvistas.scout", LodScoutNet.ChannelName,
+            "scout anchors use a separate channel from cache assist");
+        c.SeqEq(new[]
+        {
+            "1:Key:Int64", "2:Cx:Int32", "3:Cz:Int32", "4:Radius:Int32", "5:Dimension:Int32",
+            "6:X:Double", "7:Y:Double", "8:Z:Double", "9:Priority:Boolean",
+        }, Layout(typeof(ScoutAnchorUp)), "ScoutAnchorUp field numbers");
+        c.SeqEq(new[] { "1:Key:Int64" },
+            Layout(typeof(ScoutAnchorDown)), "ScoutAnchorDown field numbers");
+        c.SeqEq(new[] { "1:Unused:Boolean" },
+            Layout(typeof(ScoutAnchorsClear)), "ScoutAnchorsClear field numbers");
+        c.SeqEq(new[]
+        {
+            "1:Sequence:Int64", "2:Pressure:Boolean", "3:PriorityPending:Int32",
+            "4:PriorityInFlight:Int32", "5:ForceSendPending:Int32",
+            "6:OldestInFlightMs:Int64", "7:PriorityCompleted:Int64",
+            "8:ServerTimeMs:Int64",
+        }, Layout(typeof(ScoutHostStatus)), "ScoutHostStatus field numbers");
     }
 
     /// <summary>
@@ -104,6 +123,35 @@ public static class WireFormatChecks
         var refusal = Roundtrip(new AssistSection { Key = 42 });
         c.Eq(42L, refusal.Key, "a refusal carries its key");
         c.Eq(0, refusal.Blob?.Length ?? 0, "a refusal carries no blob bytes");
+
+        var up = Roundtrip(new ScoutAnchorUp
+        {
+            Key = 9, Cx = 3, Cz = 4, Radius = 2, Dimension = 0,
+            X = 112.5, Y = 140.25, Z = 144.75,
+        });
+        c.Eq(9L, up.Key, "scout up key survives");
+        c.Eq(3, up.Cx, "scout up cx survives");
+        c.Eq(2, up.Radius, "scout up radius survives");
+        c.Eq(112.5, up.X, "scout up X survives");
+        c.Eq(140.25, up.Y, "scout up Y survives");
+        c.Eq(144.75, up.Z, "scout up Z survives");
+        var down = Roundtrip(new ScoutAnchorDown { Key = 9 });
+        c.Eq(9L, down.Key, "scout down key survives");
+        var host = Roundtrip(new ScoutHostStatus
+        {
+            Sequence = 17,
+            Pressure = true,
+            PriorityPending = 8,
+            PriorityInFlight = 24,
+            ForceSendPending = 12,
+            OldestInFlightMs = 6000,
+            PriorityCompleted = 42,
+            ServerTimeMs = 123456,
+        });
+        c.Eq(17L, host.Sequence, "host status sequence survives");
+        c.True(host.Pressure, "host pressure survives");
+        c.Eq(24, host.PriorityInFlight, "host in-flight count survives");
+        c.Eq(6000L, host.OldestInFlightMs, "host callback age survives");
     }
 
     static T Roundtrip<T>(T value)

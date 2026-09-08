@@ -37,6 +37,7 @@ public class LodSavegameSweep
     readonly ILogger logger;
     readonly int radiusChunks;
     readonly int perSecond;
+    readonly string loadOwnerPrefix = "save-sweep:" + Guid.NewGuid().ToString("N");
 
     /// <summary>
     /// Probes outstanding with the engine. Bounded because the spiral would otherwise queue
@@ -154,7 +155,7 @@ public class LodSavegameSweep
         int loaded = 0;
         while (loadIndex < LoadTotal && loaded < perSecond)
         {
-            (int dx, int dz) = LodColumnMap.SpiralAt(loadIndex++);
+            (int dx, int dz) = LodColumnMap.SpiralAt(loadIndex);
             int cx = spawnCx + dx;
             int cz = spawnCz + dz;
 
@@ -164,18 +165,33 @@ public class LodSavegameSweep
                     // Not in the savegame. The sweep indexes what exists and creates
                     // nothing, so there is no work here. Generation (/vhgen) is the
                     // feature that acts on this arm.
+                    loadIndex++;
                     continue;
 
                 case EnumColumnAction.SkipFrontier:
                     // On the frontier of explored terrain. A load here would generate
                     // whatever is missing beside it - the one thing this must not do.
                     SkippedEdge++;
+                    loadIndex++;
                     continue;
             }
 
             // Not KeepLoaded: each column needs to pass through capture once, not stay
             // resident. A radius worth sweeping is far more terrain than fits in memory.
-            sapi.WorldManager.LoadChunkColumnPriority(cx, cz);
+            LodScoutHostSystem? host = LodScoutHostSystem.ServerInstance;
+            if (host == null)
+                break;
+            LodServerQueueDecision queued = host.QueuePriorityLoad(
+                loadOwnerPrefix + ":" + loadIndex,
+                cx,
+                cz,
+                dim: 0,
+                keepLoaded: false,
+                onLoaded: null,
+                LodServerChunkWorkPriority.Background);
+            if (queued == LodServerQueueDecision.Dropped)
+                break;
+            loadIndex++;
             Loaded++;
             loaded++;
         }

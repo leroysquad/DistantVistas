@@ -4,8 +4,9 @@ using Vintagestory.API.Common;
 namespace DistantVistas;
 
 /// <summary>
-/// Switches the local player to creative for login-sweep fly teleports, then restores
-/// the prior mode (survival, guest, etc.) on teardown.
+/// Switches the local player to creative so survival physics cannot shove them off
+/// spawn while scout workers load columns. Restores the prior mode on teardown.
+/// Creative is not a teleport.
 /// </summary>
 public sealed class LodLoginBakeGameMode
 {

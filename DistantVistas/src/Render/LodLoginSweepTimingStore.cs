@@ -33,8 +33,13 @@ public sealed class LodLoginSweepTimingStore
     public static void EnsureApplied(ICoreClientAPI capi, LodLoginSweepTiming timing)
     {
         LodLoginSweepTimingStore data = TryLoad(capi) ?? HarvestAndSave(capi);
-        LodLoginSweepTiming.SetMachineSecPerStop(data.SecPerStop);
-        timing.BeginSession(data.SecPerStop);
+        // Hop-era 0.5s+ samples undercount scout-viewer density. Plan from the
+        // no-hop fallback unless this PC already measured faster.
+        double sec = data.SecPerStop;
+        if (sec > LodLoginSweepTiming.InitialSecPerStop)
+            sec = LodLoginSweepTiming.InitialSecPerStop;
+        LodLoginSweepTiming.SetMachineSecPerStop(sec);
+        timing.BeginSession(sec);
         capi.Logger.Notification(
             "[DistantVistas] Login visit sweep: ETA from this PC -- {0:0.00}s/stop ({1}, {2} samples) -> ~{3} first pass / {4} retry.",
             LodLoginSweepTiming.MachineSecPerStop,
@@ -70,7 +75,7 @@ public sealed class LodLoginSweepTimingStore
             : measured;
         var data = new LodLoginSweepTimingStore
         {
-            SecPerStop = Math.Clamp(blended, 0.75, 6.0),
+            SecPerStop = Math.Clamp(blended, LodLoginSweepTiming.MeasuredMinSecPerStop, 6.0),
             LastWallSec = timing.WallSec,
             LastStops = timing.SampleCount,
             Samples = (prior?.Samples ?? 0) + timing.SampleCount,
@@ -105,7 +110,7 @@ public sealed class LodLoginSweepTimingStore
         {
             var data = JsonSerializer.Deserialize<LodLoginSweepTimingStore>(File.ReadAllText(path), JsonOptions);
             if (data == null || data.Schema != SchemaVersion) return null;
-            if (data.SecPerStop < 0.75 || data.SecPerStop > 6.0) return null;
+            if (data.SecPerStop < LodLoginSweepTiming.MeasuredMinSecPerStop || data.SecPerStop > 6.0) return null;
             return data;
         }
         catch
@@ -140,7 +145,7 @@ public sealed class LodLoginSweepTimingStore
             : LodLoginSweepTiming.InitialSecPerStop;
         var data = new LodLoginSweepTimingStore
         {
-            SecPerStop = Math.Clamp(sec, 0.75, 6.0),
+            SecPerStop = Math.Clamp(sec, LodLoginSweepTiming.MeasuredMinSecPerStop, 6.0),
             Samples = samples.Count,
             Source = samples.Count > 0 ? "client-logs" : "fallback",
         };
@@ -162,7 +167,7 @@ public sealed class LodLoginSweepTimingStore
     }
 
     /// <summary>
-    /// Budgeted first-pass rate: time from "quiet teleports begin ù N" to the next
+    /// Budgeted first-pass rate: time from "quiet teleports begin ÔøΩ N" to the next
     /// retry/finish, only when N is a planned subsample (not a 200+ hole hop).
     /// </summary>
     public static List<double> HarvestSecPerStop(IEnumerable<string> lines)
@@ -174,8 +179,7 @@ public sealed class LodLoginSweepTimingStore
         {
             if (!TryParseStamp(line, out DateTime at)) continue;
 
-            if (line.Contains("quiet teleports begin", StringComparison.Ordinal)
-                && TryParseBeginStops(line, out int n))
+            if (IsSweepBeginLog(line) && TryParseBeginStops(line, out int n))
             {
                 beginAt = at;
                 beginStops = n;
@@ -189,7 +193,7 @@ public sealed class LodLoginSweepTimingStore
             if (!ended) continue;
 
             double sec = (at - beginAt.Value).TotalSeconds;
-            // Wider than the live budget so older 16ñ36 stop logs and the 4x 64ñ96
+            // Wider than the live budget so older 16ÔøΩ36 stop logs and the 4x 64ÔøΩ96
             // first pass both harvest. Drop 200+ hole hops. Allow ~10 min walls.
             if (beginStops >= 12
                 && beginStops <= 120
@@ -212,12 +216,28 @@ public sealed class LodLoginSweepTimingStore
         return copy.Count % 2 == 1 ? copy[mid] : (copy[mid - 1] + copy[mid]) * 0.5;
     }
 
+    static bool IsSweepBeginLog(string line) =>
+        line.Contains("quiet teleports begin", StringComparison.Ordinal)
+        || line.Contains("scout workers visit chunk columns", StringComparison.Ordinal)
+        || line.Contains("scout viewer entities stream visit cells", StringComparison.Ordinal);
+
     static bool TryParseBeginStops(string line, out int stops)
     {
         stops = 0;
         int mark = line.IndexOf("quiet teleports begin", StringComparison.Ordinal);
+        int markLen = "quiet teleports begin".Length;
+        if (mark < 0)
+        {
+            mark = line.IndexOf("scout workers visit chunk columns", StringComparison.Ordinal);
+            markLen = "scout workers visit chunk columns".Length;
+        }
+        if (mark < 0)
+        {
+            mark = line.IndexOf("scout viewer entities stream visit cells", StringComparison.Ordinal);
+            markLen = "scout viewer entities stream visit cells".Length;
+        }
         if (mark < 0) return false;
-        for (int i = mark + "quiet teleports begin".Length; i < line.Length; i++)
+        for (int i = mark + markLen; i < line.Length; i++)
         {
             if (!char.IsDigit(line[i])) continue;
             int end = i;

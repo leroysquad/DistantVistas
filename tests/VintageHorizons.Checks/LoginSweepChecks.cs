@@ -7,6 +7,8 @@ public static class LoginSweepChecks
 {
     public static void Run(Check c)
     {
+        ChunkRingCursor(c);
+        RequestCoordinator(c);
         L0ChunkColumns(c);
         VisitedL0Only(c);
         BootstrapRevisitPlan(c);
@@ -22,9 +24,77 @@ public static class LoginSweepChecks
         SweepResume(c);
         SweepSkipGate(c);
         SweepTiming(c);
+        BootstrapSpawnFirst(c);
+        VisitOnsetEnvelope(c);
         CreativeMode(c);
         HudHide(c);
         CharacterWait(c);
+        PostGetColorSimd(c);
+    }
+
+
+    static void ChunkRingCursor(Check c)
+    {
+        var cursor = new LodLoginBakePlayerMove.ChunkRingCursor();
+        cursor.Configure(10, 20, inner: 1, outer: 2);
+        var seen = new HashSet<(int, int)>();
+        int count = 0;
+        while (cursor.TryNext(out int cx, out int cz))
+        {
+            c.True(seen.Add((cx, cz)), "ring cursor never repeats a column before completion");
+            cursor.CommitCurrent();
+            count++;
+        }
+        c.Eq(16, count, "5x5 ring minus 3x3 interior contains 16 columns");
+        c.True(cursor.Complete, "ring cursor reaches a stable completed state");
+        c.False(cursor.TryNext(out _, out _), "completed ring cursor stays exhausted");
+    }
+
+    static void RequestCoordinator(Check c)
+    {
+        var coordinator = new LodLoginChunkRequestCoordinator(
+            maxBurst: 2,
+            maxRequestsPerSecond: 2,
+            maxTrackedColumns: 8);
+        coordinator.BeginGeneration(nowMs: 0);
+        coordinator.BeginTick();
+        c.Eq(LodLoginChunkRequestDecision.Issue, coordinator.TryAcquire(10, 20, 0, nowMs: 0), "request coordinator issues the first column");
+        c.Eq(LodLoginChunkRequestDecision.Duplicate, coordinator.TryAcquire(10, 20, 0, nowMs: 100), "request coordinator deduplicates a column during cooldown");
+        c.Eq(LodLoginChunkRequestDecision.Issue, coordinator.TryAcquire(11, 20, 0, nowMs: 100), "request coordinator spends the second request slot");
+        c.Eq(LodLoginChunkRequestDecision.Deferred, coordinator.TryAcquire(12, 20, 0, nowMs: 100), "request coordinator defers after the aggregate budget");
+        c.Eq(2, coordinator.IssuedThisTick, "request coordinator caps issued columns per tick");
+        coordinator.EndTick();
+        coordinator.BeginTick();
+        c.Eq(LodLoginChunkRequestDecision.Deferred, coordinator.TryAcquire(13, 20, 0, nowMs: 100), "elapsed ticks do not refill a per-tick burst");
+        coordinator.EndTick();
+        coordinator.BeginTick();
+        c.Eq(LodLoginChunkRequestDecision.Issue, coordinator.TryAcquire(13, 20, 0, nowMs: 500), "the token bucket refills at the configured per-second rate");
+        coordinator.EndTick();
+        for (int i = 0; i < 3; i++)
+        {
+            coordinator.BeginTick();
+            coordinator.TryAcquire(14 + i, 20, 0, nowMs: 500);
+            coordinator.EndTick();
+        }
+        c.True(coordinator.PressureActive, "pressure enters after three saturated ticks");
+        for (int i = 0; i < 3; i++) { coordinator.BeginTick(); coordinator.EndTick(); }
+        c.False(coordinator.PressureActive, "pressure needs a quiet hysteresis window to clear");
+        coordinator.BeginTick();
+        c.Eq(LodLoginChunkRequestDecision.Duplicate, coordinator.TryAcquire(10, 20, 0, nowMs: 1249), "retry cooldown suppresses an early re-request");
+        c.Eq(LodLoginChunkRequestDecision.Issue, coordinator.TryAcquire(10, 20, 0, nowMs: 1250), "retry cooldown permits the column at its deadline");
+        coordinator.EndTick();
+        int trackedBeforeResident = coordinator.RequestedColumnCount;
+        coordinator.MarkResident(10, 20, 0);
+        c.Eq(trackedBeforeResident - 1, coordinator.RequestedColumnCount, "observed residency retires retry state");
+        long generation = coordinator.Generation;
+        coordinator.ConfigureRateLimit(maxBurst: 1, maxRequestsPerSecond: 1, nowMs: 1250);
+        c.Eq(generation, coordinator.Generation, "overlay-to-background rate transition preserves the generation");
+        coordinator.SetExternalPressure(true);
+        coordinator.BeginTick();
+        c.Eq(LodLoginChunkRequestDecision.Deferred, coordinator.TryAcquire(30, 20, 0, nowMs: 2250), "host pressure blocks new visibility requests even with a full token");
+        coordinator.EndTick();
+        coordinator.SetExternalPressure(false);
+        coordinator.EndGeneration();
     }
 
     static void L0ChunkColumns(Check c)
@@ -75,21 +145,23 @@ public static class LoginSweepChecks
         c.True(targeted.ModeLabel.Contains("incomplete"), "incomplete plan label");
 
         var manyMisses = new List<LodLoginBakeAudit.Miss>();
-        for (int i = 0; i < 120; i++)
+        for (int i = 0; i < 2000; i++)
             manyMisses.Add(new(LodWorld.SectionKey(0, i, 0), LodLoginBakeAudit.MissReason.BakeIncomplete));
         var budgeted = LodLoginSweepBootstrap.PlanIncomplete(manyMisses);
         c.Eq(LodLoginSweepBootstrap.RevisitMaxVisitStops, budgeted.Keys.Count,
             "incomplete plan stays inside the revisit stop budget");
-        c.True(budgeted.ModeLabel.Contains("of 120"), "incomplete plan names the leftover gaps");
+        c.True(budgeted.ModeLabel.Contains("of 2000"), "incomplete plan names the leftover gaps");
 
-        c.Eq(80, LodLoginSweepBootstrap.RevisitMaxVisitStops,
-            "revisit cap targets ~160s at fallback 2s/stop");
-        c.Eq(80, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
-            "bootstrap land cap matches revisit (~160s at fallback 2s/stop)");
-        c.Eq(16, LodLoginSweepBootstrap.RetryMaxVisitStops,
-            "retry hop is shorter than the first pass");
+        c.Eq(1680, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "revisit cap targets ~7 min at fallback 0.25s/stop");
+        c.Eq(1680, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "bootstrap land cap matches revisit (~7 min at fallback 0.25s/stop)");
+        c.Eq(96, LodLoginSweepBootstrap.RetryMaxVisitStops,
+            "retry hop hits MaxRetryStops at fallback 0.5s/stop");
         c.True(LodLoginSweepBootstrap.RevisitMaxVisitStops >= LodLoginSweepBootstrap.BootstrapMaxVisitStops,
             "revisit budget is at least bootstrap budget");
+        c.True(LodLoginSweepBootstrap.RetryMaxVisitStops <= LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "retry hop is shorter than the first pass");
     }
 
     static void BackdropHook(Check c)
@@ -156,8 +228,8 @@ public static class LoginSweepChecks
 
         string csproj = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "DistantVistas.csproj"));
-        c.True(!csproj.Contains("0Harmony"),
-            "mod project no longer references Harmony");
+        c.True(csproj.Contains("0Harmony"),
+            "mod still references Harmony for Farseer visit-onset and cloud horizon");
     }
 
     static void AudioMuteKeys(Check c)
@@ -207,14 +279,22 @@ public static class LoginSweepChecks
             "login bake does not complete deferred handover on teardown");
         c.True(bake.Contains("LodLoginBakeProgressUi"),
             "login bake throttles loading-text updates");
+        string progressUi = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeProgressUi.cs"));
+        c.True(progressUi.Contains("HeartbeatMs = 3000"),
+            "overlay status refreshes at least every 3s so % does not sit still");
+        c.True(progressUi.Contains("detail != lastDetail"),
+            "overlay status refreshes when scout count / paint text changes");
         c.True(bake.Contains("if (released) return"),
             "login bake teardown is idempotent");
         c.True(bake.Contains("Teardown(success: false, keepResume: true)"),
             "dispose routes through Teardown");
         c.True(bake.Contains("LOGIN VISIT SWEEP ARMED"),
             "login bake logs loudly when sweep arms");
-        c.True(bake.Contains("quiet teleports begin"),
-            "login bake logs when teleports begin");
+        c.True(bake.Contains("scout viewer entities stream visit cells"),
+            "login bake logs scout coverage, not player teleports");
+        c.True(!bake.Contains("quiet teleports begin"),
+            "login bake no longer claims quiet teleports");
         c.True(!bake.Contains("never painted opaque frames — entering play"),
             "login bake does not abort solely on overlay paint counter");
         c.True(bake.Contains("restoreCameraPos"),
@@ -232,12 +312,20 @@ public static class LoginSweepChecks
             "visit bake walks every captured column, not one colour per block id");
         c.True(season.Contains("TrySetTopRunPaletteId"),
             "visit bake splits palette rows per column when colours differ");
-        c.True(season.Contains("block.GetColor(capi, pos)"),
+        c.True(season.Contains("block.GetColor(capi, LodBakeScratch.Pos(x, y, z))"),
             "visit bake samples vanilla GetColor at column top");
         c.True(season.Contains("FinishColumnPaint"),
             "visit bake uses the shared season-ground mix for overlay and walk");
-        c.True(bake.Contains("BakeSectionFromVisit"),
-            "login bake calls visit-only exact bake");
+        c.True(bake.Contains("BakeSectionFromVisitChunked"),
+            "login overlay uses time-budgeted visit bake (BlurRadius 0 — no halo pass)");
+        c.True(bake.Contains("MaxPaintWallMsPerTick"),
+            "login overlay caps GetColor wall time per tick");
+        c.True(bake.Contains("paintResumeCol"),
+            "partial L0 bakes resume next tick instead of freezing the client");
+        c.True(bake.Contains("PrioritizePaintQueue"),
+            "paint queue prefers partial + spawn-near L0 before far rim");
+        c.True(bake.Contains("MaybeSaveResumeSnapshot"),
+            "resume snapshot is throttled so paint batches do not allocate every tick");
         c.True(bake.Contains("DeferLegacyHeal = true"),
             "legacy heal is deferred during visit sweep");
 
@@ -245,6 +333,8 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Lod", "LodPipeline.cs"));
         c.True(pipeline.Contains("DeferLegacyHeal"),
             "pipeline can defer approximate legacy heal");
+        c.True(pipeline.Contains("OverlayInstallsPerTick"),
+            "inline storage installs are throttled during overlay DeferLegacyHeal");
         c.True(pipeline.Contains("DiscoverOnly"),
             "pipeline can restrict post-sweep capture to new and nearby land");
         c.True(bake.Contains("DiscoverOnly = true"),
@@ -253,6 +343,13 @@ public static class LoginSweepChecks
             "successful sweep re-enables explore bake for newly discovered land");
         c.False(bake.Contains("FreezeCapture = true"),
             "successful sweep must not lock all capture until relog");
+        string terrain = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodTerrainRenderer.cs"));
+        int clearAt = terrain.IndexOf("public void ClearMeshes()", StringComparison.Ordinal);
+        c.True(clearAt >= 0, "renderer has ClearMeshes");
+        string clear = terrain.Substring(clearAt, Math.Min(900, terrain.Length - clearAt));
+        c.True(clear.Contains("MeshPressureActive = false"),
+            "leave-world ClearMeshes drops the mesh-pressure latch");
     }
 
     static void AuditMisses(Check c)
@@ -312,6 +409,8 @@ public static class LoginSweepChecks
             "bootstrap logs skipped baked cells");
         c.True(bootstrap.Contains("PartitionVisitKeys"),
             "revisit partitions incomplete vs complete keys");
+        c.True(bootstrap.Contains("Repairing {keys.Count} of {gapCount} incomplete regions"),
+            "incomplete plan label uses the real miss count, not a hardcoded 500");
 
         string audit = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeAudit.cs"));
@@ -337,7 +436,21 @@ public static class LoginSweepChecks
         string renderer = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodTerrainRenderer.cs"));
         c.True(renderer.Contains("LoginBakeOverlayActive"),
-            "terrain renderer skips draw while login overlay active");
+            "terrain renderer knows the login overlay is up");
+        c.True(!renderer.Contains("if (LoginBakeOverlayActive || LoginBakeBlocked) return"),
+            "overlay no longer skips the whole render frame (meshes must upload under the splash)");
+        c.True(renderer.Contains("if (LoginBakeBlocked && !LoginBakeOverlayActive) return"),
+            "character-wait still skips GL before the overlay arms");
+        int schedAt = renderer.IndexOf("ScheduleMeshJobs()", StringComparison.Ordinal);
+        int overlayHoldAt = renderer.IndexOf("if (LoginBakeOverlayActive) return", StringComparison.Ordinal);
+        c.True(schedAt >= 0 && overlayHoldAt > schedAt,
+            "overlay hold skips GPU draw only after mesh schedule/upload");
+        c.True(renderer.Contains("LodPauseOnStartCompat.KeepUnpaused"),
+            "renderer force-unpauses while overlay/blocked so Pause-on-Start cannot freeze bake");
+        c.True(renderer.Contains("RemeshStaleLiveTintParent"),
+            "walk-away remeshes live-tint parents once FlagBaked children exist");
+        c.True(renderer.Contains("if (world.ForceRemesh.Contains(key)) return;"),
+            "stale-parent remesh does not requeue every frame while ForceRemesh is already set");
         c.True(renderer.Contains("bool loginBakeBlocked = true"),
             "terrain renderer starts with LoginBakeBlocked so load/char-create cannot ApplyZFar");
         c.True(renderer.Contains("LodJoinQuiet.Sync(loginBakeBlocked, loginBakeComplete)"),
@@ -355,6 +468,8 @@ public static class LoginSweepChecks
 
         string guard = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeInputGuard.cs"));
+        c.True(guard.Contains("OnRenderPin?.Invoke()"),
+            "overlay render frames freeze pickup pose so the player never hops");
         c.True(guard.Contains("TryEnsureOpen"),
             "input guard retries open when viewport is ready");
         c.True(guard.Contains("SafeBounds"),
@@ -372,6 +487,8 @@ public static class LoginSweepChecks
             "pulse polls Esc each tick");
         c.True(!driver.Contains("BeginFrame"),
             "pulse does not coalesce OnNewFrame present-path pulses");
+        c.True(driver.Contains("bake.FreezePickupPose()"),
+            "pulse re-pins pickup pose every overlay frame, not only the 50ms tick");
         c.True(!driver.Contains("while (accum"),
             "pulse does not catch-up multiple Ticks after a hitch");
 
@@ -388,6 +505,10 @@ public static class LoginSweepChecks
             "mod wires login bake pulse");
         c.True(mod.Contains("loginBakePulse?.Pulse(dt)"),
             "mod pulses the sweep from OnGameTick");
+        c.True(mod.Contains("else if (!renderer.LoginBakeOverlayActive)"),
+            "Farseer height enrich does not rebuild on HasDataSet churn during overlay");
+        c.True(mod.Contains("LodPauseOnStartCompat.RestoreAfterLoginBake"),
+            "skip/not-allowed join restores Pause-on-Start after overlay-time unpause");
         c.True(!mod.Contains("OnRenderPulse"),
             "mod does not connect a present-path render pulse");
         c.True(!mod.Contains("PaintSplashCover"),
@@ -427,21 +548,529 @@ public static class LoginSweepChecks
             "login bake settles after each teleport");
         c.True(bake.Contains("BakeSettle"),
             "login bake settles after each bake");
-        c.True(bake.Contains("BatchBakeL0Radius = 12"),
-            "login bake batch-bakes neighbour disk inside the 750-block view");
-        c.True(bake.Contains("MaxBakePerTick = 8"),
-            "login bake spreads GetColor across overlay ticks");
+        c.True(bake.Contains("BatchBakeL0Radius = 2"),
+            "overlay visit paint is the visit cell, not a 750-block neighbour disk");
+        c.True(bake.Contains("MaxBakePerTick = 32"),
+            "login bake paints many captured scouts per overlay tick");
+        c.True(bake.Contains("MaxLeftoverBakePerTick = 16"),
+            "expire leftover GetColor is 16/tick (research 12→16)");
         c.True(bake.Contains("CollectExpireLeftovers"),
             "expire leftovers are queued, not baked in one tick");
+        c.True(bake.Contains("MaxExpireLeftoverKeys"),
+            "expire leftover queue is capped on large caches");
+        c.Eq(256, LodLoginBake.MaxExpireLeftoverKeys,
+            "expire leftover cap is 256 nearest L0");
         c.True(bake.Contains("RequestChunkColumnRing"),
             "login bake grows the streamed ring instead of requesting the full disk at teleport");
         c.True(bake.Contains("SweepRowsPerCall"),
             "login bake sweeps loaded columns a few rows per tick");
-        c.True(bake.Contains("MaxBatchBakePerStop = 256"),
-            "login bake batch-bakes streamed neighbours per teleport");
-        c.True(bake.Contains("BakeBatchAtStop"),
-            "login bake batch-bakes streamed neighbours per stop");
-        c.True(bake.Contains("stopBakeSkipIdle++") && bake.Contains("idleQueued"),
+        c.True(bake.Contains("MaxBatchBakePerStop = 32"),
+            "leftover neighbour bake is small; overlay scouts paint the visit cell");
+        c.True(bake.Contains("CollectBatchBakeKeys") || bake.Contains("BakeBatchAtStop"),
+            "leftover hop-era neighbour bake helper remains for expire leftovers");
+        c.True(bake.Contains("PaintReadyScouts"),
+            "login overlay paints every captured scout each tick, not one serial currentKey");
+        c.True(bake.Contains("scoutFill.Tick"),
+            "login overlay drives staggered scout entities instead of player hops");
+        c.True(bake.Contains("PinPickupPose();"),
+            "login bake re-pins pickup pose after scout SetChunkColumnVisible");
+        c.True(bake.Contains("LodLoginScoutFill"),
+            "login bake owns the concurrent scout fill");
+        c.True(bake.Contains("GrowRevealAroundSpawn()"),
+            "login bake grows a spawn-centered vanilla stream for spawn-solid land");
+        c.True(bake.Contains("SpawnSolidStreamChunks") || bake.Contains("viewBoost.SpawnStreamRadiusChunks"),
+            "spawn vanilla stream is the spawn-solid disk, not a 4 km tessellation");
+        c.True(bake.Contains("SweepColumnsAroundSpawn()"),
+            "login bake captures loaded columns across the onset disk, not only the current stop");
+        c.True(bake.Contains("SpawnSweepEveryTicks"),
+            "spawn-disk capture is not every overlay tick (GC)");
+        c.True(bake.Contains("SpawnRevealEveryTicks"),
+            "spawn reveal ring is throttled so it does not fight 16 scout streams");
+        c.True(bake.Contains("BatchBakeRadiusFor"),
+            "leftover neighbour bake shrinks past spawn-solid instead of a 12-cell disk");
+        c.True(bake.Contains("void CollectBatchBakeKeys(long primaryKey, List<long> dest)")
+            && bake.Contains("dest.Clear()"),
+            "leftover batch keys fill stopBakeKeys in place");
+        c.True(!bake.Contains("batchBakeResult"),
+            "in-place CollectBatchBakeKeys does not copy through a second list");
+        c.True(bake.Contains("scoutFill.LiveCount}/{LodLoginScoutFill.MaxConcurrent} scouts"),
+            "overlay reports live/max scouts so 1/16 stuck is visible");
+        int releaseAt = bake.IndexOf("void ReleaseResources(bool success, bool keepResume = false)", StringComparison.Ordinal);
+        int nextAt = bake.IndexOf("void LogMayFlagBakedDump()", releaseAt, StringComparison.Ordinal);
+        c.True(releaseAt >= 0 && nextAt > releaseAt, "ReleaseResources bounds");
+        string release = bake.Substring(releaseAt, nextAt - releaseAt);
+        int saveAt = release.IndexOf("SaveResumeSnapshot()", StringComparison.Ordinal);
+        int resetAt = release.IndexOf("scoutFill.Reset(capi)", StringComparison.Ordinal);
+        int releasedAt = release.IndexOf("released = true", StringComparison.Ordinal);
+        c.True(saveAt >= 0 && resetAt >= 0 && saveAt < resetAt,
+            "Esc/world-leave resume snapshot includes live scout keys before Reset");
+        c.True(saveAt >= 0 && releasedAt >= 0 && saveAt < releasedAt,
+            "resume snapshot runs before teardown marks released/Done");
+        c.True(bake.Contains("LodPauseOnStartCompat.KeepUnpaused"),
+            "login bake force-unpauses while the overlay is up (Pause-on-Start compat)");
+        c.True(bake.Contains("LodPauseOnStartCompat.RestoreAfterLoginBake"),
+            "login bake restores Pause-on-Start after a successful overlay");
+        c.True(!bake.Contains("LodLoginBakePlayerMove.HoldQuiet(entity"),
+            "login bake does not HoldQuiet the player onto visit cells");
+        c.True(!bake.Contains("void TeleportPlayer"),
+            "login bake has no visit-cell TeleportPlayer helper");
+        c.True(!bake.Contains("ApplyQuiet(capi"),
+            "login bake never ApplyQuiet-hops to a visit cell");
+        c.True(bake.Contains("entity.Pos.SetFrom(restorePos)"),
+            "login bake pins the exact pickup pose, not visit cells");
+        c.True(bake.Contains("PinPickupPose"),
+            "login bake re-pins pickup XYZ after scout chunk requests");
+        c.True(bake.Contains("pickupX"),
+            "login bake stores exact pickup X as a double");
+        c.True(bake.Contains("pickupY"),
+            "login bake stores exact pickup Y as a double");
+        c.True(bake.Contains("pickupZ"),
+            "login bake stores exact pickup Z as a double");
+        c.True(bake.Contains("pickupYaw") && bake.Contains("pickupPitch"),
+            "login bake snapshots pickup yaw/pitch");
+        c.True(bake.Contains("ApplyExactPickup"),
+            "login bake restores exact pickup doubles if anything hopped");
+        c.True(bake.Contains("pickupX, pickupY, pickupZ"),
+            "overlay end/Esc/fail writes the original pickup XYZ, not spawn or a chunk origin");
+
+        string scoutFill = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginScoutFill.cs"));
+        c.True(scoutFill.Contains("RequestChunkColumnRing"),
+            "scouts grow streamed rings without moving the player");
+        c.True(!scoutFill.Contains("forceRecapture: true"),
+            "scouts do not force-recapture every tick (remesh storm)");
+        c.True(scoutFill.Contains("LodPipeline.SweepLaneScout"),
+            "scout neighbourhood sweep does not share the spawn-disk row cursor");
+        c.True(scoutFill.Contains("RevealGrowPerTick"),
+            "scout ring growth is staggered");
+        c.True(scoutFill.Contains("AllMapChunksLoaded"),
+            "scouts skip GetColor bake when map chunks never arrived");
+        c.True(scoutFill.Contains("AllMapChunksLoaded(capi.World.BlockAccessor, key)"),
+            "login bake does not force-paint a stop with missing-tex white when maps are absent");
+        c.True(bake.Contains("LodLoginScoutFill.LocalVisitRevealChunks"),
+            "visit/scout rings stay local; they do not grow past the silhouette into empty sky");
+        c.True(scoutFill.Contains("LocalVisitRevealChunks"),
+            "scout grow cap is the local visit neighbourhood");
+        c.True(LodLoginScoutFill.LocalVisitRevealChunks < 40,
+            "local scout reveal is a neighbourhood, not the ~130-chunk onset disk");
+        c.True(bake.Contains("FreezePickupPose"),
+            "login bake exposes a public pose freeze for overlay frames");
+        c.True(bake.Contains("overlay.OnRenderPin = FreezePickupPose"),
+            "login overlay render path pins pickup XYZ every GUI frame");
+        c.True(!bake.Contains("void BeginNextStop"),
+            "login bake has no leftover hop-era BeginNextStop (visit-cell player stream)");
+        c.True(bake.Contains("LodScoutViewerEntity"),
+            "login bake comments/uses real scout viewer entities, not tokens");
+        c.True(scoutFill.Contains("LodScoutViewerEntity.SpawnAt"),
+            "scouts spawn a real viewer entity at the visit cell");
+        c.True(scoutFill.Contains("DespawnOne") && scoutFill.Contains("DespawnAll"),
+            "scouts despawn each viewer and wipe leftovers on reset");
+        c.True(scoutFill.Contains("TryHandoffPaint"),
+            "capture hands off to scoutReady paint queue before slot release");
+        c.True(scoutFill.Contains("RunSpawnDiskSweep"),
+            "spawn-disk column sweep is optional; mesh gate is overlay end only");
+        c.True(scoutFill.Contains("WaitForMesh"),
+            "near/far band kept for telemetry only");
+        c.True(scoutFill.Contains("PartitioningEveryTicks"),
+            "pinned scouts re-partition every 8 ticks, not every overlay tick");
+        c.Eq(8, LodLoginScoutFill.PartitioningEveryTicks,
+            "partition throttle matches the research-branch cadence");
+        c.True(scoutFill.Contains("LodVsCompat.TryUpdatePartitioning(viewer)"),
+            "HoldViewer partitions through the 1.22.7 reflection helper");
+        int captureAt = scoutFill.IndexOf(
+            "TryResidentPaintHandoff(capi, pipeline, key, scout, out string captureResident)",
+            StringComparison.Ordinal);
+        int paintHandoffAt = captureAt >= 0
+            ? scoutFill.IndexOf("TryHandoffPaint(key, scout)", captureAt, StringComparison.Ordinal)
+            : -1;
+        c.True(captureAt >= 0 && paintHandoffAt > captureAt,
+            "Capture hands off to paint before releasing the scout");
+        string capturePhase = captureAt >= 0 && paintHandoffAt > captureAt
+            ? scoutFill.Substring(captureAt, paintHandoffAt - captureAt)
+            : string.Empty;
+        c.True(!capturePhase.Contains("SweepLoadedColumns"),
+            "Capture does not recapture neighbourhoods");
+        c.True(!capturePhase.Contains("forceRecapture"),
+            "Capture has no forceRecapture");
+        c.True(scoutFill.Contains("TryHandoffPaint"),
+            "scouts stay until GetColor paint, then near waits mesh / far despawns");
+        c.True(scoutFill.Contains("NotifyPainted"),
+            "paint completion unblocks the scout slot so the next pending cell can start");
+        c.True(scoutFill.Contains("readyScratch"),
+            "scout fill reuses the ready-key list each tick");
+        c.True(bake.Contains("batchBakeCandidates"),
+            "expire leftover candidate list is reused, not allocated per stop");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSeasonBake.cs"))
+                .Contains("LodBakeScratch.RentColumnMeta"),
+            "visit bake pools per-column scratch arrays");
+        string bakeScratch = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodBakeScratch.cs"));
+        c.True(bakeScratch.Contains("ArrayPool"),
+            "column meta arrays come from ArrayPool, not new T[4096] each stop");
+        c.True(bakeScratch.Contains("ThreadStatic"),
+            "BlockPos scratch is thread-local so GetColor does not allocate per column");
+        c.True(bakeScratch.Contains("BeginSectionTextureMeans"),
+            "per-section texture-mean cache avoids 8× GetColorWithoutTint per ground layer");
+        c.True(bakeScratch.Contains("TryGetSectionGetColor"),
+            "per-section GetColor cache reuses climate-tile samples across columns");
+        c.True(bakeScratch.Contains("TryGetBlockIdGetColor"),
+            "climate-untinted blocks reuse one GetColor per BlockId per section");
+        c.True(bakeScratch.Contains("TryGetSeasonTile"),
+            "season rel is cached per 16×16 tile during section bake");
+        c.True(bakeScratch.Contains("x >> 4"),
+            "GetColor cache tile is 16×16 blocks for higher reuse on flat terrain");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSeasonBake.cs"))
+                .Contains("TryGetSectionTextureMean"),
+            "SampleTextureMean hits the per-section BlockId cache");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSurfaceMix.cs"))
+                .Contains("StackDeterminedByTopOnly"),
+            "stack sampler stops after the top when FinishColumnPaint keeps topRgb");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSurfaceMix.cs"))
+                .Contains("NeedsTextureMean"),
+            "texture mean is skipped outside deep-winter camouflage");
+        c.True(File.Exists(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-efficiency.md")),
+            "efficiency plan (citations + A/B tiers) ships in-repo");
+        c.True(scoutFill.Contains("TakeNextPending"),
+            "overlay scouts fill pending FIFO without heldNear starvation");
+        c.True(scoutFill.Contains("FlushHeldToPending"),
+            "legacy heldNear/heldFar queues drain into pending each tick");
+        c.True(scoutFill.Contains("WaitChunksForceCaptureTicks"),
+            "WaitChunks enters Capture on a hard deadline, not only when all map chunks load");
+        c.True(scoutFill.Contains("WaitChunksRotateTicks"),
+            "WaitChunks pile-up rotates scouts into paint handoff");
+        c.True(scoutFill.Contains("MaxFarWaitChunksLive"),
+            "far-ring WaitChunks capped so near paint is not starved");
+        c.True(scoutFill.Contains("WaitChunksHandoffTicks"),
+            "WaitChunks tries paint handoff before forcing Capture");
+        c.True(scoutFill.Contains("WaitChunksRotateMinLive"),
+            "WaitChunks rotation triggers at partial grid load, not all 16");
+        c.True(scoutFill.Contains("captureStall"),
+            "Capture timeout releases slot instead of parking until maxWait");
+        c.Eq(4, LodLoginScoutFill.MaxNearWaitChunksLive,
+            "at most 4 spawn-disk scouts park in WaitChunks concurrently");
+        c.Eq(6, LodLoginScoutFill.MaxFarWaitChunksLive,
+            "at most 6 far scouts park in WaitChunks while paint queue drains");
+        c.Eq(8, LodLoginScoutFill.WaitChunksForceCaptureTicks,
+            "every scout enters Capture at ~400ms even without full map");
+        c.Eq(16, LodLoginScoutFill.WaitChunksRotateTicks,
+            "WaitChunks pile-up rotates into paint at ~800ms");
+        c.Eq(24, LodLoginScoutFill.MaxWaitTicks,
+            "chunk wait safety cap ~1.2s at 50ms pulse");
+        c.Eq(6, LodLoginScoutFill.MaxCaptureWaitTicks,
+            "capture hands off or stalls out at ~300ms");
+        c.True(scoutFill.Contains("TryResidentPaintHandoff"),
+            "HasDataSet revisits hand off to paint without long WaitChunks");
+        c.True(scoutFill.Contains("SetPaintStarving"),
+            "paint queue starvation tightens scout wait budgets");
+        c.Eq(64, LodLoginScoutFill.ResidentFastHandoffCols,
+            "resident sections with full footprint skip WaitChunks");
+        c.Eq(4, LodLoginScoutFill.PaintStarveForceCaptureTicks,
+            "starving scouts force Capture at ~200ms");
+        c.Eq(4, LodLoginScoutFill.MaxWaitHotKeyCooldown,
+            "maxWait hot keys defer respawn for 4 ticks");
+        c.Eq(1, LodLoginScoutFill.ChunkPressureMinLive,
+            "chunkPressure engages on any paint starve with live scouts");
+        c.True(scoutFill.Contains("IsColdNearVisit"),
+            "cold-near annulus keys detected outside stream hold inside spawn disk");
+        c.True(scoutFill.Contains("CanEnterCapture"),
+            "Capture gated on map/resident readiness while paint starves");
+        c.True(scoutFill.Contains("WarmRingL0CellEstimate"),
+            "warm-ring L0 estimate from stream-hold radius");
+        c.True(scoutFill.Contains("CaptureStallCooldownTicks"),
+            "captureStall uses escalating cooldown to break hot-loop");
+        c.Eq(8, LodLoginScoutFill.MaxColdNearLiveWhenStarving(16),
+            "at most half the scout fleet on cold-near keys while paint starves");
+        c.True(bake.Contains("OrderVisitKeysByResidency"),
+            "visit plan prefers resident map chunks (A4)");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
+                .Contains("warm-ring-probe"),
+            "warm-ring telemetry proves cliff geometry near finished~358");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
+                .Contains("stall-forensics"),
+            "stall forensics logs distance, loaded chunks, reveal, host on captureStall/maxWait");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
+                .Contains("stalled-live-probe"),
+            "stalled-live-probe aggregates live scouts in cliff band when paint starves");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
+                .Contains("enter the next huge square"),
+            "walltime plan documents user hypothesis verdict");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
+                .Contains("Scouts primary; hop-unlock only if proven"),
+            "walltime plan locks scouts as primary bake workers");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
+                .Contains("hop-unlock pump"),
+            "Plan C is stream unlock pump only, not hop-sweep replacement");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
+                .Contains("1.0.39 hop-unlock pump"),
+            "walltime plan documents shipped hop-unlock in 1.0.39");
+        c.True(bake.Contains("LodLoginHopUnlock"),
+            "overlay integrates hop-unlock pump for cold annulus");
+        c.True(bake.Contains("hopUnlock.TryFirstHop"),
+            "first hop-unlock on all-WaitChunks stall signature");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
+                .Contains("TryPickNearAnnulusTarget"),
+            "hop-unlock prefers near-cliff annulus keys not outer disk");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
+                .Contains("failedKeyBan"),
+            "hop-unlock bans keys that stay loaded=0 after dwell");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
+                .Contains("1.0.41 near-cliff annulus"),
+            "walltime plan documents 1.0.41 annulus fix");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
+                .Contains("1.0.43 stream spawn-solid"),
+            "walltime plan documents 1.0.43 stream-1024 residency fix");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
+                .Contains("1.0.44 frontier-relative stream"),
+            "walltime plan documents 1.0.44 progressive overlay stream");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
+                .Contains("1.0.45 chunkdb backpressure"),
+            "walltime plan documents 1.0.45 autosave/chunkdb flood fix");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "docs", "plans", "login-bake-walltime-1033.md"))
+                .Contains("RequestChunkColumnsQueueSize"),
+            "plan documents optional servermagicnumbers FIFO bump");
+        c.Eq(1024, LodLoginBakeViewBoost.SweepStreamViewDistanceBlocks,
+            "overlay vanilla stream floor is spawn-solid so cliff L0s stay resident");
+        c.Eq(1024, LodLoginBakeViewBoost.MinOverlayStreamBlocks,
+            "progressive stream never drops below spawn-solid 1024");
+        c.True(LodLoginBakeViewBoost.IsSweepHoldValue(1024),
+            "1024 stream hold is never restored as the player slider");
+        c.True(LodLoginBakeViewBoost.IsSweepHoldValue(
+                LodLoginBakeViewBoost.OverlayStreamBlocks(639)),
+            "grown overlay stream is never restored as the player slider");
+        c.True(!bake.Contains("hopCameraPos"),
+            "player CameraPos stays at pickup — hopping it fought server stream");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
+                .Contains("x = pickupX")
+            && File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
+                .Contains("z = pickupZ"),
+            "hop StreamCenter stays at pickup so WorldManager matches vanilla VD");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
+                .Contains("priority: true"),
+            "unlock RequestUp is priority so it is not the refused 17th hold");
+        c.Eq(48, LodLoginHopUnlock.FailedKeyDwellTicks,
+            "failed hop targets banned after dwell ticks");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
+                .Contains("PumpUnlockResidency"),
+            "hop-unlock forces map-chunk residency via scout-host path");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakePlayerMove.cs"))
+                .Contains("RequestL0MapChunksVisible"),
+            "unlock marks all four L0 map columns visible");
+        c.True(bake.Contains("PumpUnlockResidency"),
+            "overlay pumps forced residency each tick while hop active");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
+                .Contains("dim, UnlockHoldRadiusChunks"),
+            "hop pump SetChunkColumnVisible is the L0 neighbourhood, not the full stream disk");
+        c.True(bake.Contains("SpawnSolidStreamChunks"),
+            "overlay visible ring stays on spawn-solid; vanilla VD covers past 1024");
+        c.Eq(1, bake.Split("spawnRevealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius").Length - 1,
+            "hop must not reset spawnRevealRadius (that re-dumps the visible disk)");
+        c.Eq(8, LodLoginChunkRequestBudget.MaxVisiblePerTick,
+            "overlay SetChunkColumnVisible is budgeted per tick");
+        c.Eq(16, LodLoginChunkRequestBudget.VisibleRequestsPerSecond,
+            "overlay visibility uses a rate token bucket, not an open-loop flood");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginChunkRequestBudget.cs"))
+                .Contains("TransitionToBackground"),
+            "overlay-to-background handoff retains coordinator generation");
+        c.Eq(128, LodLoginHopUnlock.MaxResidencyForceTicks,
+            "hop holds unlock up to 128 ticks while forcing residency");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
+                .Contains("streamViewBlocks"),
+            "hop residency probe logs overlay stream VD vs player/camera");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginHopUnlock.cs"))
+                .Contains("streamViewBlocks: streamBlocks"),
+            "hop-unlock logs the live overlay stream at retarget");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
+                .Contains("hop-unlock"),
+            "hop-unlock telemetry for runId 1039 playtest");
+        c.Eq(4, LodLoginScoutFill.MaxColdNearWaitChunksWhenStarving,
+            "several cold-near WaitChunks streamers now that spawn-solid is inside vanilla VD");
+        c.True(scoutFill.Contains("PendingPickScore"),
+            "pending pick scores chunk residency before cold rim keys");
+        c.True(scoutFill.Contains("spawnCooldown"),
+            "maxWait keys enter hot-key cooldown instead of immediate respawn");
+        c.True(bakeScratch.Contains("BeginOverlayGetColorCache"),
+            "overlay-wide GetColor dedup cache spans L0 sections");
+        c.True(bakeScratch.Contains("TryGetOverlayGetColor"),
+            "SampleVanillaColor checks overlay cache before section cache");
+        c.True(bake.Contains("resumePendingScratch"),
+            "resume snapshot reuses pending scratch instead of new List each save");
+        c.True(bake.Contains("paintStarveTicks"),
+            "overlay detects empty paint queue while scouts live");
+        c.True(File.ReadAllText(Path.Combine(
+                GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"))
+                .Contains("paintStarveTicks"),
+            "scout-budget telemetry includes paint starvation watchdog");
+        c.True(scoutFill.Contains("RequestUpRetryTicks"),
+            "scouts retry KeepLoaded if the server refused an Up at the hold cap");
+        c.True(bake.Contains("scoutFill.HeldCount"),
+            "overlay does not finish while far/near keys sit in the mixed-fill hold queues");
+        c.True(bake.Contains("PaintReadyScouts") && bake.Contains("scoutReady.Enqueue(key)"),
+            "failed GetColor paint retries only while the scout is still live");
+        string terrain = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodTerrainRenderer.cs"));
+        c.True(terrain.Contains("public bool HasDrawableMesh"),
+            "LOD renderer exposes drawable-mesh wait so scouts do not despawn on a hole");
+        c.True(terrain.Contains("public bool HasEmptyMeshClaim"),
+            "LOD renderer exposes sticky empty claims so Mesh wait can release the slot");
+        c.True(terrain.Contains("bool parentHasMesh = HasDrawableMesh(parentKey)"),
+            "parent coverage uses drawable meshes, not sticky emptyMeshKeys");
+        c.True(terrain.Contains("HasDrawableMesh(parent), AllChildrenCovered(parent)"),
+            "eviction PreferParentCoverage ignores empty-mesh claims");
+        c.True(terrain.Contains("!HasDrawableMesh(nk)"),
+            "neighbour mesh request retries past sticky empty claims");
+        int pruneAt = terrain.IndexOf("void PruneRenderDirty()", StringComparison.Ordinal);
+        c.True(pruneAt >= 0, "renderer prunes RenderDirty");
+        string prune = terrain.Substring(pruneAt, Math.Min(1800, terrain.Length - pruneAt));
+        c.True(prune.Contains("!HasAnyMesh(key)"),
+            "RenderDirty prune still treats empty claims as in-flight so it does not drop their jobs");
+        c.True(scoutFill.Contains("RequestUp(key, scout.Cx, scout.Cz, radius, dim, x, y, z)"),
+            "client sends visit-cell XYZ so the server spawns the viewer on that column");
+        c.Eq(16, LodLoginScoutFill.MaxConcurrent, "all 16 scout slots must work in parallel");
+        c.Eq(8, LodLoginScoutFill.MaxNearConcurrent,
+            "half the slots stay on spawn-solid mesh wait");
+        c.Eq(8, LodLoginScoutFill.MaxFarConcurrent,
+            "half the slots paint the far ring so overlay % moves during near mesh waits");
+        c.Eq(LodLoginScoutFill.MaxNearConcurrent + LodLoginScoutFill.MaxFarConcurrent,
+            LodLoginScoutFill.MaxConcurrent,
+            "near+far caps fill all 16 slots");
+        c.Eq(4, LodLoginScoutFill.LocalVisitRevealChunks,
+            "scouts stream a local neighbourhood around visit cells");
+        c.Eq(2, LodLoginScoutFill.FarRevealChunks,
+            "far KeepLoaded is the L0 footprint, not an 8-chunk tessellation disk");
+        c.Eq(LodLoginScoutFill.NearRevealChunks, LodScoutHostSystem.MaxHoldRadiusChunks,
+            "server KeepLoaded radius matches the near scout neighbourhood");
+        c.Eq(18, LodScoutHostSystem.MaxConcurrentHolds,
+            "server hold cap is 16 scouts plus residency pump plus spare");
+        c.Eq(2, LodScoutHostSystem.MaxForceSendPerTick,
+            "ForceSend is budgeted so 16 KeepLoaded rings do not dump in one tick");
+        c.Eq(2, LodScoutHostSystem.MaxPriorityLoadsPerTick,
+            "LoadChunkColumnPriority is staggered so chunkdb can pause for autosave");
+        c.Eq(24, LodScoutHostSystem.MaxPriorityLoadsInFlight,
+            "priority-load in-flight window is completion-gated");
+        c.Eq(256, LodScoutHostSystem.MaxPriorityLoadQueue,
+            "priority-load queue is capped");
+        c.Eq(256, LodScoutHostSystem.MaxForceSendQueue,
+            "ForceSend queue is capped");
+        c.Eq(32, LodScoutHostSystem.MaxPendingUps,
+            "refused KeepLoaded Ups queue instead of going silent");
+
+        string scoutViewer = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutViewerEntity.cs"));
+        c.True(scoutViewer.Contains("class LodScoutViewerEntity : Entity"),
+            "scout viewer is a real Vintage Story Entity, not a token");
+        c.True(!scoutViewer.Contains("class LodScoutViewerEntity : EntityPlayer"),
+            "scout viewer is not EntityPlayer (that type is tied to IPlayer; VS has no dummy player)");
+        c.True(scoutViewer.Contains("AllowOutsideLoadedRange => true"),
+            "scout viewers may sit on far columns before those columns are loaded");
+        c.True(scoutViewer.Contains("StoreWithChunk => false"),
+            "scout viewers are not saved with the chunk (players are stored separately)");
+        c.True(scoutViewer.Contains("AlwaysActive"),
+            "scout viewers stay Active far from the real player");
+        c.True(scoutViewer.Contains("ShouldDespawn => !Alive"),
+            "Die() can actually remove scout viewers; they do not stick after teardown");
+        c.True(scoutViewer.Contains("LodVsCompat.TryUpdatePartitioning"),
+            "1.22.7: UpdatePartitioning is invoked through reflection");
+        c.True(scoutViewer.Contains("LodVsCompat.TryIndexLoadedEntity"),
+            "1.22.7: LoadedEntities is not assumed on IWorldAccessor");
+        c.True(!scoutViewer.Contains("api.World.LoadedEntities"),
+            "scout spawn does not touch IWorldAccessor.LoadedEntities (missing on 1.22.7)");
+        c.True(!scoutViewer.Contains("viewer.UpdatePartitioning()"),
+            "scout spawn does not call Entity.UpdatePartitioning directly (missing on 1.22.7)");
+        c.True(scoutViewer.Contains("SpawnPriorityEntity") && scoutViewer.Contains("SpawnEntity"),
+            "viewers spawn through the world entity APIs");
+        c.True(scoutViewer.Contains("IServerWorldAccessor") && scoutViewer.Contains("DespawnEntity"),
+            "server teardown uses DespawnEntity, not only a client LoadedEntities.Remove");
+        c.True(scoutViewer.Contains("despawnScratch"),
+            "teardown reuses the scout despawn list");
+        c.True(scoutFill.Contains("LodScoutViewerEntity.SpawnAt(capi"),
+            "client fill spawns a viewer at the visit cell");
+
+        string scoutHost = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Net", "LodScoutHostSystem.cs"));
+        c.True(scoutHost.Contains("RegisterEntity(LodScoutViewerEntity.ClassName"),
+            "scout viewer class is registered on client and server");
+        c.True(scoutHost.Contains("LodScoutViewerEntity.SpawnAt(sapi"),
+            "server host spawns a viewer entity at the visit cell, not only KeepLoaded");
+        c.True(scoutHost.Contains("keepLoaded: true"),
+            "server keeps scout columns loaded like a player standing there");
+        c.True(scoutHost.Contains("ForceSendChunkColumn"),
+            "server force-sends scout columns to the real player (out of range)");
+        c.True(scoutHost.Contains("UnloadChunkColumn"),
+            "server unloads scout columns on despawn so far centers do not linger");
+        c.True(scoutHost.Contains("LodScoutViewerEntity.DespawnAll"),
+            "teardown despawns every scout viewer entity");
+        c.True(scoutHost.Contains("DespawnEntity"),
+            "server teardown DespawnEntity-s leftover viewers");
+        c.True(scoutHost.Contains("> 160"),
+            "server rejects KeepLoaded anchors beyond the onset disk");
+        c.True(scoutHost.Contains("holds.Count >= MaxConcurrentHolds"),
+            "server caps concurrent scout holds so a client cannot pin the world");
+        c.True(scoutHost.Contains("TryEvictFarthestHold"),
+            "priority RequestUp evicts a far hold instead of queueing forever at cap");
+        c.True(scoutHost.Contains("EnqueuePendingUp"),
+            "server queues extra Ups instead of dropping them at the hold cap");
+        c.True(scoutHost.Contains("MaxForceSendPerTick"),
+            "server ForceSend is per-tick budgeted");
+        c.True(scoutHost.Contains("QueuePriorityLoad")
+            && scoutHost.Contains("LodServerChunkRequestGate"),
+            "KeepLoaded columns enqueue instead of dumping the whole ring on HoldAnchor");
+        c.True(scoutHost.Contains("requestGate.CancelOwner")
+            && scoutHost.Contains("CompletePriority"),
+            "host queue settles stale owner work through the admission gate");
+        c.True(scoutHost.Contains("RequeueMissingHoldColumns")
+            && scoutHost.Contains("NeedsAdmissionRetry"),
+            "HoldAnchor retries columns dropped by MaxPriorityLoadQueue");
+        c.True(scoutHost.Contains("ReclaimStaleInFlight")
+            && scoutHost.Contains("SubmissionGeneration"),
+            "stale InFlight OnLoaded is reclaimed once with generation-guarded CompletePriority");
+        c.True(scoutHost.Contains("existing.Radius == radius"),
+            "HoldAnchor no-ops when the same scout ring is already KeepLoaded");
+        c.True(scoutHost.Contains("Math.Clamp(msg.Radius, 1, MaxHoldRadiusChunks)"),
+            "server KeepLoaded radius is the local neighbourhood, not the onset disk");
+        c.True(scoutHost.Contains("LodVsCompat.TryGetLoadedEntities"),
+            "server teardown walks LoadedEntities through the 1.22.7-safe helper");
+        string vsCompat = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "LodVsCompat.cs"));
+        c.True(vsCompat.Contains("GetMethod(\"UpdatePartitioning\""),
+            "UpdatePartitioning is resolved by reflection for 1.22.7");
+        c.True(vsCompat.Contains("IServerWorldAccessor"),
+            "LoadedEntities is read from IServerWorldAccessor, not IWorldAccessor");
+        string scoutJson = Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "assets", "distantvistas", "entities", "scoutviewer.json");
+        c.True(File.Exists(scoutJson), "scout viewer entity json is packaged");
+        c.True(File.ReadAllText(scoutJson).Contains("\"class\": \"LodScoutViewer\""),
+            "entity json class matches RegisterEntity");
+
+        c.True(bake.Contains("CollectBatchBakeKeys") && bake.Contains("dest.Add("),
             "batch bake counts queued neighbours but still paints them");
         c.True(!bake.Contains("stopBakeSkipIdle++;\n                continue")
             && !bake.Contains("stopBakeSkipIdle++;\r\n                continue"),
@@ -472,8 +1101,33 @@ public static class LoginSweepChecks
             "login bake scales column sweep to boosted view distance");
         c.True(bake.Contains("LodLoginBakePlayerMove.ApplyQuietFrom"),
             "login bake restores pose with quiet client moves");
+        c.True(bake.Contains("LodLoginBakePlayerMove.ApplyExactPickup"),
+            "leftover hops snap back to exact pickup doubles");
         c.True(bake.Contains("SpawnRestoreRadius"),
             "login bake re-requests spawn columns at real view radius");
+        c.True(bake.Contains("finally") && bake.Contains("RestorePlayerPose(requestChunks: success)"),
+            "success, Esc, fail, and world-leave all restore pickup pose");
+
+        string playerMove = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakePlayerMove.cs"));
+        c.True(playerMove.Contains("void ApplyExactPickup"),
+            "player move has an exact-pickup restore");
+        c.True(playerMove.Contains("void WriteExactPickup"),
+            "exact pickup writes Pos and ServerPos");
+        c.True(playerMove.Contains("ServerPos.SetPos(x, y, z)"),
+            "ServerPos gets the same exact doubles as Pos (engine copy-back cannot keep a hop)");
+        c.True(playerMove.Contains("entity.Pos.SetPos(x, y, z)"),
+            "Pos is written with the original doubles");
+        int writeAt = playerMove.IndexOf("void WriteExactPickup", StringComparison.Ordinal);
+        int holdAt = playerMove.IndexOf("void HoldQuiet", writeAt, StringComparison.Ordinal);
+        c.True(writeAt >= 0 && holdAt > writeAt, "WriteExactPickup bounds");
+        string writeExact = playerMove.Substring(writeAt, holdAt - writeAt);
+        c.True(!writeExact.Contains("Math.Floor"),
+            "exact pickup does not Floor XYZ to a chunk origin");
+        c.True(!writeExact.Contains("VisitPosition"),
+            "exact pickup does not snap to a visit-cell column");
+        c.True(!writeExact.Contains("(int)x") && !writeExact.Contains("(int)y") && !writeExact.Contains("(int)z"),
+            "exact pickup does not round XYZ to ints");
 
         string inputLock = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeInputLock.cs"));
@@ -600,25 +1254,24 @@ public static class LoginSweepChecks
             "season change alone has no expire reason");
         c.True(LodLoginSweepWindow.ExpireReason("spring", "spring", 10, 0) == null,
             "in-window same season has no expire reason");
-        c.Eq(LodLoginSweepWindow.StalePaintRevisionReason,
-            LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 0),
-            "stale paint revision recaptures even inside the 30-day window");
-        c.Eq(LodLoginSweepWindow.StalePaintRevisionReason,
-            LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 1),
-            "0.8.70 markers recapture so the streamed ring is persisted");
+        c.True(LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 0) == null,
+            "stale paint revision does not force login teleport inside the 30-day window");
+        c.True(LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 1) == null,
+            "older paint markers stay skipped when the day window holds");
         c.True(LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, LodSurfaceMix.PaintRevision) == null,
             "current paint revision stays skipped when the window holds");
-        c.Eq(LodLoginSweepWindow.StalePaintRevisionReason,
-            LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 2),
-            "paint revision 2 recaptures so 0.8.85 season ground runs once");
-        c.Eq(LodLoginSweepWindow.StalePaintRevisionReason,
-            LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 3),
-            "paint revision 3 recaptures so frosted canopy and frost ground run once");
-        c.Eq(4, LodSurfaceMix.PaintRevision,
-            "paint revision 4 forces one overlay for frosted canopy and frost ground");
-        c.Eq(LodLoginSweepWindow.StalePaintRevisionReason,
-            LodLoginSweepWindow.RecaptureReason("fall", "winter", 10, 0, 0),
-            "stale paint revision still recaptures after a season change");
+        c.True(LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 2) == null,
+            "paint revision 2 does not force login teleport");
+        c.True(LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 3) == null,
+            "paint revision 3 does not force login teleport");
+        c.Eq(9, LodSurfaceMix.PaintRevision,
+            "paint revision 9: canopy GetColor at crown Y, low-ground mist / scout-fill era");
+        c.True(LodLoginSweepWindow.RecaptureReason("fall", "fall", 10, 0, 5) == null,
+            "paint revision 5 does not force login teleport");
+        c.True(LodLoginSweepWindow.RecaptureReason("fall", "winter", 10, 0, 0) == null,
+            "stale paint + season slug change still does not expire (month/day window only)");
+        c.True(LodLoginSweepWindow.StalePaintRevisionReason.Contains("paint revision"),
+            "legacy stale-paint reason string retained for log compatibility");
 
         string window = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepWindow.cs"));
@@ -643,13 +1296,32 @@ public static class LoginSweepChecks
         string gate = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepGate.cs"));
         c.True(gate.Contains("resuming cancelled mid-sweep checkpoint"),
-            "gate always runs when an eligible resume exists");
+            "gate runs when an eligible resume exists and skip would not apply");
+        c.True(gate.Contains("ShouldDropLeftoverResume") || gate.Contains("dropped leftover mid-sweep resume"),
+            "gate drops leftover Esc pause when in-window complete would skip");
+        c.True(gate.Contains("resumeMisses > 0 || unfilledGaps > 0"),
+            "dropped Esc resume with leftover holes names deferred counts, not complete");
         c.True(gate.Contains("empty canvas needs bootstrap sweep"),
             "gate runs bootstrap on empty visited canvas");
         c.True(gate.Contains("still incomplete"),
             "gate runs when audit finds misses and no in-window complete");
         c.True(gate.Contains("skip re-canvas"),
-            "in-window complete marker skips full re-canvas even with leftovers");
+            "in-window complete marker skips full re-canvas when leftovers are small");
+        c.True(gate.Contains("in-window skip blocked"),
+            "large FindMisses / unfilled gaps force a scout fill instead of claiming complete");
+        c.True(gate.Contains("frontier drip"),
+            "small leftover skip names deferred regions instead of implying zero gaps");
+        c.True(LodLoginSweepGate.AllowsInWindowSkip(0, 0),
+            "zero misses and gaps may skip");
+        c.True(LodLoginSweepGate.AllowsInWindowSkip(
+                LodLoginSweepGate.MaxSkipMisses, LodLoginSweepGate.MaxSkipUnfilledGaps),
+            "at-threshold leftovers stay frontier drip");
+        c.False(LodLoginSweepGate.AllowsInWindowSkip(LodLoginSweepGate.MaxSkipMisses + 1, 0),
+            "33 FindMisses blocks in-window skip");
+        c.False(LodLoginSweepGate.AllowsInWindowSkip(0, LodLoginSweepGate.MaxSkipUnfilledGaps + 1),
+            "33 unfilled gaps block in-window skip");
+        c.Eq(32, LodLoginSweepGate.MaxSkipMisses, "skip miss threshold is 32");
+        c.Eq(32, LodLoginSweepGate.MaxSkipUnfilledGaps, "skip gap threshold is 32");
         c.True(gate.Contains("no successful sweep recorded yet"),
             "gate runs when completion marker is missing");
         int idxNoComplete = gate.IndexOf("no successful sweep recorded yet for this world", StringComparison.Ordinal);
@@ -668,7 +1340,7 @@ public static class LoginSweepChecks
         c.True(gate.Contains("visited canvas complete within 30-day window"),
             "gate skips when canvas is complete and in window");
         c.True(gate.Contains("LodLoginSweepWindow.RecaptureReason"),
-            "gate expires on day gap, wall-clock gap, stale paint revision, or calendar month");
+            "gate expires on day gap, wall-clock gap, or calendar month (not paint revision alone)");
         c.True(gate.Contains("WindowStartedUtcMs <= 0"),
             "in-window skip adopts a wall-clock stamp on legacy markers");
 
@@ -678,12 +1350,24 @@ public static class LoginSweepChecks
             "level finalize consults sweep gate before overlay");
         c.True(mod.Contains("Login visit sweep skipped"),
             "skipped sweep logs and drops into play");
+        c.True(mod.Contains("explore pending"),
+            "skip path logs explorePending so DiscoverOnly stall is visible");
+        c.True(mod.Contains("Do not ExploreBake.Clear()"),
+            "in-window skip does not wipe load-queued explore bakes");
+        c.True(mod.Contains("LastUnfilledGaps"),
+            "gate sees renderer unfilled-gap count");
         c.True(!mod.Contains("ClearHandoverDeferral"),
             "skipped sweep does not clear a handover deferral");
         c.False(mod.Contains("LodLoginSweepComplete.RecordSuccess"),
             "skip path must not stamp completion marker");
         c.True(mod.Contains("LoginVisitSweepEnabled"),
             "sweep gated by config flag");
+        c.True(mod.Contains("LoginVisitSweepAllowedHere"),
+            "overlay hop-scan is refused on vanilla multiplayer");
+        c.True(mod.Contains("assist != null && assist.ServerHasMod"),
+            "vanilla MP skip is assist-channel Connected, not Welcome");
+        c.True(mod.Contains("capi.IsSinglePlayer"),
+            "singleplayer still runs the overlay");
         c.True(mod.Contains("LodLoginBakeViewBoost.RecoverPlayerViewIfNeeded"),
             "join restores a leftover 750/1000 slider before play or overlay");
         c.True(new DistantVistasConfig().LoginVisitSweepEnabled,
@@ -698,7 +1382,17 @@ public static class LoginSweepChecks
         c.True(bake.Contains("PlanSeasonExpired"),
             "expired window plans a season revisit, not leftover hops only");
         c.True(bake.Contains("forceRecapture: true"),
-            "season hops recapture streamed columns");
+            "visit-cell neighbourhood recaptures streamed columns");
+        c.True(bake.Contains("forceRecapture: false"),
+            "spawn-disk sweep does not force-recapture every loaded column");
+        c.True(bake.Contains("LodPipeline.SweepLaneSpawn"),
+            "spawn-disk capture keeps its own row cursor so scout rings cannot skip spawn-local rows");
+        c.True(bake.Contains("LodPipeline.SweepLaneVisit"),
+            "visit-cell recapture is a third lane, not a reset of the spawn disk");
+        c.True(!bake.Contains("InvalidateGpuMesh"),
+            "login bake does not drop GPU meshes before swap-in");
+        c.True(bake.Contains("InvalidateMipAncestors(l0Key)"),
+            "visit paint remeshes parents without disposing the live mesh");
         c.True(bake.Contains("visitBakeChanged"),
             "visit bake treats FlagBaked RGB deltas as a completed stop");
 
@@ -706,7 +1400,7 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSeasonBake.cs"));
         c.True(season.Contains("entry.Color = baked"),
             "visit bake overwrites FlagBaked palette RGB in place");
-        c.True(season.Contains("block.GetColor(capi, pos)"),
+        c.True(season.Contains("block.GetColor(capi, LodBakeScratch.Pos(x, y, z))"),
             "visit bake samples vanilla GetColor at the column top");
         c.True(season.Contains("CanVisitBake"),
             "visit bake does not drop snow or climate-untinted tops");
@@ -726,7 +1420,11 @@ public static class LoginSweepChecks
         string view = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeViewBoost.cs"));
         c.True(view.Contains("SweepBoostViewDistanceBlocks = 750"),
-            "login visit holds graphics view at 750 blocks");
+            "login visit Farseer/visit baseline stays 750 blocks");
+        c.True(view.Contains("MinOverlayStreamBlocks = 1024"),
+            "login overlay vanilla stream floor is spawn-solid 1024");
+        c.True(view.Contains("OverlayStreamBlocks"),
+            "overlay vanilla stream grows with filled radius past 1024");
 
         string label = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepBootstrap.cs"));
@@ -741,7 +1439,7 @@ public static class LoginSweepChecks
         c.True(label.Contains("fullDiskRecapture") && label.Contains(":false"),
             "expire planner logs that it did not queue every stored cell");
         c.True(label.Contains("InteriorGapsBetweenStops"),
-            "after the 64-stop sample, expire fills holes between those stops");
+            "after the timed sample, expire fills holes between those stops");
         c.True(label.Contains("RetryMaxVisitStops"),
             "interior gap-fill stays on the short retry budget");
     }
@@ -750,30 +1448,72 @@ public static class LoginSweepChecks
     {
         LodLoginSweepTiming.SetMachineSecPerStop(LodLoginSweepTiming.InitialSecPerStop);
         c.Eq(30.0, LodLoginSweepTiming.TargetMinSec, "sweep target min seconds");
-        c.Eq(160.0, LodLoginSweepTiming.TargetMaxSec, "sweep target max seconds");
-        c.Eq(160.0, LodLoginSweepTiming.BootstrapTargetMaxSec, "bootstrap target max seconds");
-        c.Eq(32.0, LodLoginSweepTiming.RetryTargetSec, "retry pass wall seconds");
-        c.Eq(2.0, LodLoginSweepTiming.InitialSecPerStop, "fallback per-stop when this PC has no samples");
-        c.Eq(36000, LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks,
-            "empty-canvas bootstrap probe radius default (~36 km, 2x diameter)");
-        c.Eq(563, LodLoginSweepBootstrap.BootstrapCellRadius(),
-            "36000 blocks is 563 L0 cells radius at 64-block footprint");
-        c.Eq(64, LodLoginSweepTiming.MinVisitStops, "first-pass floor is 4x the 16-stop shrink");
-        c.Eq(96, LodLoginSweepTiming.MaxVisitStops, "first-pass ceiling leaves headroom above 64");
-        c.Eq(16, LodLoginSweepTiming.MinRetryStops, "retry floor is 2x the 8-stop shrink");
-        c.Eq(32, LodLoginSweepTiming.MaxRetryStops, "retry ceiling stays shorter than first pass");
-        c.Eq(80, LodLoginSweepTiming.VisitStopBudget(2.0, LodLoginSweepTiming.TargetMaxSec),
-            "fallback 2s/stop plans 80 first-pass stops");
-        c.Eq(64, LodLoginSweepTiming.VisitStopBudget(3.6, LodLoginSweepTiming.TargetMaxSec),
-            "3.6s/stop clamps to MinVisitStops 64, not 44 from 160/3.6");
-        c.Eq(16, LodLoginSweepTiming.RetryStopBudget(3.6),
-            "3.6s/stop retry clamps to MinRetryStops 16");
-        c.Eq(80, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
-            "bootstrap visit cap targets ~160s at fallback 2s/stop");
-        c.Eq(80, LodLoginSweepBootstrap.RevisitMaxVisitStops,
-            "revisit visit cap targets ~160s at fallback 2s/stop");
-        c.Eq(16, LodLoginSweepBootstrap.RetryMaxVisitStops,
-            "retry visit cap is the short second hop");
+        c.Eq(420.0, LodLoginSweepTiming.TargetMaxSec, "sweep target max seconds (~7 min)");
+        c.Eq(420.0, LodLoginSweepTiming.BootstrapTargetMaxSec, "bootstrap target max seconds");
+        c.Eq(90.0, LodLoginSweepTiming.RetryTargetSec, "retry pass wall seconds");
+        c.Eq(0.25, LodLoginSweepTiming.InitialSecPerStop, "fallback per-stop with viewer scouts (no hop cost)");
+        c.Eq(0.02, LodLoginSweepTiming.MeasuredMinSecPerStop,
+            "measured parallel rate may be faster than hop-era 0.25");
+        LodLoginSweepTiming.SetMachineSecPerStop(0.04);
+        c.Near(0.04, LodLoginSweepTiming.MachineSecPerStop, 1e-9,
+            "do not clamp live scout rate up to 0.25s/stop");
+        LodLoginSweepTiming.SetMachineSecPerStop(LodLoginSweepTiming.InitialSecPerStop);
+        c.Eq(1680, LodLoginSweepTiming.VisitStopBudget(0.04, LodLoginSweepTiming.TargetMaxSec),
+            "faster than fallback still plans the 1680 ceiling");
+        var batch = new LodLoginSweepTiming();
+        batch.BeginSession(0.25);
+        c.Near(0.25, batch.SecondsPerStop, 1e-9, "seeded ETA before any painted stop");
+        batch.NoteFinished(24);
+        c.Eq(24, batch.SampleCount, "a 24-scout PaintReadyScouts tick counts 24 stops, not 1");
+        c.True(batch.SecondsPerStop < 0.05, "immediate batch finish is not 0.25s per stop");
+        c.True(batch.EstimateRemainingSec(24, 1680) < 1680 * 0.1,
+            "ETA after a parallel batch does not assume 0.25s/stop");
+        c.Eq(LodLoginBakeViewBoost.SweepVisitRadiusBlocks, LodLoginSweepBootstrap.EmptyCanvasBootstrapRadiusBlocks,
+            "bootstrap disk is Farseer onset at the 750 hold (4.5× + 700), not a 288 km sparse probe");
+        c.Eq(
+            (int)Math.Ceiling(LodLoginBakeViewBoost.SweepVisitRadiusBlocks / (double)LodSection.SectionBlocks),
+            LodLoginSweepBootstrap.BootstrapCellRadius(),
+            "bootstrap cell radius matches the onset disk");
+        c.Eq(4075, LodLoginBakeViewBoost.SweepVisitRadiusBlocks,
+            "750-block hold × 4.5 + 700 is 4075 blocks (Farseer onset, not a void band)");
+        c.Eq(16384, LodLoginSweepBootstrap.MaxBootstrapClassifyCells,
+            "classify ceiling covers the ~12k L0 onset disk");
+        c.Eq(4, LodLoginScoutFill.LocalVisitRevealChunks,
+            "scouts stream a local neighbourhood around visit cells");
+        c.Eq(1024, LodLoginSweepBootstrap.SpawnPriorityRadiusBlocks,
+            "bootstrap visits a 1024-block spawn neighbourhood before the rim");
+        c.Eq(1024.0, LodLoginBake.SpawnSolidRadiusBlocks,
+            "overlay waits for drawable meshes inside 1024 blocks of spawn");
+        c.Eq(90.0, LodLoginBake.SpawnReadyTimeoutSec,
+            "spawn-solid wait is 90s, not a 3s frame-time timeout");
+        c.Eq(0.75f, LodLoginBake.FarReadyHorizonScale,
+            "far canvas is ready at 75% of Farseer-onset radius");
+        c.Eq(480, LodLoginSweepTiming.MinVisitStops, "first-pass floor densifies the disk");
+        c.Eq(1680, LodLoginSweepTiming.MaxVisitStops, "first-pass ceiling for concurrent scouts in the 7 min wall");
+        c.Eq(36, LodLoginSweepTiming.MinRetryStops, "retry floor stays shorter than first pass");
+        c.Eq(96, LodLoginSweepTiming.MaxRetryStops, "retry ceiling matches retry wall at 1s/stop");
+        c.Eq(1680, LodLoginSweepTiming.VisitStopBudget(0.25, LodLoginSweepTiming.TargetMaxSec),
+            "0.25s/stop plans 1680 first-pass stops inside the 7 min wall");
+        c.Eq(840, LodLoginSweepTiming.VisitStopBudget(0.5, LodLoginSweepTiming.TargetMaxSec),
+            "0.5s/stop plans 840 first-pass stops inside the 7 min wall");
+        c.Eq(480, LodLoginSweepTiming.VisitStopBudget(1.0, LodLoginSweepTiming.TargetMaxSec),
+            "1s/stop plans 420 first-pass stops");
+        c.Eq(480, LodLoginSweepTiming.VisitStopBudget(2.0, LodLoginSweepTiming.TargetMaxSec),
+            "2s/stop clamps to MinVisitStops 480");
+        c.Eq(480, LodLoginSweepTiming.VisitStopBudget(3.6, LodLoginSweepTiming.TargetMaxSec),
+            "3.6s/stop clamps to MinVisitStops 480");
+        c.Eq(36, LodLoginSweepTiming.RetryStopBudget(3.6),
+            "3.6s/stop retry clamps to MinRetryStops 36");
+        c.Eq(1680, LodLoginSweepBootstrap.BootstrapMaxVisitStops,
+            "bootstrap visit cap targets ~7 min at fallback 0.25s/stop");
+        c.Eq(1680, LodLoginSweepBootstrap.RevisitMaxVisitStops,
+            "revisit visit cap targets ~7 min at fallback 0.25s/stop");
+        c.Eq(96, LodLoginSweepBootstrap.RetryMaxVisitStops,
+            "retry visit cap hits MaxRetryStops at fallback 0.5s/stop");
+        c.Eq(96, LodLoginSweepTiming.MaxRetryStops,
+            "retry ceiling is 96");
+        c.True(LodLoginSweepBootstrap.RetryMaxVisitStops <= LodLoginSweepTiming.MaxVisitStops,
+            "retry hop is not longer than the first pass");
 
         var harvest = LodLoginSweepTimingStore.HarvestSecPerStop(new[]
         {
@@ -784,8 +1524,8 @@ public static class LoginSweepChecks
         });
         c.Eq(1, harvest.Count, "log harvest keeps budgeted passes and drops 300+ hole hops");
         c.True(Math.Abs(harvest[0] - (43.0 / 30.0)) < 0.01, "harvested rate is 43s / 30 stops");
-        c.Eq(40, LodLoginSweep.MaxChunkWaitTicks, "chunk wait capped ~2.0s at 50ms pulse for 750 view");
-        c.Eq(28, LodLoginSweep.MaxCaptureWaitTicks, "capture wait capped ~1.4s at 50ms pulse for recapture");
+        c.Eq(24, LodLoginSweep.MaxChunkWaitTicks, "chunk wait capped ~1.2s at 50ms pulse");
+        c.Eq(16, LodLoginSweep.MaxCaptureWaitTicks, "capture wait capped ~0.8s at 50ms pulse");
         c.Eq(3, LodLoginSweepBootstrap.OpenOceanMaxSamples,
             "open-ocean full-bake samples capped for 1-min sweep");
 
@@ -794,7 +1534,15 @@ public static class LoginSweepChecks
         c.True(bootstrap.Contains("BudgetVisitStops"),
             "bootstrap applies hard visit stop budget");
         c.True(bootstrap.Contains("BudgetBootstrapVisitStops"),
-            "bootstrap uses outer-weighted distance-band subsample");
+            "bootstrap spatially subsamples the onset disk");
+        c.True(bootstrap.Contains("SpawnPriorityRadiusBlocks"),
+            "bootstrap spends visit budget on spawn before the Farseer rim");
+        c.True(bootstrap.Contains("(max * 3) / 4"),
+            "bootstrap spends about two thirds of the visit budget near spawn");
+        c.True(bootstrap.Contains("bands - b"),
+            "outer visit bands prefer nearer cells over the silhouette");
+        c.True(bootstrap.Contains("OrderVisitKeysFromCenter"),
+            "bootstrap queues visit keys near-to-far from spawn, not raw key order");
         c.True(bootstrap.Contains("SelectLandVisitCells"),
             "bootstrap full-visits land and coastline ocean");
         c.True(bootstrap.Contains("PickOceanSampleCells"),
@@ -814,6 +1562,17 @@ public static class LoginSweepChecks
 
         string bake = File.ReadAllText(Path.Combine(
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBake.cs"));
+        c.True(bake.Contains("CountMissingSpawnDrawable"),
+            "login overlay waits until spawn-local L0 has drawable meshes");
+        c.True(bake.Contains("SpawnReadyTimeoutSec"),
+            "login overlay does not treat a 3s frame-time settle as complete");
+        c.True(!bake.Contains("StabilizeTimeoutSec = 3.0"),
+            "3s stabilize timeout is gone -- that was the early snapshot");
+        int drainAt = bake.IndexOf("void BeginDraining()", StringComparison.Ordinal);
+        int stabAt = bake.IndexOf("void BeginStabilizing()", drainAt, StringComparison.Ordinal);
+        c.True(drainAt >= 0 && stabAt > drainAt, "BeginDraining bounds");
+        c.True(!bake.Substring(drainAt, stabAt - drainAt).Contains("LoginBakeOverlayActive = false"),
+            "drain keeps the splash up while meshes upload");
         c.True(bake.Contains("PlanBootstrap"),
             "login bake plans first sweep with bootstrap spawn disk");
         c.True(bake.Contains("StampOpenOceanFromSamples"),
@@ -832,6 +1591,95 @@ public static class LoginSweepChecks
             "login bake progress includes ETA suffix");
         c.True(bake.Contains("LodLoginSweepTimingStore.EnsureApplied"),
             "login bake seeds ETA from this PC before planning");
+    }
+
+    static void BootstrapSpawnFirst(Check c)
+    {
+        const int cx = 50;
+        const int cz = 50;
+        var keys = new List<long>();
+        for (int sz = 20; sz <= 80; sz += 2)
+        {
+            for (int sx = 20; sx <= 80; sx += 2)
+                keys.Add(LodWorld.SectionKey(0, sx, sz));
+        }
+
+        List<long> picked = LodLoginSweepBootstrap.BudgetBootstrapVisitStops(keys, cx, cz, 80);
+        c.Eq(80, picked.Count, "bootstrap still respects the visit-stop budget");
+        c.True(picked.Contains(LodWorld.SectionKey(0, cx, cz)),
+            "spawn L0 is in the visit list so coverage is centered on the player");
+
+        long first = picked[0];
+        long last = picked[picked.Count - 1];
+        long firstD = DistSq(first, cx, cz);
+        long lastD = DistSq(last, cx, cz);
+        c.True(firstD <= lastD,
+            "visit queue is near-to-far from spawn, not raw key order (that offset the disk)");
+
+        int innerCells = (int)Math.Ceiling(
+            LodLoginSweepBootstrap.SpawnPriorityRadiusBlocks / (double)LodSection.SectionBlocks);
+        long innerRsq = (long)innerCells * innerCells;
+        int innerPicked = 0;
+        foreach (long key in picked)
+        {
+            if (DistSq(key, cx, cz) <= innerRsq) innerPicked++;
+        }
+        c.True(innerPicked >= 20,
+            "a chunk of the visit budget stays in the spawn neighbourhood");
+        c.True(innerPicked * 2 >= picked.Count,
+            "at least half the subsampled stops stay in the spawn neighbourhood");
+    }
+
+    static long DistSq(long key, int centerSx, int centerSz)
+    {
+        int dx = LodWorld.KeySx(key) - centerSx;
+        int dz = LodWorld.KeySz(key) - centerSz;
+        return (long)dx * dx + (long)dz * dz;
+    }
+
+    static void VisitOnsetEnvelope(Check c)
+    {
+        int sb = LodSection.SectionBlocks;
+        var world = new LodWorld();
+        world.InstallStoredKey(0, 0, 0, applyToParent: true, provisional: false);
+        world.InstallStoredKey(0, 10, 0, applyToParent: true, provisional: false);
+
+        double radius = FarseerVisitOnset.CaptureEnvelopeRadiusBlocks(world, 0, 0, padBlocks: 0);
+        double expected = (10 + 0.5) * sb;
+        c.True(Math.Abs(radius - expected) < 1.0,
+            "envelope radius reaches farthest L0 centre from origin");
+
+        double padded = FarseerVisitOnset.CaptureEnvelopeRadiusBlocks(
+            world, 0, 0, FarseerVisitOnset.EnvelopePadBlocks);
+        c.True(padded > radius, "envelope pad extends past farthest L0");
+
+        c.True(FarseerVisitOnset.IsVisitedForOnset(
+                5, 0, sb, 0, 0, padded, key => world.HasDataSet.Contains(key)),
+            "gap L0 between hop cells is visited via envelope fill");
+        c.False(FarseerVisitOnset.IsVisitedForOnset(
+                200, 200, sb, 0, 0, padded, key => world.HasDataSet.Contains(key)),
+            "far outside envelope stays unvisited for early silhouette");
+        c.True(FarseerVisitOnset.IsVisitedForOnset(
+                10, 0, sb, 0, 0, 0, key => world.HasDataSet.Contains(key)),
+            "exact captured L0 is visited even with zero envelope");
+
+        string onset = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "FarseerVisitOnset.cs"));
+        c.True(onset.Contains("CaptureEnvelopeRadiusBlocks"),
+            "visit-onset paints continuous capture envelope");
+        c.True(onset.Contains("IsVisitedForOnset"),
+            "visit-onset classifies envelope + exact L0");
+        c.True(onset.Contains("MaskRebuildMinMs"),
+            "visit-mask does not full-rebuild on every HasDataSet stamp during overlay");
+        c.True(onset.Contains("FarseerOnsetScaleForMeshedRim"),
+            "Farseer onset uniforms pull to the meshed rim when FlagBaked lags the silhouette");
+
+        string complete = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginSweepComplete.cs"));
+        c.True(complete.Contains("SweepRadiusBlocks"),
+            "complete stamp stores sweep envelope radius");
+        c.True(complete.Contains("SweepOriginX"),
+            "complete stamp stores sweep envelope origin");
     }
 
     static void CreativeMode(Check c)
@@ -855,10 +1703,74 @@ public static class LoginSweepChecks
             GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodLoginBakeViewBoost.cs"));
         c.Eq(2048, LodLoginBakeViewBoost.MaxVanillaViewDistance, "engine view-distance ceiling");
         c.Eq(750, LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks,
-            "sweep holds vanilla view at 750 blocks then restores");
+            "visit/Farseer baseline stays 750 so the FlagBaked disk remains 4075");
+        c.Eq(1024, LodLoginBakeViewBoost.SweepStreamViewDistanceBlocks,
+            "overlay stream floor is spawn-solid 1024");
+        c.Eq(1024, LodLoginBakeViewBoost.MinOverlayStreamBlocks,
+            "MinOverlayStreamBlocks is the spawn-solid floor");
+        c.Eq(1024, LodLoginBakeViewBoost.OverlayStreamBlocks(0),
+            "empty disk uses the 1024 floor");
+        c.Eq(1024, LodLoginBakeViewBoost.OverlayStreamBlocks(358),
+            "358 cliff stays on spawn-solid 1024");
+        c.True(LodLoginBakeViewBoost.OverlayStreamBlocks(639) > 1024,
+            "639 cliff grows overlay stream past 1024");
+        c.Eq(1184, LodLoginBakeViewBoost.OverlayStreamBlocks(639),
+            "finished 639 (~913 blocks) + 256 lead snaps to 1184");
+        c.True(LodLoginBakeViewBoost.OverlayStreamBlocks(639) <= LodLoginBakeViewBoost.MaxVanillaViewDistance,
+            "grown stream never exceeds the engine 2048 ceiling");
+        c.True(LodLoginBakeViewBoost.OverlayStreamBlocks(1680) <= LodLoginBakeViewBoost.MaxVanillaViewDistance,
+            "full 1680 filled disk still fits under 2048");
+        c.True(LodLoginBakeViewBoost.OverlayStreamBlocks(800) > LodLoginBakeViewBoost.OverlayStreamBlocks(639),
+            "stream keeps a lead as finished climbs toward 800+");
+        c.Eq(32, LodLoginBakeViewBoost.StreamGrowStepBlocks,
+            "applied overlay stream grows one vanilla chunk at a time");
+        c.Eq(5000, LodLoginBakeViewBoost.StreamGrowDwellMs,
+            "five seconds between stream steps so chunkdb can drain");
+        c.Eq(800, LodLoginBakeViewBoost.StreamGrowHitchPressureMs,
+            "overlay hitch ≥800ms blocks the next stream grow");
+        c.Eq(1024, LodLoginBakeViewBoost.StepAppliedStream(0, 1184, 0, 0, false),
+            "first apply is spawn-solid 1024, not a 1184 jump");
+        c.Eq(1024, LodLoginBakeViewBoost.StepAppliedStream(1024, 1184, 1000, 1, false),
+            "dwell holds stream at 1024");
+        c.Eq(1056, LodLoginBakeViewBoost.StepAppliedStream(1024, 1184, 6000, 1, false),
+            "after dwell, stream steps +32 toward 1184");
+        c.Eq(1024, LodLoginBakeViewBoost.StepAppliedStream(1024, 1184, 6000, 1, true),
+            "hitch pressure skips stream growth");
+        c.Eq(1024, LodLoginBakeViewBoost.StepAppliedStream(1024, 1184, 6000, 1, false, true),
+            "request pressure skips stream growth");
+        c.Eq(1024, LodLoginBakeViewBoost.StepAppliedStream(
+            1024, 1184, 6000, 1, false, false, lastPressureMs: 5000),
+            "stream growth waits a full quiet dwell after pressure");
+        c.Eq(1056, LodLoginBakeViewBoost.StepAppliedStream(
+            1024, 1184, 10001, 1, false, false, lastPressureMs: 5000),
+            "stream growth resumes after the post-pressure quiet dwell");
+        c.Eq(1184, LodLoginBakeViewBoost.StepAppliedStream(1184, 1184, 20000, 1, false),
+            "applied stream stops at the desired frontier target");
+        c.Eq(4075, LodLoginBakeViewBoost.SweepVisitRadiusBlocks,
+            "visit/Farseer disk stays 4075 (4.5×750+700), not the vanilla stream cap");
+        c.Eq(
+            (int)Math.Ceiling(LodCoveragePolicy.HorizonDrawDistance(
+                LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks)),
+            LodLoginBakeViewBoost.SweepVisitRadiusBlocks,
+            "visit disk reaches Farseer onset (hold × HorizonDrawScale + pad)");
+        c.True(LodLoginBakeViewBoost.SweepVisitRadiusBlocks > LodLoginBakeViewBoost.SweepBoostViewDistanceBlocks,
+            "visit radius is wider than the thin graphics hold");
+        c.True(viewBoost.Contains("SweepVisitRadiusBlocks"),
+            "ChunkSweepRadiusChunks uses SweepVisitRadiusBlocks toward onset");
+        c.True(viewBoost.Contains("SweepStreamViewDistanceBlocks"),
+            "vanilla stream around the player starts at spawn-solid 1024 and grows with the frontier");
+        c.False(viewBoost.Contains("Math.Min(vd, SweepBoostViewDistanceBlocks)"),
+            "visit/scout clamp is not a leftover 750 Math.Min");
+        c.True(viewBoost.Contains("Stream to Farseer onset + 700"),
+            "scout ring clamp still uses the FlagBaked onset disk");
+        c.True(viewBoost.Contains("renderer.OverdrawStart = savedOverdrawStart"),
+            "reassert restores overlay overdraw, not only the slider");
         c.Eq(1000, LodLoginBakeViewBoost.LegacySweepHoldBlocks,
             "old 1000-block hold is leftover, never a restore target");
-        c.True(LodLoginBakeViewBoost.IsSweepHoldValue(750), "750 is the scan hold");
+        c.True(LodLoginBakeViewBoost.IsSweepHoldValue(750), "750 is the visit baseline hold");
+        c.True(LodLoginBakeViewBoost.IsSweepHoldValue(1024), "1024 is the overlay stream floor hold");
+        c.True(LodLoginBakeViewBoost.IsSweepHoldValue(1184), "grown overlay stream is a hold value");
+        c.True(LodLoginBakeViewBoost.IsSweepHoldValue(2048), "engine-ceiling overlay stream is a hold value");
         c.True(LodLoginBakeViewBoost.IsSweepHoldValue(1000), "1000 is the old scan hold");
         c.False(LodLoginBakeViewBoost.IsSweepHoldValue(160), "160 is a player slider");
         c.False(LodLoginBakeViewBoost.IsSweepHoldValue(352), "352 is a player slider");
@@ -894,12 +1806,51 @@ public static class LoginSweepChecks
             "boost writes ClientSettings.viewDistance — DesiredViewDistance alone is overwritten");
         c.True(viewBoost.Contains("ints.Set(ViewDistanceSettingKey, blocks, true)"),
             "boost triggers the graphics viewDistance watcher");
-        c.True(viewBoost.Contains("SweepBoostViewDistanceBlocks"),
-            "boost resolve uses the fixed 750-block bake view");
+        c.True(viewBoost.Contains("SweepStreamViewDistanceBlocks"),
+            "boost resolve uses spawn-solid 1024 floor for vanilla stream, 750 for visit disk");
+        c.True(viewBoost.Contains("OverlayStreamBlocks"),
+            "boost resolve grows vanilla stream with finished radius");
+        string diag = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodScoutSeqDiag.cs"));
+        c.True(diag.Contains("RunId = \"1045\""),
+            "playtest telemetry runId is 1045");
+        c.True(diag.Contains("hitchPressure"),
+            "stream-grow / scout-budget log hitch backpressure");
+        c.True(diag.Contains("desiredStreamBlocks"),
+            "telemetry splits applied vs desired overlay stream");
+        c.True(diag.Contains("priorityLoadQueued"),
+            "scout-host-hold logs staggered KeepLoaded queue depth");
+        c.True(viewBoost.Contains("StepAppliedStream"),
+            "applied overlay stream steps toward OverlayStreamBlocks");
+        c.True(diag.Contains("stream-grow"),
+            "stream-grow logs overlay VD increases past 1024");
         c.True(viewBoost.Contains("FarViewDistanceCap"),
             "view boost clears DV far cap during sweep");
         c.True(viewBoost.Contains("ApplyZFar"),
             "view boost refreshes camera z-far after far-cap change");
+
+        string frontier = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodFrontierScout.cs"));
+        c.Eq(24, LodFrontierScout.MaxExplorePendingYield,
+            "frontier yield matches 16-scout bake parallelism, not 4");
+        c.False(frontier.Contains("farCap < maxR"),
+            "frontier scout does not shrink the fill ring to EffectiveFarDistance");
+        c.True(frontier.Contains("HorizonDrawDistance(vd)"),
+            "frontier scout aims at Farseer onset + 700 after overlay");
+        c.True(!frontier.Contains("ApplyQuiet"),
+            "frontier scout never ApplyQuiet-hops the player");
+        c.True(!frontier.Contains("HoldQuiet"),
+            "frontier scout never HoldQuiet-snaps to visit cells");
+        c.True(!frontier.Contains("HopHold"),
+            "frontier scout has no hop-hold phase");
+        c.True(!frontier.Contains("allowHop"),
+            "frontier scout has no hop permission flag");
+        string modFrontier = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "DistantVistasModSystem.cs"));
+        c.True(modFrontier.Contains("frontierScout?.Tick(capi, pipeline, renderer);"),
+            "post-login frontier ticks without a hop flag");
+        c.True(!modFrontier.Contains("frontierScout?.Tick(capi, pipeline, renderer, LoginVisitSweepAllowedHere())"),
+            "post-login frontier is not passed allowHop");
     }
 
     static void HudHide(Check c)
@@ -1007,5 +1958,58 @@ public static class LoginSweepChecks
             "join quiet does not Harmony-patch vsvaogc");
         c.True(!mod.Contains("HarmonyLib") && !mod.Contains("PatchAll("),
             "Distant Vistas does not Harmony-patch vsvaogc or the present path");
+    }
+
+    static void PostGetColorSimd(Check c)
+    {
+        string simdPath = Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodRgbSimd.cs");
+        c.True(File.Exists(simdPath), "LodRgbSimd.cs ships (post-GetColor SIMD)");
+        string simd = File.ReadAllText(simdPath);
+        c.True(simd.Contains("Vector256"), "SIMD uses Vector256");
+        c.True(simd.Contains("Avx2"), "SIMD uses AVX2 when the CPU has it");
+        c.True(simd.Contains("Vector128"), "SIMD falls back to portable Vector128 (SSE2/NEON)");
+        c.True(simd.Contains("Vector.IsHardwareAccelerated"),
+            "SIMD consults System.Numerics.Vector.IsHardwareAccelerated");
+        c.True(simd.Contains("Vector.Divide") && simd.Contains("Vector<int>"),
+            "QuantizeSpan uses System.Numerics.Vector<int> when AVX2 is absent");
+        c.True(simd.Contains("BlurLandOnceScalar"),
+            "scalar BlurLand kernel remains the bit-identical reference");
+        c.True(simd.Contains("QuantizePacked") && simd.Contains("QuantizeSpan"),
+            "quantize is vectorized on packed RGB buffers");
+        c.True(simd.Contains("UnpackPlanes") && simd.Contains("PackPlanes"),
+            "RGB pack/unpack runs over sampled color planes");
+        c.True(!simd.Contains("GetColor("),
+            "SIMD never calls Block.GetColor");
+        c.True(!simd.Contains("GetColorWithoutTint"),
+            "SIMD never calls GetColorWithoutTint");
+
+        string mix = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "DistantVistas", "src", "Render", "LodSurfaceMix.cs"));
+        c.True(mix.Contains("LodRgbSimd.BlurLandOnce"),
+            "BlurLand uses the SIMD kernel (radius 0 still runs the mask/alpha copy)");
+        c.True(mix.Contains("LodRgbSimd.QuantizePacked"),
+            "Quantize uses the SIMD packed kernel");
+        c.True(mix.Contains("ArrayPool"),
+            "mix / halo / blur scratch come from ArrayPool");
+        c.Eq(0, LodSurfaceMix.BlurRadius, "production BlurRadius stays 0");
+
+        string plan = File.ReadAllText(Path.Combine(
+            GameAssemblies.RepoRoot, "docs", "plans", "login-bake-efficiency.md"));
+        c.True(plan.Contains("SIMD after GetColor (done)"),
+            "efficiency plan marks post-GetColor SIMD done, not a leftover TODO");
+        c.True(plan.Contains("LodRgbSimd"),
+            "efficiency plan names the live SIMD type");
+
+        string simdPlanPath = Path.Combine(
+            GameAssemblies.RepoRoot, "docs", "plans", "simd-after-getcolor.md");
+        c.True(File.Exists(simdPlanPath), "simd-after-getcolor research note ships");
+        string simdPlan = File.ReadAllText(simdPlanPath);
+        c.True(simdPlan.Contains("BlurLandOnceRadiusZero"),
+            "SIMD research documents radius-0 production blur path");
+        c.True(simdPlan.Contains("ForceScalar"),
+            "SIMD research documents scalar fallback / test hook");
+        c.True(simdPlan.Contains("learn.microsoft.com"),
+            "SIMD research cites Microsoft SIMD docs");
     }
 }

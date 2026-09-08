@@ -40,7 +40,6 @@ public static class LodLoginSweepOceanFill
             pipeline.World.Sections[key] = flat;
             pipeline.World.ClassifySparseL0(key, flat);
             pipeline.World.MarkChanged(key);
-            pipeline.InvalidateGpuMesh?.Invoke(key);
             stamped++;
         }
 

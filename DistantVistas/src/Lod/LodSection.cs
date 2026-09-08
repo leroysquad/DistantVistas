@@ -86,6 +86,20 @@ public class LodSection
 
     public readonly List<LodPaletteEntry> Palette = new();
 
+    /// <summary>True when any palette row is visit-baked (GetColor RGB, no live tint).</summary>
+    public bool HasVisitPaint
+    {
+        get
+        {
+            for (int i = 0; i < Palette.Count; i++)
+            {
+                if ((Palette[i].Flags & LodPaletteEntry.FlagBaked) != 0)
+                    return true;
+            }
+            return false;
+        }
+    }
+
     // Snapshot copies of the palette, rebuilt when an entry is added. The mesher
     // only reads these, so every SectionSnapshot can share the same arrays.
     int[]? snapPaletteColors;

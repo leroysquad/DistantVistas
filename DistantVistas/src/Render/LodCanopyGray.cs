@@ -36,6 +36,31 @@ public static class LodCanopyGray
         return IsCanopyPath(path);
     }
 
+    /// <summary>
+    /// Tree leaves and berry bushes that take live GetColor + FlagFrost.
+    /// Tallgrass / flowers stay on the plant ground path (no frost canopy bit).
+    /// </summary>
+    public static bool IsSeasonFoliage(Block? block)
+    {
+        if (block == null || block.BlockId == 0) return false;
+        string? path = block.Code?.Path;
+        if (IsExcludedSeasonFoliagePath(path)) return false;
+        if (block.BlockMaterial == EnumBlockMaterial.Leaves) return true;
+        return IsCanopyPath(path) || IsBushPath(path);
+    }
+
+    public static bool IsSeasonFoliagePath(string? path)
+    {
+        if (IsExcludedSeasonFoliagePath(path)) return false;
+        return IsCanopyPath(path) || IsBushPath(path);
+    }
+
+    public static bool IsBushPath(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        return Has(path, "bush") || Has(path, "shrub");
+    }
+
     public static bool IsExcludedPath(string? path)
     {
         if (string.IsNullOrEmpty(path)) return false;
@@ -45,11 +70,35 @@ public static class LodCanopyGray
             || Has(path, "sapling")
             || Has(path, "bush")
             || Has(path, "shrub")
-            || Has(path, "flower")
+            || IsFlowerPath(path)
             || Has(path, "fern")
             || Has(path, "vine")
             || Has(path, "cattail")
             || Has(path, "reed");
+    }
+
+    /// <summary>Like <see cref="IsExcludedPath"/> but bushes and shrubs are foliage.</summary>
+    public static bool IsExcludedSeasonFoliagePath(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        return Has(path, "tallgrass")
+            || Has(path, "snowlayer")
+            || Has(path, "fallen")
+            || Has(path, "sapling")
+            || IsFlowerPath(path)
+            || Has(path, "fern")
+            || Has(path, "vine")
+            || Has(path, "cattail")
+            || Has(path, "reed");
+    }
+
+    /// <summary>
+    /// Vanilla flower-* codes, not berrybush-*-flowering (Contains "flower" alone matches that).
+    /// </summary>
+    public static bool IsFlowerPath(string? path)
+    {
+        if (string.IsNullOrEmpty(path)) return false;
+        return Has(path, "flower") && !Has(path, "flowering");
     }
 
     public static bool IsCanopyPath(string? path)
@@ -57,7 +106,8 @@ public static class LodCanopyGray
         if (string.IsNullOrEmpty(path)) return false;
         return Has(path, "leaves")
             || Has(path, "pine")
-            || Has(path, "conifer");
+            || Has(path, "conifer")
+            || Has(path, "needles");
     }
 
     /// <summary>

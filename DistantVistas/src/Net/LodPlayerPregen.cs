@@ -47,6 +47,7 @@ public class LodPlayerPregen
     readonly LodPipeline pipeline;
     readonly int centreCx, centreCz, radiusChunks, perSecond, maxInFlight;
     readonly bool skipExistingLoads;
+    readonly string loadOwnerPrefix = "pregen:" + Guid.NewGuid().ToString("N");
     double lastIdleCheckX, lastIdleCheckZ;
     long lastIdleMoveMs;
     bool idlePosSeeded;
@@ -337,11 +338,27 @@ public class LodPlayerPregen
                     // sweeping off nothing subscribes that event. QueueColumn dedups,
                     // so on a dedicated server, where the event fires too, the column
                     // still captures once.
-                    workIndex++; started++;
-                    sapi.WorldManager.LoadChunkColumnPriority(cx, cz, new ChunkLoadOptions
+                    LodScoutHostSystem? host = LodScoutHostSystem.ServerInstance;
+                    if (host == null)
                     {
-                        OnLoaded = () => pipeline.QueueColumn(cx, cz),
-                    });
+                        gated = true;
+                        continue;
+                    }
+                    string owner = loadOwnerPrefix + ":" + workIndex;
+                    LodServerQueueDecision queued = host.QueuePriorityLoad(
+                        owner,
+                        cx,
+                        cz,
+                        dim: 0,
+                        keepLoaded: false,
+                        onLoaded: () => pipeline.QueueColumn(cx, cz),
+                        LodServerChunkWorkPriority.Background);
+                    if (queued == LodServerQueueDecision.Dropped)
+                    {
+                        gated = true;
+                        continue;
+                    }
+                    workIndex++; started++;
                     Indexed++;
                     continue;
 
