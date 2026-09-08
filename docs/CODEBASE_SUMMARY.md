@@ -3,6 +3,8 @@
 **Bot-oriented map of the repository.** Read this before crawling. For architecture deep-dive see [DESIGN.md](../DESIGN.md). For fork rationale see [docs/WHAT-WE-DO.md](WHAT-WE-DO.md).
 
 > **Structural freedom (user policy 2026-09-07):** Distant Vistas forked Vintage Horizons, but **VH code structure is not sacred**. Future agents may streamline, relocate modules, rewrite pipelines, or redesign internals for clarity, fluency, or performance when it improves the product. Prefer **product invariants** (eviction policy, no cake plates in FOV, live `GetColor` bake, no autosave/FIFO death, exact pickup restore, etc.) over preserving VH-shaped architecture. Do not treat “Horizons did it this way” as a constraint.
+>
+> **Organization / contextualism (user policy 2026-09-07):** Prefer **co-location by concern**. If code is about one topic, keep it in one space — do not scatter parsing/logic for the same concern across hodgepodge files. Adjacent/relevant context must be quickly identifiable for both human coders and AI agents. Goal: minimize search and recon time so cognition focuses on the work. When refactoring under structural freedom, regroup modules for **locality of reference** (login bake together, mesh eviction together, splash/GL together, etc.), not VH historical layout.
 
 ---
 

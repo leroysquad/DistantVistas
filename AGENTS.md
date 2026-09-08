@@ -17,6 +17,14 @@ Distant Vistas forked Vintage Horizons historically, but **VH code structure is 
 
 Do **not** block refactors with “Horizons did it this way” or “the file map says X owns Y.” Update docs when structure changes.
 
+### Organization / contextualism (user policy 2026-09-07)
+
+Prefer **co-location by concern**. If code is about one topic, keep it in one space — do not scatter parsing/logic for the same concern across hodgepodge files. Adjacent/relevant context must be quickly identifiable for both human coders and AI agents.
+
+**Goal:** minimize search and recon time so cognition focuses on the work.
+
+When refactoring under structural freedom, regroup modules for **locality of reference** — e.g. login bake together, mesh eviction together, splash/GL together — not VH historical layout.
+
 ## Repo identity
 
 - **Product:** Distant Vistas (fork of Vintage Horizons)
