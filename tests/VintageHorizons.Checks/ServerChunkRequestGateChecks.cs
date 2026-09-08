@@ -12,6 +12,7 @@ public static class ServerChunkRequestGateChecks
         LoginWorkPreemptsBackground(c);
         ForceSendIsBurstBounded(c);
         PressureUsesOutstandingAgeAndHysteresis(c);
+        StaleInFlightReclaimsOneCredit(c);
         ClientPressureUsesStatusAndHeartbeat(c);
     }
 
@@ -201,6 +202,49 @@ public static class ServerChunkRequestGateChecks
         gate.BeginTick(1150);
         gate.EndTick(1150);
         c.False(gate.PressureActive, "pressure clears after the configured quiet hysteresis");
+    }
+
+    static void StaleInFlightReclaimsOneCredit(Check c)
+    {
+        var gate = Gate();
+        var column = new LodServerChunkColumn(30, 5, 0);
+        int callbacks = 0;
+        gate.QueuePriority(
+            "owner", column, keepLoaded: true, onLoaded: () => callbacks++,
+            LodServerChunkWorkPriority.Login);
+        gate.BeginTick(0);
+        c.True(gate.TryStartPriority(0, out LodServerPriorityStart start),
+            "stale-reclaim fixture starts one priority load");
+        c.Eq(1, gate.PriorityInFlight, "stale-reclaim fixture holds one in-flight credit");
+
+        c.Eq(0, gate.ReclaimStaleInFlight(500),
+            "age below the stale window does not reclaim");
+        c.Eq(1, gate.PriorityInFlight, "fresh in-flight work stays until OnLoaded or stale age");
+
+        c.Eq(1, gate.ReclaimStaleInFlight(1000),
+            "stale OnLoaded frees exactly one credit through CompletePriority");
+        c.Eq(0, gate.PriorityInFlight, "reclaim returns the in-flight credit");
+        c.Eq(1, gate.PriorityPending, "still-wanted owners are requeued without invoking callbacks");
+        c.Eq(0, callbacks, "stale reclaim does not pretend the column loaded");
+        c.Eq(1, gate.PriorityStaleReclaimed, "stale reclaim is counted once");
+
+        c.False(gate.CompletePriority(
+                column, start.SubmissionGeneration, out _, out _, out _),
+            "late OnLoaded from the reclaimed submission cannot double-credit");
+
+        gate.BeginTick(1050);
+        c.True(gate.TryStartPriority(1050, out LodServerPriorityStart restarted),
+            "requeued owners can start again after reclaim");
+        c.True(restarted.SubmissionGeneration > start.SubmissionGeneration,
+            "restart uses a newer submission generation than the stale flight");
+        c.True(gate.CompletePriority(
+                column, restarted.SubmissionGeneration, out IReadOnlyList<Action> live, out _, out _),
+            "only the live submission generation settles");
+        foreach (Action callback in live) callback();
+        c.Eq(1, callbacks, "owner callback runs once on the live completion");
+        c.False(gate.CompletePriority(
+                column, restarted.SubmissionGeneration, out _, out _, out _),
+            "a second completion cannot release the same credit twice");
     }
 
     static void ClientPressureUsesStatusAndHeartbeat(Check c)

@@ -23,7 +23,8 @@ internal readonly record struct LodServerForceSendColumn(
 
 internal readonly record struct LodServerPriorityStart(
     LodServerChunkColumn Column,
-    bool KeepLoaded);
+    bool KeepLoaded,
+    int SubmissionGeneration);
 
 /// <summary>
 /// Pure admission state for every Distant Vistas server chunk request.
@@ -39,6 +40,7 @@ internal sealed class LodServerChunkRequestGate
         public bool KeepLoaded;
         public bool InFlight;
         public long StartedMs;
+        public int SubmissionGeneration;
     }
 
     sealed class ForceSendState
@@ -69,6 +71,7 @@ internal sealed class LodServerChunkRequestGate
     int forceSendsThisTick;
     int pressureTicks;
     int quietTicks;
+    int nextSubmissionGeneration = 1;
 
     internal LodServerChunkRequestGate(
         int maxPriorityInFlight,
@@ -120,6 +123,7 @@ internal sealed class LodServerChunkRequestGate
     internal long PriorityEnqueued { get; private set; }
     internal long PriorityStarted { get; private set; }
     internal long PriorityCompleted { get; private set; }
+    internal long PriorityStaleReclaimed { get; private set; }
     internal long ForceSendCoalesced { get; private set; }
     internal long ForceSendDropped { get; private set; }
     internal long ForceSendEnqueued { get; private set; }
@@ -234,12 +238,14 @@ internal sealed class LodServerChunkRequestGate
 
             state.InFlight = true;
             state.StartedMs = nowMs;
+            state.SubmissionGeneration = nextSubmissionGeneration++;
             PriorityPending--;
             PriorityInFlight++;
             PriorityInFlightPeak = Math.Max(PriorityInFlightPeak, PriorityInFlight);
             priorityStartsThisTick++;
             PriorityStarted++;
-            start = new LodServerPriorityStart(column, state.KeepLoaded);
+            start = new LodServerPriorityStart(
+                column, state.KeepLoaded, state.SubmissionGeneration);
             return true;
         }
 
@@ -251,11 +257,34 @@ internal sealed class LodServerChunkRequestGate
         out IReadOnlyList<Action> callbacks)
     {
         return CompletePriority(
-            column, out callbacks, out _, out _);
+            column, expectedGeneration: null, out callbacks, out _, out _);
     }
 
     internal bool CompletePriority(
         LodServerChunkColumn column,
+        out IReadOnlyList<Action> callbacks,
+        out bool stillWanted,
+        out bool keepLoaded)
+    {
+        return CompletePriority(
+            column, expectedGeneration: null, out callbacks, out stillWanted, out keepLoaded);
+    }
+
+    internal bool CompletePriority(
+        LodServerChunkColumn column,
+        int submissionGeneration,
+        out IReadOnlyList<Action> callbacks,
+        out bool stillWanted,
+        out bool keepLoaded)
+    {
+        return CompletePriority(
+            column, expectedGeneration: submissionGeneration,
+            out callbacks, out stillWanted, out keepLoaded);
+    }
+
+    internal bool CompletePriority(
+        LodServerChunkColumn column,
+        int? expectedGeneration,
         out IReadOnlyList<Action> callbacks,
         out bool stillWanted,
         out bool keepLoaded)
@@ -265,6 +294,9 @@ internal sealed class LodServerChunkRequestGate
         keepLoaded = false;
         if (!priority.TryGetValue(column, out PriorityState? state)
             || !state.InFlight)
+            return false;
+        if (expectedGeneration.HasValue
+            && state.SubmissionGeneration != expectedGeneration.Value)
             return false;
 
         priority.Remove(column);
@@ -283,6 +315,86 @@ internal sealed class LodServerChunkRequestGate
         }
         callbacks = live;
         return true;
+    }
+
+    /// <summary>
+    /// Free credits whose OnLoaded never arrived. Completes each stale flight once,
+    /// invalidates late callbacks via a new submission generation on requeue, and
+    /// does not invoke owner callbacks (the column may still be cold).
+    /// </summary>
+    internal int ReclaimStaleInFlight(long nowMs)
+    {
+        priorityRemoveScratch.Clear();
+        foreach (KeyValuePair<LodServerChunkColumn, PriorityState> pair in priority)
+        {
+            if (!pair.Value.InFlight)
+                continue;
+            if (nowMs - pair.Value.StartedMs < staleInFlightMs)
+                continue;
+            priorityRemoveScratch.Add(pair.Key);
+        }
+
+        int reclaimed = 0;
+        for (int i = 0; i < priorityRemoveScratch.Count; i++)
+        {
+            LodServerChunkColumn column = priorityRemoveScratch[i];
+            if (!priority.TryGetValue(column, out PriorityState? state) || !state.InFlight)
+                continue;
+
+            int generation = state.SubmissionGeneration;
+            bool keepLoaded = state.KeepLoaded;
+            LodServerChunkWorkPriority workPriority = state.Priority;
+            var owners = new List<KeyValuePair<string, Action?>>(state.Owners.Count);
+            foreach (KeyValuePair<string, Action?> owner in state.Owners)
+                owners.Add(owner);
+
+            if (!CompletePriority(
+                    column, generation, out _, out _, out _))
+                continue;
+
+            PriorityStaleReclaimed++;
+            reclaimed++;
+
+            if (owners.Count == 0)
+                continue;
+
+            // Force-requeue past the pending cap: InFlight converted back to Pending
+            // must not be dropped or a still-wanted hold column is lost forever.
+            if (priority.TryGetValue(column, out PriorityState? existing))
+            {
+                for (int o = 0; o < owners.Count; o++)
+                {
+                    KeyValuePair<string, Action?> owner = owners[o];
+                    existing.Owners[owner.Key] = owner.Value;
+                }
+                existing.KeepLoaded |= keepLoaded;
+                if (!existing.InFlight && workPriority > existing.Priority)
+                {
+                    existing.Priority = workPriority;
+                    loginPriorityOrder.Enqueue(column);
+                }
+                PriorityCoalesced++;
+                continue;
+            }
+
+            var restored = new PriorityState
+            {
+                Priority = workPriority,
+                KeepLoaded = keepLoaded,
+            };
+            for (int o = 0; o < owners.Count; o++)
+            {
+                KeyValuePair<string, Action?> owner = owners[o];
+                restored.Owners[owner.Key] = owner.Value;
+            }
+            priority[column] = restored;
+            PriorityPending++;
+            PriorityPendingPeak = Math.Max(PriorityPendingPeak, PriorityPending);
+            PriorityEnqueued++;
+            PriorityQueue(workPriority).Enqueue(column);
+        }
+        priorityRemoveScratch.Clear();
+        return reclaimed;
     }
 
     internal LodServerQueueDecision QueueForceSend(
@@ -408,6 +520,7 @@ internal sealed class LodServerChunkRequestGate
         PriorityPending = 0;
         PriorityInFlight = 0;
         ForceSendPending = 0;
+        nextSubmissionGeneration = 1;
         PressureActive = false;
         OldestInFlightAgeMs = 0;
         pressureTicks = 0;

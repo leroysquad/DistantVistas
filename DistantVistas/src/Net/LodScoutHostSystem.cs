@@ -406,6 +406,7 @@ public sealed class LodScoutHostSystem : ModSystem
         _ = dt;
         long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
         requestGate.BeginTick(now);
+        requestGate.ReclaimStaleInFlight(now);
         bool allowBackground = holdsByPlayer.Count == 0;
         DrainPriorityLoads(now, allowBackground);
         RequeueMissingHoldColumns();
@@ -681,6 +682,7 @@ public sealed class LodScoutHostSystem : ModSystem
         while (requestGate.TryStartPriority(nowMs, out LodServerPriorityStart start, allowBackground))
         {
             LodServerChunkColumn column = start.Column;
+            int submissionGeneration = start.SubmissionGeneration;
             try
             {
                 sapi.WorldManager.LoadChunkColumnPriority(
@@ -689,23 +691,23 @@ public sealed class LodScoutHostSystem : ModSystem
                     new ChunkLoadOptions
                     {
                         KeepLoaded = start.KeepLoaded,
-                        OnLoaded = () => CompletePriorityLoad(column),
+                        OnLoaded = () => CompletePriorityLoad(column, submissionGeneration),
                     });
             }
             catch
             {
-                CompletePriorityLoad(column);
+                CompletePriorityLoad(column, submissionGeneration);
             }
         }
     }
 
-    void CompletePriorityLoad(LodServerChunkColumn column)
+    void CompletePriorityLoad(LodServerChunkColumn column, int submissionGeneration)
     {
         if (sapi == null) return;
         try
         {
             sapi.Event.EnqueueMainThreadTask(
-                () => SettlePriorityLoad(column),
+                () => SettlePriorityLoad(column, submissionGeneration),
                 "dv-priority-loaded");
         }
         catch
@@ -714,11 +716,12 @@ public sealed class LodScoutHostSystem : ModSystem
         }
     }
 
-    void SettlePriorityLoad(LodServerChunkColumn column)
+    void SettlePriorityLoad(LodServerChunkColumn column, int submissionGeneration)
     {
         if (sapi == null) return;
         if (!requestGate.CompletePriority(
                 column,
+                submissionGeneration,
                 out IReadOnlyList<Action> callbacks,
                 out bool stillWanted,
                 out bool keepLoaded))

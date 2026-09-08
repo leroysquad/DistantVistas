@@ -1049,6 +1049,9 @@ public static class LoginSweepChecks
         c.True(scoutHost.Contains("RequeueMissingHoldColumns")
             && scoutHost.Contains("NeedsAdmissionRetry"),
             "HoldAnchor retries columns dropped by MaxPriorityLoadQueue");
+        c.True(scoutHost.Contains("ReclaimStaleInFlight")
+            && scoutHost.Contains("SubmissionGeneration"),
+            "stale InFlight OnLoaded is reclaimed once with generation-guarded CompletePriority");
         c.True(scoutHost.Contains("existing.Radius == radius"),
             "HoldAnchor no-ops when the same scout ring is already KeepLoaded");
         c.True(scoutHost.Contains("Math.Clamp(msg.Radius, 1, MaxHoldRadiusChunks)"),
