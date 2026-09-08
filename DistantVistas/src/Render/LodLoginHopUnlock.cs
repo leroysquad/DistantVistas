@@ -209,7 +209,7 @@ public sealed class LodLoginHopUnlock
         // Neighbourhood only — 1.0.44 used StreamPumpRadiusChunks (~40) here and
         // dumped thousands of SetChunkColumnVisible into the server FIFO each pump.
         LodLoginBakePlayerMove.RequestChunkColumnsVisible(
-            capi, X, Z, dim, UnlockHoldRadiusChunks);
+            capi, X, Z, dim, UnlockHoldRadiusChunks, "hop-visible");
 
         if (!forceHost && TicksAtPoint % ResidencyPumpIntervalTicks != 0)
         {

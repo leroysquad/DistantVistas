@@ -140,6 +140,7 @@ public sealed class LodLoginBake
     readonly LodLoginHopUnlock hopUnlock = new();
     readonly Queue<long> scoutReady = new();
     readonly Dictionary<long, int> paintResumeCol = new();
+    readonly LodLoginBakePlayerMove.ChunkRingCursor spawnRevealCursor = new();
     readonly List<long> paintOrderScratch = new(64);
     readonly List<long> resumePendingScratch = new(2048);
     readonly List<long> resumeCompletedScratch = new(2048);
@@ -306,6 +307,8 @@ public sealed class LodLoginBake
         stopBakeKeys.Clear();
         revealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
         spawnRevealRadius = LodLoginBakePlayerMove.ChunkVisibleRadius;
+        spawnRevealCursor.Reset();
+        LodLoginChunkRequestBudget.BeginOverlaySession();
         scoutFill.Reset(capi);
         scoutReady.Clear();
         paintResumeCol.Clear();
@@ -782,11 +785,14 @@ public sealed class LodLoginBake
     {
         LogTeleportBegin();
         sweepingTicks++;
-        LodLoginChunkRequestBudget.BeginOverlayTick();
+        LodLoginChunkRequestBudget.BeginOverlayTick(capi.World);
         viewBoost.EnsureBoosted(finished);
         LodScoutSeqDiag.NoteStreamView(viewBoost.LiveStreamViewDistanceBlocks);
         LodScoutSeqDiag.NoteStreamPressure(
-            viewBoost.DesiredStreamViewDistanceBlocks, viewBoost.LastHitchMs, viewBoost.HitchPressure);
+            viewBoost.DesiredStreamViewDistanceBlocks,
+            viewBoost.LastHitchMs,
+            viewBoost.HitchPressure,
+            viewBoost.RequestPressure);
 
         if (sweepingTicks == 1 || sweepingTicks % SpawnRevealEveryTicks == 0)
             GrowRevealAroundStream();
@@ -863,7 +869,9 @@ public sealed class LodLoginBake
             SweepColumnsAroundStream();
 
         int inFlight = scoutFill.LiveCount + scoutFill.HeldCount + scoutReady.Count;
-        if (inFlight == 0 && pending.Count == 0)
+        if (inFlight == 0
+            && pending.Count == 0
+            && LodLoginChunkRequestBudget.PendingSequenceCount == 0)
         {
             LodLoginChunkRequestBudget.EndOverlayTick();
             RestorePlayerPose();
@@ -1232,7 +1240,8 @@ public sealed class LodLoginBake
         int next = Math.Min(revealTarget, spawnRevealRadius + RevealGrowPerTick);
         int dim = capi.World.Player.Entity.Pos.Dimension;
         if (LodLoginBakePlayerMove.RequestChunkColumnRing(
-                capi, streamX, streamZ, dim, spawnRevealRadius, next))
+                capi, streamX, streamZ, dim, spawnRevealRadius, next,
+                spawnRevealCursor, "spawn-reveal"))
             spawnRevealRadius = next;
     }
 
@@ -1573,6 +1582,10 @@ public sealed class LodLoginBake
         renderer.LoginBakeOverlayActive = false;
         renderer.LoginBakeComplete = true;
         progressUi.Reset();
+        if (success)
+            LodLoginChunkRequestBudget.TransitionToBackground();
+        else
+            LodLoginChunkRequestBudget.EndOverlaySession();
         scoutFill.Reset(capi);
         scoutReady.Clear();
         paintResumeCol.Clear();

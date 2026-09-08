@@ -30,21 +30,21 @@ public static class SeasonBakeChecks
     static void LoginBakeGetColorReduction(Check c)
     {
         c.True(LodSurfaceMix.StackDeterminedByTopOnly(
-                LodSurfaceMix.Kind.Snow, "snow-3", 0xFFEEEEEE, 0.5f),
+                LodSurfaceMix.Kind.Snow, "snow-3", unchecked((int)0xFFEEEEEE), 0.5f),
             "snow cap stops stack after top GetColor");
         c.True(LodSurfaceMix.StackDeterminedByTopOnly(
-                LodSurfaceMix.Kind.Plant, "pine-leaves-normal", 0xFF336622, 0.2f),
+                LodSurfaceMix.Kind.Plant, "pine-leaves-normal", unchecked((int)0xFF336622), 0.2f),
             "canopy leaves stop stack in autumn");
         c.False(LodSurfaceMix.StackDeterminedByTopOnly(
-                LodSurfaceMix.Kind.Ground, "soil-low-normal", 0xFF886644, 0.2f),
+                LodSurfaceMix.Kind.Ground, "soil-low-normal", unchecked((int)0xFF886644), 0.2f),
             "ground columns still sample the stack for mix");
         c.Eq(
             LodBakeScratch.GetColorCacheKey(42, 128, 64, 256),
             LodBakeScratch.GetColorCacheKey(42, 131, 64, 263),
             "GetColor cache key shares an 8×8 climate tile");
-        c.Neq(
-            LodBakeScratch.GetColorCacheKey(42, 128, 64, 256),
-            LodBakeScratch.GetColorCacheKey(43, 128, 64, 256),
+        c.False(
+            LodBakeScratch.GetColorCacheKey(42, 128, 64, 256)
+                == LodBakeScratch.GetColorCacheKey(43, 128, 64, 256),
             "GetColor cache key varies by block id");
         LodBakeScratch.BeginOverlayGetColorCache();
         LodBakeScratch.RememberOverlayGetColor(7, 128, 64, 256, unchecked((int)0xFF112233));
@@ -445,30 +445,30 @@ public static class SeasonBakeChecks
             foreach (int step in steps)
             {
                 int[] sample = { 0, 1, 6, 11, 12, 13, 127, 128, 243, 244, 250, 255 };
-                foreach (int r in sample)
-                foreach (int g in sample)
-                foreach (int b in sample)
+                foreach (int red in sample)
+                foreach (int green in sample)
+                foreach (int blue in sample)
                 {
-                    int packed = LodSurfaceMix.Pack(r, g, b);
+                    int packedPixel = LodSurfaceMix.Pack(red, green, blue);
                     LodRgbSimd.ForceScalar = true;
-                    int scalar = LodRgbSimd.QuantizePacked(packed, step);
+                    int scalar = LodRgbSimd.QuantizePacked(packedPixel, step);
                     LodRgbSimd.ForceScalar = false;
-                    int simd = LodRgbSimd.QuantizePacked(packed, step);
-                    int viaMix = LodSurfaceMix.Quantize(packed, step);
+                    int simd = LodRgbSimd.QuantizePacked(packedPixel, step);
+                    int viaMix = LodSurfaceMix.Quantize(packedPixel, step);
                     if (scalar != simd || scalar != viaMix)
                     {
                         mismatches++;
-                        first ??= $"quantize step={step} rgb={r},{g},{b} scalar=0x{scalar:X8} simd=0x{simd:X8} mix=0x{viaMix:X8}";
+                        first ??= $"quantize step={step} rgb={red},{green},{blue} scalar=0x{scalar:X8} simd=0x{simd:X8} mix=0x{viaMix:X8}";
                     }
                 }
 
                 for (int v = 0; v <= 255; v++)
                 {
-                    int packed = LodSurfaceMix.Pack(v, (v * 3) & 255, (v * 7) & 255);
+                    int packedSweep = LodSurfaceMix.Pack(v, (v * 3) & 255, (v * 7) & 255);
                     LodRgbSimd.ForceScalar = true;
-                    int scalar = LodRgbSimd.QuantizePacked(packed, step);
+                    int scalar = LodRgbSimd.QuantizePacked(packedSweep, step);
                     LodRgbSimd.ForceScalar = false;
-                    int simd = LodRgbSimd.QuantizePacked(packed, step);
+                    int simd = LodRgbSimd.QuantizePacked(packedSweep, step);
                     if (scalar != simd)
                     {
                         mismatches++;
@@ -506,24 +506,24 @@ public static class SeasonBakeChecks
         EqRgb(c, spanScalar, spanSimd, "QuantizeSpan SIMD is bit-identical to scalar");
 
         int n = 64 * 64;
-        int[] packed = new int[n];
+        int[] packedPlanes = new int[n];
         int[] r = new int[n];
         int[] g = new int[n];
         int[] b = new int[n];
         int[] round = new int[n];
         for (int i = 0; i < n; i++)
-            packed[i] = LodSurfaceMix.Pack((i * 13) & 255, (i * 29) & 255, (i * 47) & 255);
+            packedPlanes[i] = LodSurfaceMix.Pack((i * 13) & 255, (i * 29) & 255, (i * 47) & 255);
         try
         {
             LodRgbSimd.ForceScalar = false;
-            LodRgbSimd.UnpackPlanes(packed, r, g, b);
+            LodRgbSimd.UnpackPlanes(packedPlanes, r, g, b);
             LodRgbSimd.PackPlanes(r, g, b, round);
         }
         finally
         {
             LodRgbSimd.ForceScalar = false;
         }
-        EqRgb(c, packed, round, "UnpackPlanes/PackPlanes roundtrip");
+        EqRgb(c, packedPlanes, round, "UnpackPlanes/PackPlanes roundtrip");
 
         foreach (int gs in new[] { 1, 7, 8, 64 })
         foreach (int radius in new[] { 0, 1 })

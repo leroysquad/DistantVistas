@@ -39,6 +39,7 @@ public static class LodScoutSeqDiag
     static int overlayDesiredStreamBlocks;
     static int overlayHitchMs;
     static bool overlayHitchPressure;
+    static bool overlayRequestPressure;
 
     static readonly Dictionary<long, long> lastReleaseMsByKey = new();
     static readonly Dictionary<int, (LodScoutEntity.Phase Phase, long Ms)> lastPhaseLogBySlot = new();
@@ -67,6 +68,7 @@ public static class LodScoutSeqDiag
         overlayDesiredStreamBlocks = 0;
         overlayHitchMs = 0;
         overlayHitchPressure = false;
+        overlayRequestPressure = false;
         lastWarmRingMs = 0;
         lastHopResidencyMs = 0;
         lastHopResidencyLoaded = -1;
@@ -93,11 +95,16 @@ public static class LodScoutSeqDiag
 
     public static void NoteStreamView(int blocks) => overlayStreamViewBlocks = blocks;
 
-    public static void NoteStreamPressure(int desiredBlocks, int hitchMs, bool hitchPressure)
+    public static void NoteStreamPressure(
+        int desiredBlocks,
+        int hitchMs,
+        bool hitchPressure,
+        bool requestPressure = false)
     {
         overlayDesiredStreamBlocks = desiredBlocks;
         overlayHitchMs = hitchMs;
         overlayHitchPressure = hitchPressure;
+        overlayRequestPressure = requestPressure;
     }
 
     public static void LogStreamGrow(
@@ -105,7 +112,8 @@ public static class LodScoutSeqDiag
         int streamViewBlocks,
         int desiredStreamBlocks = 0,
         int hitchMs = 0,
-        bool hitchPressure = false)
+        bool hitchPressure = false,
+        bool requestPressure = false)
     {
         Write("LodLoginBakeViewBoost.EnsureBoosted", "stream-grow",
             "{\"finished\":" + finished
@@ -116,6 +124,7 @@ public static class LodScoutSeqDiag
             + ",\"dwellMs\":" + LodLoginBakeViewBoost.StreamGrowDwellMs
             + ",\"hitchMs\":" + hitchMs
             + ",\"hitchPressure\":" + Bool(hitchPressure)
+            + ",\"requestPressure\":" + Bool(requestPressure)
             + ",\"visibleReqTick\":" + LodLoginChunkRequestBudget.IssuedThisTick
             + "}");
     }
@@ -402,8 +411,10 @@ public static class LodScoutSeqDiag
             + ",\"desiredStreamBlocks\":" + overlayDesiredStreamBlocks
             + ",\"hitchMs\":" + overlayHitchMs
             + ",\"hitchPressure\":" + Bool(overlayHitchPressure)
+            + ",\"requestPressure\":" + Bool(overlayRequestPressure)
             + ",\"visibleReqTick\":" + LodLoginChunkRequestBudget.IssuedThisTick
             + ",\"visibleBudgetHit\":" + Bool(LodLoginChunkRequestBudget.Exhausted)
+            + ",\"visibleCoordinator\":" + LodLoginChunkRequestBudget.TelemetryJson()
             + "}");
 
         spawnsWindow = 0;
@@ -654,6 +665,66 @@ public static class LodScoutSeqDiag
             + ",\"pendingUps\":" + pendingUps
             + ",\"forceSendQueued\":" + forceSendQueued
             + ",\"priorityLoadQueued\":" + priorityLoadQueued
+            + "}");
+    }
+
+    public static void LogHostTelemetry(
+        int holdCount,
+        long holdPeak,
+        int activeColumns,
+        int pendingUps,
+        int priorityLoadQueued,
+        long priorityLoadPeak,
+        int priorityLoadInFlight,
+        long priorityLoadOldestMs,
+        bool requestPressure,
+        long priorityLoadCompleted,
+        int forceSendQueued,
+        long forceSendPeak,
+        long holdAccepted,
+        long holdReplaced,
+        long holdRefused,
+        long holdEvicted,
+        long pendingUpDropped,
+        long priorityLoadEnqueued,
+        long priorityLoadCoalesced,
+        long priorityLoadDropped,
+        long priorityLoadDrained,
+        long priorityLoadStale,
+        long forceSendEnqueued,
+        long forceSendCoalesced,
+        long forceSendDropped,
+        long forceSendDrained,
+        long forceSendStale)
+    {
+        Write("LodScoutHostSystem.OnServerTick", "scout-host-telemetry",
+            "{\"holdCount\":" + holdCount
+            + ",\"holdPeak\":" + holdPeak
+            + ",\"activeColumns\":" + activeColumns
+            + ",\"pendingUps\":" + pendingUps
+            + ",\"priorityLoadQueued\":" + priorityLoadQueued
+            + ",\"priorityLoadPeak\":" + priorityLoadPeak
+            + ",\"priorityLoadInFlight\":" + priorityLoadInFlight
+            + ",\"priorityLoadOldestMs\":" + priorityLoadOldestMs
+            + ",\"requestPressure\":" + Bool(requestPressure)
+            + ",\"priorityLoadCompleted\":" + priorityLoadCompleted
+            + ",\"forceSendQueued\":" + forceSendQueued
+            + ",\"forceSendPeak\":" + forceSendPeak
+            + ",\"holdAccepted\":" + holdAccepted
+            + ",\"holdReplaced\":" + holdReplaced
+            + ",\"holdRefused\":" + holdRefused
+            + ",\"holdEvicted\":" + holdEvicted
+            + ",\"pendingUpDropped\":" + pendingUpDropped
+            + ",\"priorityLoadEnqueued\":" + priorityLoadEnqueued
+            + ",\"priorityLoadCoalesced\":" + priorityLoadCoalesced
+            + ",\"priorityLoadDropped\":" + priorityLoadDropped
+            + ",\"priorityLoadDrained\":" + priorityLoadDrained
+            + ",\"priorityLoadStale\":" + priorityLoadStale
+            + ",\"forceSendEnqueued\":" + forceSendEnqueued
+            + ",\"forceSendCoalesced\":" + forceSendCoalesced
+            + ",\"forceSendDropped\":" + forceSendDropped
+            + ",\"forceSendDrained\":" + forceSendDrained
+            + ",\"forceSendStale\":" + forceSendStale
             + "}");
     }
 

@@ -40,3 +40,16 @@ public class ScoutAnchorsClear
 {
     [ProtoMember(1)] public bool Unused;
 }
+
+[ProtoContract]
+public class ScoutHostStatus
+{
+    [ProtoMember(1)] public long Sequence;
+    [ProtoMember(2)] public bool Pressure;
+    [ProtoMember(3)] public int PriorityPending;
+    [ProtoMember(4)] public int PriorityInFlight;
+    [ProtoMember(5)] public int ForceSendPending;
+    [ProtoMember(6)] public long OldestInFlightMs;
+    [ProtoMember(7)] public long PriorityCompleted;
+    [ProtoMember(8)] public long ServerTimeMs;
+}

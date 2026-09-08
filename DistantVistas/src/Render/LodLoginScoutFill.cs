@@ -916,7 +916,8 @@ public sealed class LodLoginScoutFill
         int before = scout.RevealRadius;
         int next = Math.Min(target, scout.RevealRadius + RevealGrowPerTick);
         if (LodLoginBakePlayerMove.RequestChunkColumnRing(
-                capi, scout.X, scout.Z, dim, before, next))
+                capi, scout.X, scout.Z, dim, before, next,
+                scout.RevealCursor, "scout-reveal"))
             scout.RevealRadius = next;
     }
 
@@ -956,7 +957,9 @@ public sealed class LodLoginScoutFill
             farRing ? FarRevealChunks : NearRevealChunks,
             ClampReveal(scout, pickupX, pickupZ, onsetChunks, targetCap, farRing));
         scout.HoldRadius = radius;
-        LodLoginBakePlayerMove.RequestChunkColumnsVisible(capi, x, z, dim, ChunkVisibleRadius);
+        LodLoginBakePlayerMove.RequestChunkColumnsVisible(
+            capi, x, z, dim, ChunkVisibleRadius, "scout-start",
+            farRing ? LodChunkRequestPriority.Background : LodChunkRequestPriority.Critical);
         LodScoutHostSystem.ClientInstance?.RequestUp(key, scout.Cx, scout.Cz, radius, dim, x, y, z);
         LodScoutSeqDiag.LogSpawn(index, key, !farRing, scout.RunSpawnDiskSweep, x, y, z, radius);
         LodScoutSeqDiag.LogPhase(index, scout, null, null, forceTransition: true);

@@ -70,12 +70,19 @@ public static class WireFormatChecks
         c.SeqEq(new[]
         {
             "1:Key:Int64", "2:Cx:Int32", "3:Cz:Int32", "4:Radius:Int32", "5:Dimension:Int32",
-            "6:X:Double", "7:Y:Double", "8:Z:Double",
+            "6:X:Double", "7:Y:Double", "8:Z:Double", "9:Priority:Boolean",
         }, Layout(typeof(ScoutAnchorUp)), "ScoutAnchorUp field numbers");
         c.SeqEq(new[] { "1:Key:Int64" },
             Layout(typeof(ScoutAnchorDown)), "ScoutAnchorDown field numbers");
         c.SeqEq(new[] { "1:Unused:Boolean" },
             Layout(typeof(ScoutAnchorsClear)), "ScoutAnchorsClear field numbers");
+        c.SeqEq(new[]
+        {
+            "1:Sequence:Int64", "2:Pressure:Boolean", "3:PriorityPending:Int32",
+            "4:PriorityInFlight:Int32", "5:ForceSendPending:Int32",
+            "6:OldestInFlightMs:Int64", "7:PriorityCompleted:Int64",
+            "8:ServerTimeMs:Int64",
+        }, Layout(typeof(ScoutHostStatus)), "ScoutHostStatus field numbers");
     }
 
     /// <summary>
@@ -130,6 +137,21 @@ public static class WireFormatChecks
         c.Eq(144.75, up.Z, "scout up Z survives");
         var down = Roundtrip(new ScoutAnchorDown { Key = 9 });
         c.Eq(9L, down.Key, "scout down key survives");
+        var host = Roundtrip(new ScoutHostStatus
+        {
+            Sequence = 17,
+            Pressure = true,
+            PriorityPending = 8,
+            PriorityInFlight = 24,
+            ForceSendPending = 12,
+            OldestInFlightMs = 6000,
+            PriorityCompleted = 42,
+            ServerTimeMs = 123456,
+        });
+        c.Eq(17L, host.Sequence, "host status sequence survives");
+        c.True(host.Pressure, "host pressure survives");
+        c.Eq(24, host.PriorityInFlight, "host in-flight count survives");
+        c.Eq(6000L, host.OldestInFlightMs, "host callback age survives");
     }
 
     static T Roundtrip<T>(T value)

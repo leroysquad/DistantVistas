@@ -82,8 +82,10 @@ public sealed class LodLoginBakeViewBoost
     int desiredStreamBlocks;
     long lastEnsureMs;
     long lastGrowMs;
+    long lastPressureMs;
     int lastHitchMs;
     bool hitchPressure;
+    bool requestPressure;
 
     public LodLoginBakeViewBoost(ICoreClientAPI capi, LodTerrainRenderer renderer)
     {
@@ -131,6 +133,7 @@ public sealed class LodLoginBakeViewBoost
     public int LastHitchMs => lastHitchMs;
 
     public bool HitchPressure => hitchPressure;
+    public bool RequestPressure => requestPressure;
 
     /// <summary>Spawn-solid Chebyshev radius in chunks — overlay SetChunkColumnVisible cap.</summary>
     public static int SpawnSolidStreamChunks()
@@ -149,13 +152,17 @@ public sealed class LodLoginBakeViewBoost
         int desired,
         long nowMs,
         long lastGrowMs,
-        bool hitchPressure)
+        bool hitchPressure,
+        bool requestPressure = false,
+        long lastPressureMs = 0)
     {
         if (applied <= 0)
             return MinOverlayStreamBlocks;
         if (desired <= applied)
             return applied;
-        if (hitchPressure)
+        if (hitchPressure || requestPressure)
+            return applied;
+        if (lastPressureMs > 0 && nowMs - lastPressureMs < StreamGrowDwellMs)
             return applied;
         if (lastGrowMs > 0 && nowMs - lastGrowMs < StreamGrowDwellMs)
             return applied;
@@ -287,6 +294,9 @@ public sealed class LodLoginBakeViewBoost
             : (int)Math.Min(int.MaxValue, nowMs - lastEnsureMs);
         lastEnsureMs = nowMs;
         hitchPressure = lastHitchMs >= StreamGrowHitchPressureMs;
+        requestPressure = LodLoginChunkRequestBudget.RequestPressureActive;
+        if (hitchPressure || requestPressure)
+            lastPressureMs = nowMs;
 
         int approvedNow = 0;
         try { approvedNow = data.LastApprovedViewDistance; } catch { }
@@ -303,7 +313,9 @@ public sealed class LodLoginBakeViewBoost
         else
         {
             int current = boostedViewDistance > 0 ? boostedViewDistance : MinOverlayStreamBlocks;
-            target = StepAppliedStream(current, desiredStreamBlocks, nowMs, lastGrowMs, hitchPressure);
+            target = StepAppliedStream(
+                current, desiredStreamBlocks, nowMs, lastGrowMs,
+                hitchPressure, requestPressure, lastPressureMs);
         }
 
         int sliderNow = ReadClientViewDistance(capi, target);
@@ -330,7 +342,8 @@ public sealed class LodLoginBakeViewBoost
         {
             lastGrowMs = nowMs;
             LodScoutSeqDiag.LogStreamGrow(
-                finishedL0, target, desiredStreamBlocks, lastHitchMs, hitchPressure);
+                finishedL0, target, desiredStreamBlocks, lastHitchMs,
+                hitchPressure, requestPressure);
             if (previousStream > 0)
             {
                 capi.Logger.Notification(
@@ -418,8 +431,10 @@ public sealed class LodLoginBakeViewBoost
             desiredStreamBlocks = 0;
             lastEnsureMs = 0;
             lastGrowMs = 0;
+            lastPressureMs = 0;
             lastHitchMs = 0;
             hitchPressure = false;
+            requestPressure = false;
         }
 
         _ = before;

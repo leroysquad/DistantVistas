@@ -31,6 +31,8 @@ public sealed class LodScoutEntity
     public int HoldRadius { get; set; }
     /// <summary>Pinned-scout partitioning cadence (not every overlay tick).</summary>
     public int PartitionTicks { get; set; }
+    /// <summary>Resumable client visibility cursor for this scout's reveal shell.</summary>
+    public LodLoginBakePlayerMove.ChunkRingCursor RevealCursor { get; } = new();
 
     public LodScoutEntity(long key)
     {

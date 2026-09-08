@@ -29,6 +29,7 @@ public static class Program
         ("pure", "snow overlay", SnowOverlayChecks.Run),
         ("pure", "login season bake", SeasonBakeChecks.Run),
         ("pure", "login visit sweep", LoginSweepChecks.Run),
+        ("pure", "server chunk request gate", ServerChunkRequestGateChecks.Run),
         ("pure", "server config", ConfigChecks.Run),
         ("pure", "lod mod deferral", DeferralChecks.Run),
         ("pure", "fov occlusion", OcclusionChecks.Run),

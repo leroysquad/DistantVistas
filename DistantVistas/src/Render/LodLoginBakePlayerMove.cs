@@ -15,6 +15,94 @@ public static class LodLoginBakePlayerMove
     /// <summary>Chunk columns to mark visible around each visit (matches sweep load radius).</summary>
     public const int ChunkVisibleRadius = 2;
 
+    /// <summary>
+    /// Resumable cursor for one Chebyshev annulus. The cursor intentionally keeps
+    /// the coordinate that hit the shared budget, so the next tick never restarts
+    /// a partially issued shell.
+    /// </summary>
+    public sealed class ChunkRingCursor
+    {
+        int centerCx;
+        int centerCz;
+        int innerRadius;
+        int outerRadius;
+        int dx;
+        int dz;
+        bool configured;
+        bool complete;
+
+        public bool Complete => complete;
+
+        public void Configure(int cx, int cz, int inner, int outer)
+        {
+            if (configured
+                && centerCx == cx
+                && centerCz == cz
+                && innerRadius == inner
+                && outerRadius == outer)
+                return;
+
+            configured = true;
+            complete = false;
+            centerCx = cx;
+            centerCz = cz;
+            innerRadius = Math.Max(-1, inner);
+            outerRadius = Math.Max(-1, outer);
+            dx = -outerRadius;
+            dz = -outerRadius;
+            if (outerRadius < 0 || outerRadius <= innerRadius)
+                complete = true;
+        }
+
+        public void Reset()
+        {
+            configured = false;
+            complete = false;
+            dx = 0;
+            dz = 0;
+        }
+
+        public bool TryNext(out int cx, out int cz)
+        {
+            cx = 0;
+            cz = 0;
+            if (!configured || complete)
+                return false;
+
+            while (dz <= outerRadius)
+            {
+                int currentDx = dx;
+                int currentDz = dz;
+
+                if (Math.Max(Math.Abs(currentDx), Math.Abs(currentDz)) <= innerRadius)
+                {
+                    Advance();
+                    continue;
+                }
+
+                cx = centerCx + currentDx;
+                cz = centerCz + currentDz;
+                return true;
+            }
+
+            complete = true;
+            return false;
+        }
+
+        /// <summary>Commits the current coordinate after the request coordinator accepted it.</summary>
+        public void CommitCurrent() => Advance();
+
+        void Advance()
+        {
+            dx++;
+            if (dx > outerRadius)
+            {
+                dx = -outerRadius;
+                dz++;
+            }
+        }
+    }
+
     /// <summary>Spawn restore: full vanilla disk, not the 5x5 visit default.</summary>
     public static int SpawnRestoreRadius(int desiredViewDistance)
     {
@@ -41,7 +129,9 @@ public static class LodLoginBakePlayerMove
     {
         WriteExactPickup(entity, x, y, z, yaw, pitch);
         if (requestChunks)
-            RequestChunkColumnsVisible(capi, x, z, entity.Pos.Dimension, chunkVisibleRadius);
+            RequestChunkColumnsVisible(
+                capi, x, z, entity.Pos.Dimension, chunkVisibleRadius, "pickup-restore",
+                LodChunkRequestPriority.Critical);
     }
 
     public static void WriteExactPickup(
@@ -84,7 +174,8 @@ public static class LodLoginBakePlayerMove
         LodVsCompat.TryUpdatePartitioning(entity);
 
         if (requestChunks)
-            RequestChunkColumnsVisible(capi, x, z, entity.Pos.Dimension, chunkVisibleRadius);
+            RequestChunkColumnsVisible(
+                capi, x, z, entity.Pos.Dimension, chunkVisibleRadius, "player-move");
     }
 
     public static void ApplyQuietFrom(
@@ -116,24 +207,22 @@ public static class LodLoginBakePlayerMove
         double z,
         int dimension,
         int innerRadius,
-        int outerRadius)
+        int outerRadius,
+        ChunkRingCursor? cursor = null,
+        string producer = "ring")
     {
         if (outerRadius < 0) return true;
         int cx = (int)Math.Floor(x / GlobalConstants.ChunkSize);
         int cz = (int)Math.Floor(z / GlobalConstants.ChunkSize);
         IClientWorldAccessor world = capi.World;
-        for (int dz = -outerRadius; dz <= outerRadius; dz++)
+        cursor ??= new ChunkRingCursor();
+        cursor.Configure(cx, cz, innerRadius, outerRadius);
+        while (cursor.TryNext(out int tx, out int tz))
         {
-            for (int dx = -outerRadius; dx <= outerRadius; dx++)
-            {
-                int chebyshev = Math.Max(Math.Abs(dx), Math.Abs(dz));
-                if (chebyshev <= innerRadius) continue;
-                int tx = cx + dx;
-                int tz = cz + dz;
-                if (tx < 0 || tz < 0) continue;
-                if (!LodLoginChunkRequestBudget.TrySetVisible(world, tx, tz, dimension))
-                    return false;
-            }
+            if (!LodLoginChunkRequestBudget.TrySetVisible(
+                    world, tx, tz, dimension, producer))
+                return false;
+            cursor.CommitCurrent();
         }
         return true;
     }
@@ -143,32 +232,30 @@ public static class LodLoginBakePlayerMove
         double x,
         double z,
         int dimension,
-        int chunkVisibleRadius)
+        int chunkVisibleRadius,
+        string producer = "visible-shell",
+        LodChunkRequestPriority priority = LodChunkRequestPriority.Normal)
     {
         int cx = (int)Math.Floor(x / GlobalConstants.ChunkSize);
         int cz = (int)Math.Floor(z / GlobalConstants.ChunkSize);
-        IClientWorldAccessor world = capi.World;
-        for (int dz = -chunkVisibleRadius; dz <= chunkVisibleRadius; dz++)
-        {
-            for (int dx = -chunkVisibleRadius; dx <= chunkVisibleRadius; dx++)
-            {
-                int tx = cx + dx;
-                int tz = cz + dz;
-                if (tx < 0 || tz < 0) continue;
-                if (!LodLoginChunkRequestBudget.TrySetVisible(world, tx, tz, dimension))
-                    return;
-            }
-        }
+        LodLoginChunkRequestBudget.QueueVisibleSquare(
+            capi.World,
+            cx,
+            cz,
+            dimension,
+            chunkVisibleRadius,
+            producer,
+            priority);
     }
 
     /// <summary>Mark all four map columns of an L0 footprint visible on the client.</summary>
     public static void RequestL0MapChunksVisible(ICoreClientAPI capi, long l0Key, int dimension)
     {
-        IClientWorldAccessor world = capi.World;
-        foreach ((int cx, int cz) in LodLoginSweep.ChunkColumnsForL0(l0Key))
-        {
-            if (cx < 0 || cz < 0) continue;
-            LodLoginChunkRequestBudget.TrySetVisible(world, cx, cz, dimension);
-        }
+        LodLoginChunkRequestBudget.QueueVisibleColumns(
+            capi.World,
+            LodLoginSweep.ChunkColumnsForL0(l0Key),
+            dimension,
+            "hop-l0",
+            l0Key);
     }
 }

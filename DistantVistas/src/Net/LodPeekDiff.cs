@@ -47,6 +47,7 @@ public class LodPeekDiff
 
     readonly ICoreServerAPI sapi;
     readonly ILogger logger;
+    readonly string loadOwnerPrefix = "peek-diff:" + Guid.NewGuid().ToString("N");
 
     public LodPeekDiff(ICoreServerAPI sapi, ILogger logger)
     {
@@ -186,18 +187,44 @@ public class LodPeekDiff
         // point - and the reason this is not the nondestructive scenario.
         int span = 2 * ReferenceBorder + 1;
         int outstanding = span * span;
+        int notQueued = 0;
+        LodScoutHostSystem? host = LodScoutHostSystem.ServerInstance;
+        if (host == null)
+        {
+            report("the shared chunk request gate is not available");
+            return;
+        }
+
+        void OneLoadDone()
+        {
+            if (--outstanding != 0) return;
+            if (notQueued > 0)
+            {
+                report($"{notQueued} reference columns could not enter the bounded chunk queue; retry after login loading settles");
+                return;
+            }
+            LoadsDone(centreCx, centreCz, fromPeek, report);
+        }
+
         for (int dz = -ReferenceBorder; dz <= ReferenceBorder; dz++)
         for (int dx = -ReferenceBorder; dx <= ReferenceBorder; dx++)
         {
-            sapi.WorldManager.LoadChunkColumnPriority(centreCx + dx, centreCz + dz,
-                new ChunkLoadOptions
-                {
-                    KeepLoaded = true, // the reference must still be resident to read
-                    OnLoaded = () =>
-                    {
-                        if (--outstanding == 0) LoadsDone(centreCx, centreCz, fromPeek, report);
-                    },
-                });
+            int cx = centreCx + dx;
+            int cz = centreCz + dz;
+            string owner = loadOwnerPrefix + ":" + dx + ":" + dz;
+            LodServerQueueDecision queued = host.QueuePriorityLoad(
+                owner,
+                cx,
+                cz,
+                dim: 0,
+                keepLoaded: true,
+                onLoaded: OneLoadDone,
+                LodServerChunkWorkPriority.Background);
+            if (queued == LodServerQueueDecision.Dropped)
+            {
+                notQueued++;
+                OneLoadDone();
+            }
         }
     }
 

@@ -581,9 +581,20 @@ public class DistantVistasModSystem : ModSystem
         pipeline.NotePlayerColumn(sweepCx, sweepCz);
         pipeline.SweepLoadedColumns(sweepCx, sweepCz, sweepRadius);
         QueueExploreBakeNearPlayer();
-        if (loginBake?.Active != true
-            && PlayModeBakeBudget.Last.AllowFrontierScout)
-            frontierScout?.Tick(capi, pipeline, renderer);
+        bool postLogin = loginBake?.Active != true;
+        if (postLogin)
+        {
+            LodLoginChunkRequestBudget.BeginBackgroundTick(capi.World);
+            try
+            {
+                if (PlayModeBakeBudget.Last.AllowFrontierScout)
+                    frontierScout?.Tick(capi, pipeline, renderer);
+            }
+            finally
+            {
+                LodLoginChunkRequestBudget.EndBackgroundTick();
+            }
+        }
         // #region agent log
         if (logPlay) AgentPlayTickLog("after-sweep", playTickCount, playTickEnter,
             "\"ok\":true,\"frozen\":" + (pipeline.FreezeCapture ? "true" : "false"));
@@ -1964,6 +1975,7 @@ public class DistantVistasModSystem : ModSystem
         CancelLoginSweepDefer();
         loginBake?.Dispose();
         loginBake = null;
+        LodLoginChunkRequestBudget.EndBackgroundSession();
         frontierScout?.Reset();
         loginBakePulse?.Bind(null, PumpLoginBakeWhileSweeping);
         // Kick / leave mid-overlay can leave 750 view or silent audio stuck for the next

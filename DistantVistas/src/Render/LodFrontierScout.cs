@@ -111,7 +111,8 @@ public sealed class LodFrontierScout
         var (x, _, z) = LodLoginSweep.VisitPosition(capi.World, key);
         int dim = capi.World.Player.Entity.Pos.Dimension;
         LodLoginBakePlayerMove.RequestChunkColumnsVisible(
-            capi, x, z, dim, ChunkVisibleRadius);
+            capi, x, z, dim, ChunkVisibleRadius, "frontier-visible",
+            LodChunkRequestPriority.Background);
 
         if (LodLoginSweep.AllMapChunksLoaded(capi.World.BlockAccessor, key))
         {
@@ -232,7 +233,7 @@ public sealed class LodFrontierScout
             return true;
         }
 
-        // Pass B: missing L0 in ring ó lead cone first, then far.
+        // Pass B: missing L0 in ring ù lead cone first, then far.
         long missKey = 0;
         double missScore = double.MinValue;
         for (int i = 0; i < MaxPlanCandidates; i++)

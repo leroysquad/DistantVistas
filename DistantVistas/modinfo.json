@@ -1,21 +1,21 @@
-﻿{
-    "type":  "code",
-    "modid":  "distantvistas",
-    "name":  "Distant Vistas",
-    "version":  "1.0.45",
-    "side":  "Universal",
-    "requiredOnClient":  true,
-    "requiredOnServer":  false,
-    "description":  "Official 1.0.45. Overlay stream still grows past 1024, but one chunk / 5s with hitch backpressure so chunkdb can pause for autosave. Visit disk 4075. Scouts primary.",
-    "authors":  [
-                    "IllLeroySquad"
-                ],
-    "contributors":  [
-                         "AliasFactory",
-                         "Badgerson"
-                     ],
-    "website":  "https://github.com/leroysquad/DistantVistas",
-    "dependencies":  {
-                         "game":  "1.22.5"
-                     }
+{
+    "type": "code",
+    "modid": "distantvistas",
+    "name": "Distant Vistas",
+    "version": "1.0.46",
+    "side": "Universal",
+    "requiredOnClient": true,
+    "requiredOnServer": false,
+    "description": "Official 1.0.46. Queue-safe login bake: completion-gated scout-host admission (max 24 in-flight, 2 priority starts/tick, 2 ForceSend/tick), client visibility coordinator with pressure feedback, and stream +32/5s only on quiet host+client windows. No servermagicnumbers bump required. Visit disk 4075. Scouts primary.",
+    "authors": [
+        "IllLeroySquad"
+    ],
+    "contributors": [
+        "AliasFactory",
+        "Badgerson"
+    ],
+    "website": "https://github.com/leroysquad/DistantVistas",
+    "dependencies": {
+        "game": "1.22.5"
+    }
 }

@@ -24,27 +24,49 @@ public sealed class LodScoutHostSystem : ModSystem
     readonly Dictionary<string, Dictionary<long, ScoutHold>> holdsByPlayer = new();
     readonly Dictionary<long, int> columnRefs = new();
     readonly Dictionary<string, Queue<ScoutAnchorUp>> pendingUpsByPlayer = new();
-    readonly Queue<ForceSendWork> forceSends = new();
-    readonly Queue<PriorityLoadWork> priorityLoads = new();
-    readonly HashSet<long> priorityLoadQueued = new();
+    readonly Dictionary<long, UpRequestState> lastUpByKey = new();
+    readonly LodScoutHostPressureState hostPressure = new();
+    readonly LodServerChunkRequestGate requestGate = new(
+        MaxPriorityLoadsInFlight,
+        MaxPriorityLoadsPerTick,
+        MaxForceSendPerTick,
+        MaxPriorityLoadQueue,
+        MaxForceSendQueue);
     long tickListenerId;
+    long lastHostTelemetryMs;
+    long lastHostStatusMs;
+    long hostStatusSequence;
+    bool lastHostStatusPressure;
+    bool hostStatusSent;
+    long holdAccepted;
+    long holdReplaced;
+    long holdRefused;
+    long holdEvicted;
+    long pendingUpDropped;
+    long holdPeak;
+    readonly HashSet<string> hostStatusUids = new(StringComparer.Ordinal);
 
     public static LodScoutHostSystem? ClientInstance { get; private set; }
+    internal static LodScoutHostSystem? ServerInstance { get; private set; }
 
     /// <summary>Client MaxConcurrent. Far KeepLoaded spam is refused past this.</summary>
     /// <summary>16 scouts + residency pump + spare so hop/unlock is not refused as the 17th hold.</summary>
     public const int MaxConcurrentHolds = 18;
     /// <summary>KeepLoaded Chebyshev radius. Near scouts use this; far scouts send less.</summary>
     public const int MaxHoldRadiusChunks = 4;
-    /// <summary>OnLoaded ForceSend budget so 16 scouts do not dump hundreds of columns in one tick.</summary>
-    public const int MaxForceSendPerTick = 48;
+    /// <summary>OnLoaded ForceSend budget so scouts do not dump columns in one tick.</summary>
+    public const int MaxForceSendPerTick = 2;
     public const int MaxPendingUps = 32;
     /// <summary>
     /// LoadChunkColumnPriority per server tick. 16 scouts × 9×9 rings used to enqueue
     /// hundreds of FIFO entries in one HoldAnchor (1.0.44 chunkdb autosave stall).
     /// </summary>
-    public const int MaxPriorityLoadsPerTick = 24;
-    public const int MaxPriorityLoadQueue = 512;
+    public const int MaxPriorityLoadsPerTick = 2;
+    public const int MaxPriorityLoadsInFlight = 24;
+    public const int MaxPriorityLoadQueue = 256;
+    public const int MaxForceSendQueue = 256;
+    public const long RequestUpCooldownMs = 1500;
+    public const long HostStatusIntervalMs = 500;
 
     public override double ExecuteOrder() => 0.05;
 
@@ -62,16 +84,20 @@ public sealed class LodScoutHostSystem : ModSystem
         clientChannel = api.Network.RegisterChannel(LodScoutNet.ChannelName)
             .RegisterMessageType<ScoutAnchorUp>()
             .RegisterMessageType<ScoutAnchorDown>()
-            .RegisterMessageType<ScoutAnchorsClear>();
+            .RegisterMessageType<ScoutAnchorsClear>()
+            .RegisterMessageType<ScoutHostStatus>()
+            .SetMessageHandler<ScoutHostStatus>(OnHostStatus);
     }
 
     public override void StartServerSide(ICoreServerAPI api)
     {
         sapi = api;
+        ServerInstance = this;
         serverChannel = api.Network.RegisterChannel(LodScoutNet.ChannelName)
             .RegisterMessageType<ScoutAnchorUp>()
             .RegisterMessageType<ScoutAnchorDown>()
             .RegisterMessageType<ScoutAnchorsClear>()
+            .RegisterMessageType<ScoutHostStatus>()
             .SetMessageHandler<ScoutAnchorUp>(OnAnchorUp)
             .SetMessageHandler<ScoutAnchorDown>(OnAnchorDown)
             .SetMessageHandler<ScoutAnchorsClear>(OnAnchorsClear);
@@ -93,16 +119,59 @@ public sealed class LodScoutHostSystem : ModSystem
         }
         if (ReferenceEquals(ClientInstance, this))
             ClientInstance = null;
+        if (ReferenceEquals(ServerInstance, this))
+            ServerInstance = null;
+        hostPressure.Reset();
+        requestGate.Clear();
         base.Dispose();
     }
 
     public bool ChannelConnected => clientChannel != null && clientChannel.Connected;
+    public bool HostPressureActive => hostPressure.IsActive(
+        DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
+        lastUpByKey.Count > 0);
+    public int HostPriorityPending => hostPressure.PriorityPending;
+    public int HostPriorityInFlight => hostPressure.PriorityInFlight;
+    public int HostForceSendPending => hostPressure.ForceSendPending;
+    public long HostOldestInFlightMs => hostPressure.OldestInFlightMs;
 
     public void RequestUp(
         long key, int cx, int cz, int radius, int dimension, double x, double y, double z,
         bool priority = false)
     {
         if (clientChannel == null || !clientChannel.Connected) return;
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        hostPressure.BeginSession(now);
+        if (lastUpByKey.TryGetValue(key, out UpRequestState? previous)
+            && previous.Cx == cx
+            && previous.Cz == cz
+            && previous.Radius == radius
+            && previous.Dimension == dimension
+            && previous.Priority == priority
+            && previous.SentMs > 0
+            && now - previous.SentMs < RequestUpCooldownMs)
+        {
+            LodScoutSeqDiag.LogHostUp(
+                key, cx, cz, radius, capped: false, pending: true, priority: priority);
+            return;
+        }
+
+        var next = new UpRequestState
+        {
+            Cx = cx,
+            Cz = cz,
+            Radius = radius,
+            Dimension = dimension,
+            Priority = priority,
+            SentMs = 0,
+        };
+        lastUpByKey[key] = next;
+        if (HostPressureActive)
+        {
+            LodScoutSeqDiag.LogHostUp(
+                key, cx, cz, radius, capped: true, pending: true, priority: priority);
+            return;
+        }
         try
         {
             clientChannel.SendPacket(new ScoutAnchorUp
@@ -117,6 +186,7 @@ public sealed class LodScoutHostSystem : ModSystem
                 Z = z,
                 Priority = priority,
             });
+            next.SentMs = now;
             LodScoutSeqDiag.LogHostUp(key, cx, cz, radius, capped: false, pending: false, priority: priority);
         }
         catch { }
@@ -124,6 +194,9 @@ public sealed class LodScoutHostSystem : ModSystem
 
     public void RequestDown(long key)
     {
+        lastUpByKey.Remove(key);
+        if (lastUpByKey.Count == 0)
+            hostPressure.Reset();
         if (clientChannel == null || !clientChannel.Connected) return;
         try
         {
@@ -135,12 +208,19 @@ public sealed class LodScoutHostSystem : ModSystem
 
     public void RequestClear()
     {
+        lastUpByKey.Clear();
+        hostPressure.Reset();
         if (capi != null)
             LodScoutViewerEntity.DespawnAll(capi.World);
 
         if (clientChannel == null || !clientChannel.Connected) return;
         try { clientChannel.SendPacket(new ScoutAnchorsClear { Unused = true }); }
         catch { }
+    }
+
+    void OnHostStatus(ScoutHostStatus status)
+    {
+        hostPressure.Note(status, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
     }
 
     void OnAnchorUp(IServerPlayer fromPlayer, ScoutAnchorUp msg)
@@ -198,9 +278,13 @@ public sealed class LodScoutHostSystem : ModSystem
         if (holds.Count >= MaxConcurrentHolds && !holds.ContainsKey(msg.Key))
         {
             if (msg.Priority)
+            {
+                holdEvicted++;
                 TryEvictFarthestHold(player, holds);
+            }
             if (holds.Count >= MaxConcurrentHolds && !holds.ContainsKey(msg.Key))
             {
+                holdRefused++;
                 EnqueuePendingUp(player.PlayerUID, msg);
                 LodScoutSeqDiag.LogHostUp(msg.Key, msg.Cx, msg.Cz, radius, capped: true, pending: true, priority: msg.Priority);
                 return;
@@ -211,8 +295,14 @@ public sealed class LodScoutHostSystem : ModSystem
 
         if (holds.TryGetValue(msg.Key, out ScoutHold? prev))
         {
+            holdReplaced++;
             LodScoutViewerEntity.DespawnOne(sapi.World, prev.Viewer);
+            holds.Remove(msg.Key);
             ReleaseHoldColumns(player, prev, stillNeeded: holds);
+        }
+        else
+        {
+            holdAccepted++;
         }
 
         double x = msg.X, y = msg.Y, z = msg.Z;
@@ -227,10 +317,14 @@ public sealed class LodScoutHostSystem : ModSystem
         catch { hold.Viewer = null; }
 
         holds[msg.Key] = hold;
+        holdPeak = Math.Max(holdPeak, holds.Count);
 
         int pendingUps = pendingUpsByPlayer.TryGetValue(player.PlayerUID, out Queue<ScoutAnchorUp>? pq)
             ? pq.Count : 0;
-        LodScoutSeqDiag.LogHostHold(msg.Key, holds.Count, pendingUps, forceSends.Count, priorityLoads.Count);
+        LodScoutSeqDiag.LogHostHold(
+            msg.Key, holds.Count, pendingUps,
+            requestGate.ForceSendPending,
+            requestGate.PriorityPending + requestGate.PriorityInFlight);
 
         for (int dz = -radius; dz <= radius; dz++)
         {
@@ -242,7 +336,17 @@ public sealed class LodScoutHostSystem : ModSystem
                 long col = ColumnKey(cx, cz, dim);
                 columnRefs.TryGetValue(col, out int n);
                 columnRefs[col] = n + 1;
-                EnqueuePriorityLoad(player, cx, cz, dim);
+                string owner = HoldOwner(player.PlayerUID, msg.Key);
+                QueuePriorityLoad(
+                    owner,
+                    cx,
+                    cz,
+                    dim,
+                    keepLoaded: true,
+                    onLoaded: () => QueueForceSend(
+                        owner, player.PlayerUID, cx, cz, dim,
+                        LodServerChunkWorkPriority.Login),
+                    LodServerChunkWorkPriority.Login);
             }
         }
     }
@@ -296,9 +400,112 @@ public sealed class LodScoutHostSystem : ModSystem
     void OnServerTick(float dt)
     {
         _ = dt;
-        DrainPriorityLoads();
-        DrainForceSends();
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        requestGate.BeginTick(now);
+        bool allowBackground = holdsByPlayer.Count == 0;
+        DrainPriorityLoads(now, allowBackground);
+        DrainForceSends(allowBackground);
+        requestGate.EndTick(now);
+        SendHostStatusIfDue(now);
         DrainPendingUps();
+        LogHostTelemetryIfDue();
+    }
+
+    void SendHostStatusIfDue(long now)
+    {
+        if (sapi == null || serverChannel == null)
+            return;
+        bool pressure = requestGate.PressureActive;
+        bool edge = !hostStatusSent || pressure != lastHostStatusPressure;
+        if (!edge && now - lastHostStatusMs < HostStatusIntervalMs)
+            return;
+
+        hostStatusUids.Clear();
+        foreach (string uid in holdsByPlayer.Keys)
+            hostStatusUids.Add(uid);
+        foreach (string uid in pendingUpsByPlayer.Keys)
+            hostStatusUids.Add(uid);
+        if (hostStatusUids.Count == 0)
+            return;
+
+        var status = new ScoutHostStatus
+        {
+            Sequence = ++hostStatusSequence,
+            Pressure = pressure,
+            PriorityPending = requestGate.PriorityPending,
+            PriorityInFlight = requestGate.PriorityInFlight,
+            ForceSendPending = requestGate.ForceSendPending,
+            OldestInFlightMs = requestGate.OldestInFlightAgeMs,
+            PriorityCompleted = requestGate.PriorityCompleted,
+            ServerTimeMs = now,
+        };
+
+        foreach (string uid in hostStatusUids)
+        {
+            IPlayer? raw = null;
+            try { raw = sapi.World.PlayerByUid(uid); }
+            catch { }
+            if (raw is not IServerPlayer player)
+                continue;
+            try { serverChannel.SendPacket(status, player); }
+            catch { }
+        }
+
+        hostStatusUids.Clear();
+        lastHostStatusMs = now;
+        lastHostStatusPressure = pressure;
+        hostStatusSent = true;
+    }
+
+    void LogHostTelemetryIfDue()
+    {
+        long now = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        if (lastHostTelemetryMs != 0 && now - lastHostTelemetryMs < 1000)
+            return;
+
+        int holdCount = 0;
+        int pendingCount = 0;
+        foreach (Dictionary<long, ScoutHold> holds in holdsByPlayer.Values)
+            holdCount += holds.Count;
+        foreach (Queue<ScoutAnchorUp> pending in pendingUpsByPlayer.Values)
+            pendingCount += pending.Count;
+
+        if (holdCount == 0
+            && pendingCount == 0
+            && requestGate.PriorityPending == 0
+            && requestGate.PriorityInFlight == 0
+            && requestGate.ForceSendPending == 0)
+            return;
+
+        lastHostTelemetryMs = now;
+        LodScoutSeqDiag.LogHostTelemetry(
+            holdCount,
+            holdPeak,
+            columnRefs.Count,
+            pendingCount,
+            requestGate.PriorityPending + requestGate.PriorityInFlight,
+            requestGate.PriorityPendingPeak + requestGate.PriorityInFlightPeak,
+            requestGate.PriorityInFlight,
+            requestGate.OldestInFlightAgeMs,
+            requestGate.PressureActive,
+            requestGate.PriorityCompleted,
+            requestGate.ForceSendPending,
+            requestGate.ForceSendPendingPeak,
+            holdAccepted,
+            holdReplaced,
+            holdRefused,
+            holdEvicted,
+            pendingUpDropped,
+            requestGate.PriorityEnqueued,
+            requestGate.PriorityCoalesced,
+            requestGate.PriorityDropped,
+            requestGate.PriorityStarted,
+            requestGate.Cancelled,
+            requestGate.ForceSendEnqueued,
+            requestGate.ForceSendCoalesced,
+            requestGate.ForceSendDropped,
+            requestGate.ForceSendStarted,
+            requestGate.Cancelled);
     }
 
     void EnqueuePendingUp(string uid, ScoutAnchorUp msg)
@@ -318,7 +525,10 @@ public sealed class LodScoutHostSystem : ModSystem
         }
 
         if (q.Count >= MaxPendingUps)
+        {
             q.Dequeue();
+            pendingUpDropped++;
+        }
         q.Enqueue(msg);
     }
 
@@ -376,77 +586,149 @@ public sealed class LodScoutHostSystem : ModSystem
             pendingUpsByPlayer.Remove(player.PlayerUID);
     }
 
-    void EnqueuePriorityLoad(IServerPlayer player, int cx, int cz, int dim)
+    internal LodServerQueueDecision QueuePriorityLoad(
+        string owner,
+        int cx,
+        int cz,
+        int dim,
+        bool keepLoaded,
+        Action? onLoaded,
+        LodServerChunkWorkPriority priority)
     {
-        long col = ColumnKey(cx, cz, dim);
-        if (!priorityLoadQueued.Add(col))
-            return;
-        if (priorityLoads.Count >= MaxPriorityLoadQueue)
-        {
-            DrainPriorityLoads(extra: MaxPriorityLoadsPerTick);
-            if (priorityLoads.Count >= MaxPriorityLoadQueue)
-            {
-                priorityLoadQueued.Remove(col);
-                return;
-            }
-        }
-
-        priorityLoads.Enqueue(new PriorityLoadWork
-        {
-            Player = player,
-            Cx = cx,
-            Cz = cz,
-            Dim = dim,
-        });
+        return requestGate.QueuePriority(
+            owner,
+            new LodServerChunkColumn(cx, cz, dim),
+            keepLoaded,
+            onLoaded,
+            priority);
     }
 
-    void DrainPriorityLoads(int extra = 0)
+    void DrainPriorityLoads(long nowMs, bool allowBackground)
     {
         if (sapi == null) return;
-        int budget = MaxPriorityLoadsPerTick + extra;
-        int n = 0;
-        while (n < budget && priorityLoads.Count > 0)
+        while (requestGate.TryStartPriority(nowMs, out LodServerPriorityStart start, allowBackground))
         {
-            PriorityLoadWork work = priorityLoads.Dequeue();
-            long col = ColumnKey(work.Cx, work.Cz, work.Dim);
-            priorityLoadQueued.Remove(col);
-            n++;
-            if (!columnRefs.TryGetValue(col, out int refs) || refs <= 0)
-                continue;
-            int sendCx = work.Cx;
-            int sendCz = work.Cz;
-            int sendDim = work.Dim;
-            IServerPlayer sendPlayer = work.Player;
+            LodServerChunkColumn column = start.Column;
             try
             {
-                sapi.WorldManager.LoadChunkColumnPriority(sendCx, sendCz, new ChunkLoadOptions
-                {
-                    KeepLoaded = true,
-                    OnLoaded = () => EnqueueForceSend(sendPlayer, sendCx, sendCz, sendDim),
-                });
+                sapi.WorldManager.LoadChunkColumnPriority(
+                    column.Cx,
+                    column.Cz,
+                    new ChunkLoadOptions
+                    {
+                        KeepLoaded = start.KeepLoaded,
+                        OnLoaded = () => CompletePriorityLoad(column),
+                    });
             }
+            catch
+            {
+                CompletePriorityLoad(column);
+            }
+        }
+    }
+
+    void CompletePriorityLoad(LodServerChunkColumn column)
+    {
+        if (sapi == null) return;
+        try
+        {
+            sapi.Event.EnqueueMainThreadTask(
+                () => SettlePriorityLoad(column),
+                "dv-priority-loaded");
+        }
+        catch
+        {
+            // Teardown can reject a callback after the gate has already been cleared.
+        }
+    }
+
+    void SettlePriorityLoad(LodServerChunkColumn column)
+    {
+        if (sapi == null) return;
+        if (!requestGate.CompletePriority(
+                column,
+                out IReadOnlyList<Action> callbacks,
+                out bool stillWanted,
+                out bool keepLoaded))
+            return;
+
+        for (int i = 0; i < callbacks.Count; i++)
+        {
+            try { callbacks[i](); }
+            catch { }
+        }
+
+        if (!stillWanted && keepLoaded && !ShouldKeepLoaded(column))
+        {
+            try { sapi.WorldManager.UnloadChunkColumn(column.Cx, column.Cz); }
             catch { }
         }
     }
 
-    void EnqueueForceSend(IServerPlayer player, int cx, int cz, int dim)
+    bool ShouldKeepLoaded(LodServerChunkColumn column)
     {
-        if (forceSends.Count >= 2048)
-            DrainForceSends(extra: MaxForceSendPerTick);
-        forceSends.Enqueue(new ForceSendWork { Player = player, Cx = cx, Cz = cz, Dim = dim });
+        long key = ColumnKey(column.Cx, column.Cz, column.Dimension);
+        if (columnRefs.TryGetValue(key, out int refs) && refs > 0)
+            return true;
+        if (sapi == null)
+            return false;
+
+        IPlayer[]? players = sapi.World.AllOnlinePlayers;
+        if (players == null)
+            return false;
+        for (int i = 0; i < players.Length; i++)
+        {
+            if (players[i] is not IServerPlayer player)
+                continue;
+            EntityPos? pos = player.Entity?.Pos;
+            if (pos == null || pos.Dimension != column.Dimension)
+                continue;
+
+            int vd = 256;
+            try { vd = player.WorldData.LastApprovedViewDistance; } catch { }
+            if (vd <= 0)
+            {
+                try { vd = player.WorldData.DesiredViewDistance; } catch { }
+            }
+            if (vd <= 0) vd = 256;
+            int keepR = Math.Max(
+                MaxHoldRadiusChunks,
+                (int)Math.Ceiling(vd / (double)GlobalConstants.ChunkSize) + 2);
+            int pcx = (int)Math.Floor(pos.X / GlobalConstants.ChunkSize);
+            int pcz = (int)Math.Floor(pos.Z / GlobalConstants.ChunkSize);
+            if (Math.Max(Math.Abs(column.Cx - pcx), Math.Abs(column.Cz - pcz)) <= keepR)
+                return true;
+        }
+        return false;
     }
 
-    void DrainForceSends(int extra = 0)
+    void QueueForceSend(
+        string owner,
+        string playerUid,
+        int cx,
+        int cz,
+        int dim,
+        LodServerChunkWorkPriority priority)
+    {
+        requestGate.QueueForceSend(
+            owner,
+            new LodServerForceSendColumn(playerUid, cx, cz, dim),
+            priority);
+    }
+
+    void DrainForceSends(bool allowBackground)
     {
         if (sapi == null) return;
-        int budget = MaxForceSendPerTick + extra;
-        int n = 0;
-        while (n < budget && forceSends.Count > 0)
+        while (requestGate.TryStartForceSend(out LodServerForceSendColumn work, allowBackground))
         {
-            ForceSendWork work = forceSends.Dequeue();
-            try { sapi.WorldManager.ForceSendChunkColumn(work.Player, work.Cx, work.Cz, work.Dim); }
+            IPlayer? raw = null;
+            try { raw = sapi.World.PlayerByUid(work.PlayerUid); }
             catch { }
-            n++;
+            if (raw is not IServerPlayer player)
+                continue;
+
+            try { sapi.WorldManager.ForceSendChunkColumn(player, work.Cx, work.Cz, work.Dimension); }
+            catch { }
         }
     }
 
@@ -483,6 +765,7 @@ public sealed class LodScoutHostSystem : ModSystem
     void ReleaseHoldColumns(IServerPlayer player, ScoutHold hold, Dictionary<long, ScoutHold>? stillNeeded)
     {
         if (sapi == null) return;
+        requestGate.CancelOwner(HoldOwner(player.PlayerUID, hold.Key));
         int pcx = 0, pcz = 0, keepR = MaxHoldRadiusChunks;
         try
         {
@@ -545,6 +828,9 @@ public sealed class LodScoutHostSystem : ModSystem
     static long ColumnKey(int cx, int cz, int dim) =>
         ((long)dim << 42) ^ ((long)cx << 21) ^ (uint)cz;
 
+    static string HoldOwner(string uid, long key) =>
+        "scout:" + uid + ":" + key.ToString(System.Globalization.CultureInfo.InvariantCulture);
+
     sealed class ScoutHold
     {
         public long Key;
@@ -555,19 +841,13 @@ public sealed class LodScoutHostSystem : ModSystem
         public LodScoutViewerEntity? Viewer;
     }
 
-    sealed class ForceSendWork
+    sealed class UpRequestState
     {
-        public IServerPlayer Player = null!;
         public int Cx;
         public int Cz;
-        public int Dim;
-    }
-
-    sealed class PriorityLoadWork
-    {
-        public IServerPlayer Player = null!;
-        public int Cx;
-        public int Cz;
-        public int Dim;
+        public int Radius;
+        public int Dimension;
+        public bool Priority;
+        public long SentMs;
     }
 }
