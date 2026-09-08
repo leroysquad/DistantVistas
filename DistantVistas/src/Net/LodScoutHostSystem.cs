@@ -337,7 +337,7 @@ public sealed class LodScoutHostSystem : ModSystem
                 columnRefs.TryGetValue(col, out int n);
                 columnRefs[col] = n + 1;
                 string owner = HoldOwner(player.PlayerUID, msg.Key);
-                QueuePriorityLoad(
+                LodServerQueueDecision decision = QueuePriorityLoad(
                     owner,
                     cx,
                     cz,
@@ -347,6 +347,10 @@ public sealed class LodScoutHostSystem : ModSystem
                         owner, player.PlayerUID, cx, cz, dim,
                         LodServerChunkWorkPriority.Login),
                     LodServerChunkWorkPriority.Login);
+                if (decision == LodServerQueueDecision.Dropped)
+                    hold.NeedsAdmissionRetry = true;
+                else
+                    hold.AdmittedColumns.Add(col);
             }
         }
     }
@@ -404,6 +408,7 @@ public sealed class LodScoutHostSystem : ModSystem
         requestGate.BeginTick(now);
         bool allowBackground = holdsByPlayer.Count == 0;
         DrainPriorityLoads(now, allowBackground);
+        RequeueMissingHoldColumns();
         DrainForceSends(allowBackground);
         requestGate.EndTick(now);
         SendHostStatusIfDue(now);
@@ -601,6 +606,73 @@ public sealed class LodScoutHostSystem : ModSystem
             keepLoaded,
             onLoaded,
             priority);
+    }
+
+    void RequeueMissingHoldColumns()
+    {
+        if (sapi == null) return;
+        if (requestGate.PriorityPending >= MaxPriorityLoadQueue)
+            return;
+
+        foreach (KeyValuePair<string, Dictionary<long, ScoutHold>> pair in holdsByPlayer)
+        {
+            if (requestGate.PriorityPending >= MaxPriorityLoadQueue)
+                break;
+            if (pair.Value.Count == 0)
+                continue;
+
+            IPlayer? raw = null;
+            try { raw = sapi.World.PlayerByUid(pair.Key); }
+            catch { }
+            if (raw is not IServerPlayer player)
+                continue;
+
+            foreach (ScoutHold hold in pair.Value.Values)
+            {
+                if (!hold.NeedsAdmissionRetry)
+                    continue;
+                if (requestGate.PriorityPending >= MaxPriorityLoadQueue)
+                    break;
+
+                string owner = HoldOwner(player.PlayerUID, hold.Key);
+                bool stillMissing = false;
+                for (int dz = -hold.Radius; dz <= hold.Radius; dz++)
+                {
+                    for (int dx = -hold.Radius; dx <= hold.Radius; dx++)
+                    {
+                        if (requestGate.PriorityPending >= MaxPriorityLoadQueue)
+                        {
+                            stillMissing = true;
+                            break;
+                        }
+                        int cx = hold.Cx + dx;
+                        int cz = hold.Cz + dz;
+                        if (cx < 0 || cz < 0) continue;
+                        long col = ColumnKey(cx, cz, hold.Dimension);
+                        if (hold.AdmittedColumns.Contains(col))
+                            continue;
+
+                        LodServerQueueDecision decision = QueuePriorityLoad(
+                            owner,
+                            cx,
+                            cz,
+                            hold.Dimension,
+                            keepLoaded: true,
+                            onLoaded: () => QueueForceSend(
+                                owner, player.PlayerUID, cx, cz, hold.Dimension,
+                                LodServerChunkWorkPriority.Login),
+                            LodServerChunkWorkPriority.Login);
+                        if (decision == LodServerQueueDecision.Dropped)
+                        {
+                            stillMissing = true;
+                            continue;
+                        }
+                        hold.AdmittedColumns.Add(col);
+                    }
+                }
+                hold.NeedsAdmissionRetry = stillMissing;
+            }
+        }
     }
 
     void DrainPriorityLoads(long nowMs, bool allowBackground)
@@ -839,6 +911,8 @@ public sealed class LodScoutHostSystem : ModSystem
         public int Radius;
         public int Dimension;
         public LodScoutViewerEntity? Viewer;
+        public bool NeedsAdmissionRetry;
+        public readonly HashSet<long> AdmittedColumns = new();
     }
 
     sealed class UpRequestState

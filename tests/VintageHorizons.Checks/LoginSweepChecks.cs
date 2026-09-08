@@ -1046,6 +1046,9 @@ public static class LoginSweepChecks
         c.True(scoutHost.Contains("requestGate.CancelOwner")
             && scoutHost.Contains("CompletePriority"),
             "host queue settles stale owner work through the admission gate");
+        c.True(scoutHost.Contains("RequeueMissingHoldColumns")
+            && scoutHost.Contains("NeedsAdmissionRetry"),
+            "HoldAnchor retries columns dropped by MaxPriorityLoadQueue");
         c.True(scoutHost.Contains("existing.Radius == radius"),
             "HoldAnchor no-ops when the same scout ring is already KeepLoaded");
         c.True(scoutHost.Contains("Math.Clamp(msg.Radius, 1, MaxHoldRadiusChunks)"),
