@@ -238,9 +238,13 @@ stream in).
   mutates a dictionary). Sections deserialized on the storage thread keep their palette
   block *codes* and have ids resolved at install time on the main thread.
 
-See [DESIGN.md](DESIGN.md) for the architecture, [CHANGELOG.md](CHANGELOG.md) for what
-shipped in each version, and [docs/RELEASING.md](docs/RELEASING.md) for the release
-procedure.
+See [docs/CODEBASE_SUMMARY.md](docs/CODEBASE_SUMMARY.md) for a bot-oriented codebase map
+(architecture, pipeline, invariants, and diagnosis shortcuts). [AGENTS.md](AGENTS.md) is
+the short front door for coding agents — read the summary first.
+
+See [DESIGN.md](DESIGN.md) for the full architecture, [docs/WHAT-WE-DO.md](docs/WHAT-WE-DO.md)
+for fork rationale, [CHANGELOG.md](CHANGELOG.md) for what shipped in each version, and
+[docs/RELEASING.md](docs/RELEASING.md) for the release procedure.
 
 ## Credits
 
