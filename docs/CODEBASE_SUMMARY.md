@@ -2,6 +2,8 @@
 
 **Bot-oriented map of the repository.** Read this before crawling. For architecture deep-dive see [DESIGN.md](../DESIGN.md). For fork rationale see [docs/WHAT-WE-DO.md](WHAT-WE-DO.md).
 
+> **Structural freedom (user policy 2026-09-07):** Distant Vistas forked Vintage Horizons, but **VH code structure is not sacred**. Future agents may streamline, relocate modules, rewrite pipelines, or redesign internals for clarity, fluency, or performance when it improves the product. Prefer **product invariants** (eviction policy, no cake plates in FOV, live `GetColor` bake, no autosave/FIFO death, exact pickup restore, etc.) over preserving VH-shaped architecture. Do not treat “Horizons did it this way” as a constraint.
+
 ---
 
 ## Repo state (this checkout)

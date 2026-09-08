@@ -2,6 +2,21 @@
 
 **Read [`docs/CODEBASE_SUMMARY.md`](docs/CODEBASE_SUMMARY.md) first.** It is the definitive bot-oriented map: module ownership, runtime pipeline, invariants, bug shortcuts, and config paths. Do not re-crawl the tree for questions already answered there.
 
+## Structural freedom (user policy 2026-09-07)
+
+Distant Vistas forked Vintage Horizons historically, but **VH code structure is not sacred**. You may streamline, relocate modules, rewrite pipelines, or redesign internals for clarity, fluency, or performance when it improves the product.
+
+**Preserve product invariants, not VH layout.** Examples of what must stay true:
+
+- Pressure-only mesh eviction (never count/distance alone); visited land inside 2× VD
+- No cake plates in the player FOV cone
+- Live `GetColor` visit bake (`FlagBaked`); no shader-repro season paint
+- Login overlay: no autosave / `chunkdbthread` FIFO death; stepped stream backpressure
+- Exact pickup XYZ + look restore after overlay
+- No present-path splash GL (Cairo HUD only)
+
+Do **not** block refactors with “Horizons did it this way” or “the file map says X owns Y.” Update docs when structure changes.
+
 ## Repo identity
 
 - **Product:** Distant Vistas (fork of Vintage Horizons)
